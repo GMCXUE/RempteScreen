@@ -71,17 +71,24 @@ export async function registerDevice({ deviceId, sessionToken, platform, deviceN
 
   if (!assignedId) assignedId = await allocateDeviceId();
 
-  const password = generatePassword();
-  const { salt, hash } = await createPasswordRecord(password);
+  // 复用已有设备时**保留原密码**（自定义密码重启后不能丢）；
+  // 只有新设备才生成一个随机密码。
+  // 注意 password_plain 也要在：迁移前的老设备没有明文密码，
+  // 这时重新生成一个（之后就会一直保持），否则界面上会显示成空密码。
+  const keepPassword = reused && existing && existing.password_hash && existing.password_plain;
+  const password = keepPassword ? existing.password_plain : generatePassword();
+  const { salt, hash } = keepPassword
+    ? { salt: existing.password_salt, hash: existing.password_hash }
+    : await createPasswordRecord(password);
   const token = randomToken(32);
 
   await getPool().query(
     `
     INSERT INTO devices (
       device_id, user_id, name, platform,
-      password_salt, password_hash, session_token_hash,
+      password_salt, password_hash, password_plain, session_token_hash,
       registered_at, last_heartbeat_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT(device_id) DO UPDATE SET
       user_id            = excluded.user_id,
       -- 名字归用户所有：设备已存在时保留库里的名字（改名只能走 PATCH），
@@ -91,6 +98,7 @@ export async function registerDevice({ deviceId, sessionToken, platform, deviceN
       platform           = excluded.platform,
       password_salt      = excluded.password_salt,
       password_hash      = excluded.password_hash,
+      password_plain     = excluded.password_plain,
       session_token_hash = excluded.session_token_hash,
       last_heartbeat_at  = excluded.last_heartbeat_at
     `,
@@ -101,6 +109,7 @@ export async function registerDevice({ deviceId, sessionToken, platform, deviceN
       platform || 'unknown',
       salt,
       hash,
+      password,
       sha256(token),
       now,
       now,
@@ -151,16 +160,23 @@ export async function detachDevice(deviceId, userId) {
   return { removed: true, record };
 }
 
-/** 刷新连接密码，旧密码立即失效。 */
-export async function refreshPassword(deviceId, sessionToken) {
+/**
+ * 设置连接密码，旧密码立即失效。
+ *
+ * customPassword 为空时随机生成一个（「刷新」）；给出时采用用户自定义的
+ * （「自定义」）—— 两者都是设备自己的权利，账号主人改不了别台设备的密码。
+ */
+export async function refreshPassword(deviceId, sessionToken, customPassword) {
   const result = await requireOwnership(deviceId, sessionToken);
   if (result.error) return result;
 
-  const password = generatePassword();
+  const password = customPassword && customPassword.length > 0 ? customPassword : generatePassword();
   const { salt, hash } = await createPasswordRecord(password);
 
-  await getPool()
-    .query('UPDATE devices SET password_salt = $1, password_hash = $2 WHERE device_id = $3', [salt, hash, deviceId]);
+  await getPool().query(
+    'UPDATE devices SET password_salt = $1, password_hash = $2, password_plain = $3 WHERE device_id = $4',
+    [salt, hash, password, deviceId],
+  );
 
   return { password, record: await findDevice(deviceId) };
 }

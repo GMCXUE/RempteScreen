@@ -263,6 +263,75 @@ class _HomeScreenState extends State<HomeScreen> {
     _toast('画质已设为 ${_qualityLabel(result)}，下次投送生效');
   }
 
+  /// 自定义连接密码：密码归属设备，只有本机能改。
+  Future<void> _setCustomPassword() async {
+    final controller = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    final password = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('自定义连接密码'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '4–64 个字符，不能包含空格。设置后旧密码立即失效，已分享出去的密码需要重新告知对方。',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: controller,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: '新密码',
+                  hintText: '例如 my-pass-8888',
+                ),
+                validator: (value) {
+                  final text = value ?? '';
+                  if (text.length < 4 || text.length > 64) {
+                    return '长度需在 4 到 64 个字符之间';
+                  }
+                  if (RegExp(r'\s').hasMatch(text)) return '不能包含空格';
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState?.validate() ?? false) {
+                Navigator.pop(dialogContext, controller.text);
+              }
+            },
+            child: const Text('设置'),
+          ),
+        ],
+      ),
+    );
+
+    if (password == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final updated = await widget.manager.setConnectionPassword(password);
+      if (mounted) setState(() => _registration = updated);
+      _toast('连接密码已更新，旧密码立即失效');
+    } on ApiException catch (error) {
+      _toast(error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _refreshPassword() async {
     final registration = _registration;
     if (registration == null) return;
@@ -504,6 +573,16 @@ class _HomeScreenState extends State<HomeScreen> {
               password.isEmpty ? '— — —' : password,
               Icons.autorenew,
               onTap: _refreshPassword,
+              hint: '点右侧图标可随机刷新或自定义',
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: registration == null ? null : _setCustomPassword,
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('自定义密码', style: TextStyle(fontSize: 12)),
+              ),
             ),
             const SizedBox(height: 12),
             Text(
@@ -522,7 +601,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _credentialRow(String label, String value, IconData icon,
-      {VoidCallback? onTap}) {
+      {VoidCallback? onTap, String? hint}) {
     return Row(
       children: [
         Expanded(
@@ -542,6 +621,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   letterSpacing: 2,
                 ),
               ),
+              if (hint != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(hint,
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.grey)),
+                ),
             ],
           ),
         ),

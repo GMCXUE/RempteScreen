@@ -122,4 +122,8 @@ flutter build apk --debug --target-platform android-arm64
 
 ## 安全说明
 
+- **连接密码是「分享码」而不是口令**：它是设备屏幕上要展示给对方看的凭据（ToDesk 同款），
+  所以服务端可逆保存（`devices.password_plain`），以便重启后保持不变、设备随时能显示；
+  校验仍走 `password_hash`，不依赖明文比较。用户账号口令则只存哈希。
+
 仓库内**不包含任何生产密钥**：LiveKit 的 key/secret、数据库密码都通过 `deploy/prod/.env` 在服务器本地注入（`.env` 已被 `.gitignore` 排除）。代码里的 `devsecret_*` 仅为本地开发占位值。

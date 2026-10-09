@@ -335,9 +335,34 @@ export async function unregisterDevice({ body, params, request }) {
   return ok({ removed: true, by: 'device' });
 }
 
-/** POST /v1/devices/:deviceId/password —— 刷新连接密码，旧密码立即失效。 */
+/**
+ * POST /v1/devices/:deviceId/password —— 设置连接密码，旧密码立即失效。
+ *
+ *   body.password 省略 → 随机生成（「刷新」）
+ *   body.password 给出 → 采用自定义密码（「自定义」）
+ *
+ * 两条路径都要求设备自己的凭据：密码是「这台设备允许被看」的凭据，
+ * 只有持有设备的人能改，账号主人也不行。
+ */
 export async function refreshDevicePassword({ body, params }) {
-  const result = await store.refreshPassword(params.deviceId, body?.sessionToken);
+  const custom = body?.password;
+  if (custom != null) {
+    if (typeof custom !== 'string') {
+      return fail(400, 'invalid_password', '密码必须是字符串');
+    }
+    const trimmed = custom.trim();
+    if (trimmed !== custom) {
+      return fail(400, 'invalid_password', '密码首尾不能有空格');
+    }
+    if (custom.length < 4 || custom.length > 64) {
+      return fail(400, 'invalid_password', '密码长度需在 4 到 64 个字符之间');
+    }
+    if (/\s/.test(custom)) {
+      return fail(400, 'invalid_password', '密码不能包含空格');
+    }
+  }
+
+  const result = await store.refreshPassword(params.deviceId, body?.sessionToken, custom);
   if (result.error === 'device_unknown') return fail(404, 'device_unknown', '设备不存在或已解绑');
   if (result.error === 'unauthorized') return fail(401, 'unauthorized', '设备凭据无效');
   return ok({ password: result.password, passwordLength: config.password.length });

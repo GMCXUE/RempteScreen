@@ -235,6 +235,22 @@ class SessionManager extends ChangeNotifier {
     _heartbeat = Timer.periodic(const Duration(seconds: 15), (_) => unawaited(_tickHeartbeat()));
   }
 
+  /// 设置/刷新连接密码，返回更新后的注册对象（界面据此刷新显示）。
+  Future<DeviceRegistration> setConnectionPassword(String? password) async {
+    final current = registration;
+    if (current == null) throw ApiException('unauthorized', '设备尚未注册');
+
+    final applied = await api.setDevicePassword(
+      deviceId: current.deviceId,
+      sessionToken: current.sessionToken,
+      password: password,
+    );
+    final updated = current.withPassword(applied);
+    registration = updated;
+    notifyListeners();
+    return updated;
+  }
+
   Future<void> _tickHeartbeat() async {
     final reg = registration;
     if (reg == null) return;

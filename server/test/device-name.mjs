@@ -125,6 +125,53 @@ try {
   ).body;
   check('新设备仍采用上报的名字', fresh.deviceName === '新电脑', fresh.deviceName);
 
+  // 连接密码：设备本人可自定义，账号主人改不了别台设备。
+  // 注意：每次注册都会轮换 sessionToken，必须用**最新**的那个。
+  const currentToken = again.sessionToken;
+  const custom = await api('POST', `/v1/devices/${deviceId}/password`, {
+    body: { sessionToken: currentToken, password: 'my-pass-8888' },
+  });
+  check('设备可自定义连接密码', custom.status === 200 && custom.body.password === 'my-pass-8888',
+    custom.body.password);
+
+  // 关键：客户端重启会重新注册 —— 自定义密码必须跟着设备保留下来
+  const restart = await api('POST', '/v1/devices/register', {
+    token: account.token,
+    body: { deviceId, sessionToken: currentToken, platform: 'android', deviceName: '默认设备名' },
+  });
+  check('重启注册后自定义密码保持不变（密码跟随设备）',
+    restart.body.password === 'my-pass-8888', restart.body.password);
+
+  // 后续调用一律用**最新**的凭据（每次注册都会轮换 sessionToken）
+  const liveToken = restart.body.sessionToken;
+
+  const tooShort = await api('POST', `/v1/devices/${deviceId}/password`, {
+    body: { sessionToken: liveToken, password: 'ab' },
+  });
+  check('过短的密码被拒绝', tooShort.status === 400 && tooShort.body.error?.code === 'invalid_password');
+
+  const withSpace = await api('POST', `/v1/devices/${deviceId}/password`, {
+    body: { sessionToken: liveToken, password: 'has space' },
+  });
+  check('含空格的密码被拒绝', withSpace.status === 400);
+
+  const byOwner = await api('POST', `/v1/devices/${deviceId}/password`, {
+    token: account.token,
+    body: { password: 'owner-wants-this' },
+  });
+  check('账号主人不能改这台设备的密码（需设备凭据）', byOwner.status === 401, `HTTP ${byOwner.status}`);
+
+  const stale = await api('POST', `/v1/devices/${deviceId}/password`, {
+    body: { sessionToken: currentToken, password: 'stale-token-pass' },
+  });
+  check('旧 sessionToken 已失效（轮换后不可用）', stale.status === 401, `HTTP ${stale.status}`);
+
+  const rotated = await api('POST', `/v1/devices/${deviceId}/password`, {
+    body: { sessionToken: liveToken },
+  });
+  check('不带自定义值时随机刷新', rotated.status === 200 && rotated.body.password !== 'my-pass-8888',
+    rotated.body.password);
+
   // 账号主人解绑（用于清理离线/已卸载的旧设备）
   const detached = await api('DELETE', `/v1/devices/${fresh.deviceId}`, { token: account.token });
   check('账号主人可解绑设备', detached.status === 200 && detached.body.removed === true, `by=${detached.body.by}`);

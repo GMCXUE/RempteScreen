@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 `;
 
+/**
+ * 增量迁移（幂等）。
+ *
+ * password_plain：连接密码是「设备屏幕上展示给对方的分享码」（ToDesk 同理），
+ * 不是用户口令。为了让它在重启后保持不变、并且设备随时能把它显示出来，
+ * 这里做可逆保存；校验仍走 password_hash，不依赖明文比较。
+ */
+const MIGRATIONS = `
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS password_plain TEXT NOT NULL DEFAULT '';
+`;
+
 /** 建立连接池并完成建表。重复调用返回同一个池。 */
 export async function openDatabase() {
   if (pool) return pool;
@@ -68,6 +79,7 @@ export async function openDatabase() {
   }
 
   await pool.query(SCHEMA);
+  await pool.query(MIGRATIONS);
   return pool;
 }
 

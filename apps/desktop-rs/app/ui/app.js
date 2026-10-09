@@ -222,6 +222,32 @@ $("copy-id").addEventListener("click", async () => {
   }
 });
 
+// 自定义连接密码：密码归属设备，只有本机能改
+$("custom-pw").addEventListener("click", async () => {
+  const password = await askDialog({
+    title: "自定义连接密码",
+    message: "4–64 个字符，不能包含空格。设置后旧密码立即失效，已分享出去的密码需要重新告知对方。",
+    defaultValue: "",
+    confirmText: "设置",
+  });
+  if (password === null) return;
+  if (password.length < 4 || password.length > 64 || /\s/.test(password)) {
+    await askDialog({
+      title: "密码不符合要求",
+      message: "请使用 4–64 个字符，且不含空格。",
+      confirmText: "知道了",
+      hideCancel: true,
+    });
+    return;
+  }
+  try {
+    await invoke("set_device_password", { password });
+  } catch (error) {
+    await askDialog({ title: "设置失败", message: String(error), confirmText: "知道了", hideCancel: true });
+  }
+  refresh();
+});
+
 $("refresh-pw").addEventListener("click", async () => {
   $("refresh-pw").disabled = true;
   try {

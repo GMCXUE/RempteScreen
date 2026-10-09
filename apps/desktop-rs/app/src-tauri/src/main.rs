@@ -378,6 +378,24 @@ fn refresh_password(state: tauri::State<AppState>) -> Result<String, String> {
     Ok(password)
 }
 
+/// 自定义连接密码（设备本人的权利，旧密码立即失效）。
+#[tauri::command]
+fn set_device_password(password: String, state: tauri::State<AppState>) -> Result<String, String> {
+    let (device_id, session_token) = {
+        let registration = state.registration.lock().unwrap();
+        let registration = registration.as_ref().ok_or("设备尚未注册")?;
+        (registration.device_id.clone(), registration.session_token.clone())
+    };
+    let applied = api::set_password(&device_id, &session_token, Some(&password))?;
+    {
+        let mut registration = state.registration.lock().unwrap();
+        if let Some(registration) = registration.as_mut() {
+            registration.password = applied.clone();
+        }
+    }
+    Ok(applied)
+}
+
 /// 保存画质设置；正在投送时自动以新画质重启会话。
 #[tauri::command]
 fn set_quality(height: u32, fps: u32, state: tauri::State<AppState>) -> Result<(), String> {
@@ -989,6 +1007,7 @@ fn main() {
             stop_publish,
             set_quality,
             refresh_password,
+            set_device_password,
             start_watch,
             cancel_watch_request,
             stop_watch,

@@ -78,6 +78,17 @@ class DeviceRegistration {
   final String publishToken;
   final String deviceName;
 
+  /// 换掉连接密码，其余字段不变。
+  DeviceRegistration withPassword(String next) => DeviceRegistration(
+        deviceId: deviceId,
+        password: next,
+        sessionToken: sessionToken,
+        roomName: roomName,
+        livekitUrl: livekitUrl,
+        publishToken: publishToken,
+        deviceName: deviceName,
+      );
+
   factory DeviceRegistration.fromJson(Map<String, dynamic> json) =>
       DeviceRegistration(
         deviceId: json['deviceId'] as String,
@@ -356,6 +367,20 @@ class ApiService {
       default:
         return null;
     }
+  }
+
+  /// 设置连接密码：password 为 null 时随机刷新，给出时采用自定义值。
+  /// 需要设备自己的 sessionToken（账号主人改不了别台设备的密码）。
+  Future<String> setDevicePassword({
+    required String deviceId,
+    required String sessionToken,
+    String? password,
+  }) async {
+    final result = await _request('POST', '/v1/devices/$deviceId/password', body: {
+      'sessionToken': sessionToken,
+      if (password != null) 'password': password,
+    });
+    return result['password'] as String;
   }
 
   /// 同意 / 拒绝一次观看请求。设备凭据即身份凭证。

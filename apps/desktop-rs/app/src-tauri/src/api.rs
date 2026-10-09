@@ -258,14 +258,26 @@ pub fn connect(
     })
 }
 
-/// 刷新连接密码，旧密码立即失效。
-pub fn refresh_password(device_id: &str, session_token: &str) -> Result<String, String> {
-    let result = post(
-        &format!("/v1/devices/{device_id}/password"),
-        None,
-        &json!({ "sessionToken": session_token }),
-    )?;
+/// 设置连接密码，旧密码立即失效。
+///
+/// `custom` 为 None 时由服务端随机生成（「刷新」）；给出时采用自定义密码，
+/// 服务端会校验长度与字符（4–64 字符、不含空格）。
+pub fn set_password(
+    device_id: &str,
+    session_token: &str,
+    custom: Option<&str>,
+) -> Result<String, String> {
+    let body = match custom {
+        Some(password) => json!({ "sessionToken": session_token, "password": password }),
+        None => json!({ "sessionToken": session_token }),
+    };
+    let result = post(&format!("/v1/devices/{device_id}/password"), None, &body)?;
     Ok(result["password"].as_str().unwrap_or("").to_string())
+}
+
+/// 随机刷新连接密码（等价于 set_password(None)）。
+pub fn refresh_password(device_id: &str, session_token: &str) -> Result<String, String> {
+    set_password(device_id, session_token, None)
 }
 
 /// 设备侧的观看请求（服务端随心跳下发）。
