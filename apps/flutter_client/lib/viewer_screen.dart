@@ -33,6 +33,9 @@ class _ViewerScreenState extends State<ViewerScreen> {
   // 会话可能已被断开（manager 里查不到），仍保留最后一次状态用于展示
   late ViewingSession _lastKnown;
 
+  /// 防止重复收起页面（断开按钮与状态回调可能同时触发）。
+  bool _closing = false;
+
   @override
   void initState() {
     super.initState();
@@ -45,21 +48,43 @@ class _ViewerScreenState extends State<ViewerScreen> {
   void dispose() {
     // 关键：这里**不**断开连接 —— 连接由 SessionManager 持有
     widget.manager.removeListener(_onManagerChanged);
-    _renderer?.srcObject = null;
-    _renderer?.dispose();
+    _teardownRenderer();
     super.dispose();
+  }
+
+  /// 拆掉渲染器。
+  ///
+  /// 必须在页面被弹出**之前**做：否则会有一帧拿着已经销毁的轨道去渲染，
+  /// 原生层直接抛异常（真机上表现为满屏红）。
+  void _teardownRenderer() {
+    final renderer = _renderer;
+    _renderer = null;
+    _attachedTrack = null;
+    if (renderer != null) {
+      renderer.srcObject = null;
+      renderer.dispose();
+    }
   }
 
   void _onManagerChanged() {
     if (!mounted) return;
 
-    // 会话被手动断开 → 回到列表页
+    // 会话被断开 → 先撤渲染器，再收起页面
     if (session.state == ViewingSessionState.ended) {
-      Navigator.of(context).pop();
+      _closeViewer();
       return;
     }
     _attach();
     setState(() {});
+  }
+
+  void _closeViewer() {
+    if (_closing) return;
+    _closing = true;
+    _teardownRenderer();
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _attach() async {
@@ -87,12 +112,8 @@ class _ViewerScreenState extends State<ViewerScreen> {
         title: Text(session.deviceName, style: const TextStyle(fontSize: 15)),
         actions: [
           TextButton(
-            onPressed: () {
-              widget.manager.disconnectSession(session.id);
-              if (mounted && Navigator.of(context).canPop()) {
-                Navigator.of(context).pop();
-              }
-            },
+            // 只发起断开：页面收起由状态回调统一处理（避免二次 pop 触发断言）
+            onPressed: () => widget.manager.disconnectSession(session.id),
             child: const Text('断开', style: TextStyle(color: Colors.white)),
           ),
         ],
@@ -104,9 +125,10 @@ class _ViewerScreenState extends State<ViewerScreen> {
   Widget _buildBody() {
     final state = session.state;
 
-    if (_renderer != null) {
+    final renderer = _renderer;
+    if (renderer != null && state != ViewingSessionState.ended) {
       return RTCVideoView(
-        _renderer!,
+        renderer,
         objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
       );
     }

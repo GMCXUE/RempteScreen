@@ -154,11 +154,19 @@ class ViewingSession extends ChangeNotifier {
   }
 
   /// 用户主动断开。
+  ///
+  /// 顺序很重要：**先标记结束并通知界面**，界面据此撤掉视频渲染器（否则会短暂渲染
+  /// 已被销毁的轨道，触发原生层异常 → 真机上就是满屏红），然后再拆房间连接。
+  /// 拆连接本身的异常不向用户抛：连接已经在断开了，这里失败不该影响体验。
   Future<void> disconnect() async {
     room.removeListener(_syncFromRoom);
-    await room.disconnect();
     state = ViewingSessionState.ended;
     notifyListeners();
+    try {
+      await room.disconnect();
+    } catch (error) {
+      debugPrint('断开房间失败（忽略）：$error');
+    }
   }
 }
 

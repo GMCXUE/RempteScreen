@@ -14,7 +14,72 @@ final SessionManager sessionManager = SessionManager(api: api);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 红屏（Flutter 默认的错误界面）在真机上既看不懂也帮不上忙，
+  // 换成可读的错误卡片，并把完整堆栈打到 logcat（adb logcat -s flutter）。
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('RemoteScreen 界面异常：${details.exceptionAsString()}');
+  };
+  ErrorWidget.builder = (details) => AppErrorCard(details);
+
   runApp(const RemoteScreenApp());
+}
+
+/// 界面异常时展示的卡片：给出人能看懂的信息与错误详情。
+class AppErrorCard extends StatelessWidget {
+  const AppErrorCard(this.details, {super.key});
+
+  final FlutterErrorDetails details;
+
+  @override
+  Widget build(BuildContext context) {
+    final message = details.exceptionAsString();
+    return Material(
+      color: const Color(0xFF1B1F2A),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 20),
+                  SizedBox(width: 8),
+                  Text('界面出错了',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              const Text('已把详细堆栈写到日志。可以把下面的信息发给开发者。',
+                  style: TextStyle(color: Colors.white70, fontSize: 12)),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black38,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: SelectableText(
+                  message.length > 600 ? '${message.substring(0, 600)}…' : message,
+                  style: const TextStyle(
+                      color: Color(0xFFFFB4A9),
+                      fontSize: 11.5,
+                      fontFamily: 'monospace'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class RemoteScreenApp extends StatelessWidget {
