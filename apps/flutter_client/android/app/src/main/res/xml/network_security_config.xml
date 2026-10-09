@@ -7,6 +7,9 @@
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
+        <!-- 旧服务器（香港，已迁移，保留以防回滚） -->
         <domain includeSubdomains="false">91.208.104.182</domain>
+        <!-- 当前生产服务器 -->
+        <domain includeSubdomains="false">121.43.102.154</domain>
     </domain-config>
 </network-security-config>

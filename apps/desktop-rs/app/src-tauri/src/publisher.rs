@@ -259,7 +259,12 @@ async fn run_session(
 
                     // 喂数据：每帧 10ms（480 采样 × 双声道 × 2 字节 = 1920 字节）。
                     // 同时统计峰值电平（每 5 秒记一次）：区分「采集到静音」和「采集失败」。
+                    //
+                    // ⚠️ capture_frame 是 **async** —— 在阻塞线程里直接调用只会创建一个
+                    // 被丢弃的 Future，帧根本没有进队列（接收端只有静音）。
+                    // 所以拆成两段：阻塞线程只读 PCM 并投递到通道，async 任务里才 await。
                     let audio_stop = stop.clone();
+                    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Vec<i16>>(50);
                     std::thread::spawn(move || {
                         use std::io::Read;
                         let mut reader = std::io::BufReader::new(stdout);
@@ -302,13 +307,24 @@ async fn run_session(
                                 peak = 0;
                                 frames_since_log = 0;
                             }
+                            if frame_tx.blocking_send(pcm.clone()).is_err() {
+                                break; // 接收端已结束
+                            }
+                        }
+                    });
+
+                    // async 推帧任务：真正把音频帧送进 webrtc
+                    tokio::spawn(async move {
+                        while let Some(pcm) = frame_rx.recv().await {
                             let frame = AudioFrame {
-                                data: pcm.clone().into(),
+                                data: pcm.into(),
                                 sample_rate: 48_000,
                                 num_channels: 2,
                                 samples_per_channel: 480,
                             };
-                            let _ = audio_source.capture_frame(&frame);
+                            if let Err(error) = audio_source.capture_frame(&frame).await {
+                                log_to_file(&format!("推音频帧失败: {error}"));
+                            }
                         }
                     });
                 }
