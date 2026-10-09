@@ -11,7 +11,7 @@ import 'dart:convert';
 //   · 退出登录会断开全部（凭据失效，必须断）
 
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' hide ConnectionState;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -332,9 +332,28 @@ class SessionManager extends ChangeNotifier {
       if (line.startsWith('event:')) eventName = line.substring(6).trim();
       if (line.startsWith('data:')) data = line.substring(5).trim();
     }
-    if (eventName != 'requests' || data.isEmpty) return;
-
+    if (data.isEmpty) return;
     final parsed = jsonDecode(data) as Map<String, dynamic>;
+
+    // 有观看者连入（同账号直连时服务端通知）：自动打开「允许远程观看本设备」。
+    // 仅在前台执行 —— Android 的录屏授权弹窗必须由用户在界面上确认，
+    // 应用在后台时弹不出来，等用户回到应用再由下一次通知触发。
+    if (eventName == 'viewer-connected') {
+      final reg = registration;
+      final resumed =
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+      if (reg != null && !publishing && resumed) {
+        unawaited(
+          startPublishing(reg).catchError(
+            (Object error) => debugPrint('观看者连入后自动开启投送失败：$error'),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (eventName != 'requests') return;
+
     final raw = (parsed['pendingRequests'] as List?) ?? const [];
     final incoming = raw
         .whereType<Map<String, dynamic>>()

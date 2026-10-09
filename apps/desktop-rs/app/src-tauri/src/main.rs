@@ -77,8 +77,37 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
                 &registration.device_id,
                 &registration.session_token,
                 &stop,
-                |incoming| {
-                    *state.incoming_requests.lock().unwrap() = incoming;
+                |event, data| {
+                    match event {
+                        "requests" => {
+                            let incoming: Vec<api::IncomingRequest> =
+                                serde_json::from_value(data["pendingRequests"].clone())
+                                    .unwrap_or_default();
+                            *state.incoming_requests.lock().unwrap() = incoming;
+                        }
+                        // 有观看者连入（同账号直连时服务端通知）：自动打开投送，
+                        // 否则对方只会停在「等待画面」。
+                        // 注意：屏幕采集必须在**主线程**上启动（ScreenCaptureKit 需要
+                        // runloop），SSE 消费线程是后台线程，直接调会报权限错误。
+                        "viewer-connected" => {
+                            let publishing = state.session.lock().unwrap().is_some();
+                            if !publishing {
+                                let app_for_main = handle.clone();
+                                let _ = handle.run_on_main_thread(move || {
+                                    let main_state = app_for_main.state::<AppState>();
+                                    match start_publish(main_state.clone()) {
+                                        Ok(()) => viewer::log_to_file(
+                                            "[viewer-connected] 观看者连入，已自动开启投送",
+                                        ),
+                                        Err(error) => viewer::log_to_file(&format!(
+                                            "[viewer-connected] 自动开启投送失败: {error}"
+                                        )),
+                                    }
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
                 },
             );
 

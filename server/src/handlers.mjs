@@ -358,7 +358,14 @@ export async function deviceNotificationsStream({ params, request, response }) {
 
   sendCurrent();
 
-  const unsubscribeEvents = subscribe(`device:${deviceId}`, () => sendCurrent());
+  const unsubscribeEvents = subscribe(`device:${deviceId}`, (payload) => {
+    // 带负载的通知（如 viewer-connected）作为独立事件推送；否则重发当前请求列表
+    if (payload && payload.type) {
+      stream.send(payload.type, payload);
+    } else {
+      sendCurrent();
+    }
+  });
 
   // 每 15 秒：保活 + 刷新在线状态
   const keepAlive = setInterval(() => {
@@ -535,6 +542,14 @@ export async function connect({ body, request }) {
 
   const identity = `viewer-${randomBytes(4).toString('hex')}`;
   const roomName = `device-${found.record.device_id}`;
+
+  // 通知目标设备「有观看者连入」—— 设备端据此自动打开「允许远程观看本设备」，
+  // 否则同账号直连后对方只会停在「等待画面」。
+  notify(`device:${found.record.device_id}`, {
+    type: 'viewer-connected',
+    viewerName: typeof body?.viewerName === 'string' ? body.viewerName.slice(0, 32) : '观看端',
+    roomName,
+  });
 
   return ok({
     deviceId: found.record.device_id,

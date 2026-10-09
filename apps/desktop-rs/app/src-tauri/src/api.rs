@@ -356,7 +356,7 @@ pub fn stream_notifications(
     device_id: &str,
     session_token: &str,
     stop: &AtomicBool,
-    mut on_event: impl FnMut(Vec<IncomingRequest>) + Send,
+    mut on_event: impl FnMut(&str, serde_json::Value) + Send,
 ) -> Result<(), String> {
     use std::io::BufRead;
 
@@ -389,13 +389,9 @@ pub fn stream_notifications(
             data_buffer = data.trim().to_string();
         } else if line.is_empty() && !data_buffer.is_empty() {
             // 空行 = 一条事件结束
-            if event_name == "requests" {
-                let parsed: serde_json::Value =
-                    serde_json::from_str(&data_buffer).unwrap_or_default();
-                let incoming: Vec<IncomingRequest> =
-                    serde_json::from_value(parsed["pendingRequests"].clone()).unwrap_or_default();
-                on_event(incoming);
-            }
+            let parsed: serde_json::Value =
+                serde_json::from_str(&data_buffer).unwrap_or_default();
+            on_event(&event_name, parsed);
             event_name.clear();
             data_buffer.clear();
         }
