@@ -194,6 +194,16 @@ fn get_incoming_requests(state: tauri::State<AppState>) -> Vec<api::IncomingRequ
     state.incoming_requests.lock().unwrap().clone()
 }
 
+fn registration_device_id(state: &AppState) -> String {
+    state
+        .registration
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|registration| registration.device_id.clone())
+        .unwrap_or_default()
+}
+
 #[tauri::command]
 fn decide_incoming_request(
     request_id: String,
@@ -208,7 +218,16 @@ fn decide_incoming_request(
         .as_ref()
         .map(|registration| registration.session_token.clone())
         .ok_or("设备尚未注册")?;
-    api::decide_connect_request(&request_id, &session_token, approve)?;
+    if let Err(error) = api::decide_connect_request(&request_id, &session_token, approve) {
+        // 决策失败多半是请求已失效（观看方取消 / 过期 / 重复处理）：
+        // 本地这份列表已过期，立刻重新拉取，横幅随之消失。
+        viewer::log_to_file(&format!("[decision] 处理失败，已刷新列表: {error}"));
+        let fresh = api::heartbeat(&registration_device_id(&state), &session_token);
+        if let Ok(incoming) = fresh {
+            *state.incoming_requests.lock().unwrap() = incoming;
+        }
+        return Err(error);
+    }
 
     // 同意观看后自动开启投送（等价于用户手动打开「允许远程观看本设备」），
     // 否则对方连上了却看不到画面。

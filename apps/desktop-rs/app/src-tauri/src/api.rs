@@ -409,12 +409,26 @@ pub fn decide_connect_request(
     session_token: &str,
     approve: bool,
 ) -> Result<(), String> {
-    post(
-        &format!("/v1/connect-requests/{request_id}/decision"),
-        None,
-        &json!({ "sessionToken": session_token, "approve": approve }),
-    )
-    .map(|_| ())
+    // 请求可能已被处理（观看方取消 / 过期 / 重复决策），服务端会回 409/404 ——
+    // 把它的错误信息解析出来展示，而不是裸的 HTTP 状态码。
+    let response = ureq::post(&format!(
+        "{SERVER_URL}/v1/connect-requests/{request_id}/decision"
+    ))
+    .timeout(std::time::Duration::from_secs(15))
+    .send_string(&json!({ "sessionToken": session_token, "approve": approve }).to_string());
+
+    match response {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(code, resp)) => {
+            let text = resp.into_string().unwrap_or_default();
+            let message = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|parsed| parsed["error"]["message"].as_str().map(|m| m.to_string()))
+                .unwrap_or_else(|| format!("请求已失效（HTTP {code}）"));
+            Err(message)
+        }
+        Err(error) => Err(format!("{error}")),
+    }
 }
 
 
