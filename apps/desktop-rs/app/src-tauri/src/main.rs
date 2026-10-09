@@ -997,6 +997,79 @@ fn run_publish_test(seconds: u64) {
     println!("投送已停止（音频轨是否发布看上方日志与 LiveKit）");
 }
 
+/// 无界面自检：发布麦克风轨（SDK 标准路径）N 秒，用于隔离「推帧源 vs 房间音频路径」。
+/// 用法：remotescreen-desktop --mic-test <秒数>
+fn run_mic_test(seconds: u64) {
+    let creds = api::load_creds();
+    let registration = match api::register_device(&creds) {
+        Ok(registration) => registration,
+        Err(error) => {
+            println!("注册失败: {error}");
+            return;
+        }
+    };
+    let mut creds = creds;
+    creds.device_id = Some(registration.device_id.clone());
+    creds.device_session_token = Some(registration.session_token.clone());
+    api::save_creds(&creds);
+
+    println!("开始麦克风发布（{seconds} 秒）→ 房间 device-{}", registration.device_id);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        let (room, _events) = match livekit::Room::connect(
+            &registration.livekit_url,
+            &registration.publish_token,
+            livekit::RoomOptions::default(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                println!("连接失败: {error}");
+                return;
+            }
+        };
+
+        // SDK 标准路径：PlatformAudio 的设备源（麦克风）
+        use livekit::options::TrackPublishOptions;
+        use livekit::prelude::{LocalAudioTrack, LocalTrack, PlatformAudio, TrackSource};
+        let audio = match PlatformAudio::new() {
+            Ok(audio) => audio,
+            Err(error) => {
+                println!("PlatformAudio 失败: {error}");
+                return;
+            }
+        };
+        if let Err(error) = audio.start_recording() {
+            println!("start_recording 失败: {error}");
+            return;
+        }
+        let track = LocalAudioTrack::create_audio_track("mic", audio.rtc_source());
+        match room
+            .local_participant()
+            .publish_track(
+                LocalTrack::Audio(track),
+                TrackPublishOptions {
+                    source: TrackSource::Microphone,
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(_) => println!("✅ 麦克风轨已发布"),
+            Err(error) => {
+                println!("发布失败: {error}");
+                return;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+        let _ = room.close().await;
+        println!("麦克风发布结束");
+    });
+}
+
 /// 无界面自检：验证状态快照不会死锁。
 ///
 /// 这是回归防线 —— 「结构体字面量里重复加锁」这类死锁只在运行期暴露，
@@ -1046,6 +1119,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && args[1] == "--state-check" {
         run_state_check();
+        return;
+    }
+    if args.len() >= 3 && args[1] == "--mic-test" {
+        let seconds: u64 = args[2].parse().unwrap_or(20);
+        run_mic_test(seconds);
         return;
     }
     if args.len() >= 3 && args[1] == "--publish-test" {

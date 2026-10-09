@@ -241,7 +241,7 @@ async fn run_session(
                     },
                     48_000, // 采样率
                     1,      // 单声道（与文档示例一致；立体声路径实测不发送）
-                    1000,   // 缓冲时长（ms）
+                    2000,   // 缓冲时长（ms；issue #497 提到小队列有消费问题）
                 );
                 let audio_track = LocalAudioTrack::create_audio_track(
                     "system-audio",
@@ -252,7 +252,7 @@ async fn run_session(
                     .publish_track(
                         LocalTrack::Audio(audio_track),
                         TrackPublishOptions {
-                            source: TrackSource::ScreenshareAudio,
+                            source: TrackSource::Microphone,
                             ..Default::default()
                         },
                     )
