@@ -430,3 +430,12 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .modal-confirm:hover { background: #2f6fd8; }
 .modal-confirm.danger { background: #d9483f; }
 .modal-confirm.danger:hover { background: #c33d35; }
+
+/* 不可用的小按钮（例如本机的「观看」） */
+.ghost.muted-btn,
+.ghost:disabled {
+  color: var(--muted);
+  border-color: var(--line);
+  background: #fafbfc;
+  cursor: default;
+}

@@ -426,6 +426,18 @@ fn start_watch(
 
     let account_token = state.creds.lock().unwrap().account_token.clone();
 
+    // 本机不能观看本机：屏幕就在眼前，自连只会白占一路上行
+    let is_self = state
+        .registration
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|registration| registration.device_id == device_id)
+        .unwrap_or(false);
+    if is_self {
+        return Err("不能观看本机屏幕，请在你这台设备之外的另一台设备上观看".into());
+    }
+
     if password.is_empty() {
         // 一律走「请求确认」：即便是自己名下的设备，被观看也要由设备端点头。
         // 只有拿得到设备连接密码时才直连 —— 那是设备主人主动分享的凭据。

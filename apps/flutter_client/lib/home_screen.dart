@@ -320,6 +320,12 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // 本机不可观看自己（兜底：界面上已经没有入口，防止别处误调）
+    if (id == _registration?.deviceId) {
+      _toast('本机屏幕就在眼前，无需观看；请从另一台设备观看本机');
+      return;
+    }
+
     setState(() => _busy = true);
 
     ValueNotifier<String>? status;
@@ -721,12 +727,24 @@ class _HomeScreenState extends State<HomeScreen> {
         color: device.online ? Colors.green : Colors.grey,
       ),
       title: Text(isCurrent ? '${device.name}（本机）' : device.name),
-      subtitle: Text(_formatDeviceId(device.deviceId)),
-      trailing: FilledButton.tonal(
-        onPressed:
-            device.online ? () => _connectToDevice(device.deviceId, '') : null,
-        child: Text(device.online ? '连接' : '离线'),
+      subtitle: Text(
+        isCurrent ? '屏幕就在眼前，无需观看' : _formatDeviceId(device.deviceId),
+        style: const TextStyle(fontSize: 11.5),
       ),
+      trailing: isCurrent
+          // 本机不提供观看入口：自己看自己没意义，还会白占一路上行
+          ? Chip(
+              label: const Text('本机', style: TextStyle(fontSize: 11)),
+              visualDensity: VisualDensity.compact,
+              side: BorderSide(color: Colors.grey.shade300),
+              backgroundColor: Colors.grey.shade100,
+            )
+          : FilledButton.tonal(
+              onPressed: device.online
+                  ? () => _connectToDevice(device.deviceId, '')
+                  : null,
+              child: Text(device.online ? '连接' : '离线'),
+            ),
     );
   }
 }

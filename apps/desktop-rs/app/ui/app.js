@@ -540,10 +540,19 @@ async function refreshDevices() {
     const actions = document.createElement("div");
     actions.className = "history-actions";
 
+    const isSelf = ownDeviceId && device.deviceId === ownDeviceId;
+
     const watchBtn = document.createElement("button");
     watchBtn.className = "ghost";
-    watchBtn.textContent = "观看";
+    // 自己看自己没意义（还会白占一路上行），本机不给观看入口
+    watchBtn.textContent = isSelf ? "本机不可观看" : "观看";
+    watchBtn.disabled = isSelf;
+    if (isSelf) {
+      watchBtn.classList.add("muted-btn");
+      watchBtn.title = "本机屏幕就在这里，无需观看";
+    }
     watchBtn.addEventListener("click", async () => {
+      if (isSelf) return;
       if (!device.online) {
         $("watch-error").textContent = "该设备当前离线，无法观看";
         switchPage("watch");
@@ -605,6 +614,7 @@ async function refreshDevices() {
     });
 
     actions.append(watchBtn, renameBtn, unbindBtn);
+    void isSelf;
     item.append(main, actions);
     list.appendChild(item);
   }
