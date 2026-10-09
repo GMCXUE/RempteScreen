@@ -28,6 +28,74 @@ for (const button of document.querySelectorAll(".nav-item")) {
   button.addEventListener("click", () => switchPage(button.dataset.page));
 }
 
+// ---------- 应用内弹窗 ----------
+//
+// Tauri 的 WebView（WKWebView）不支持 prompt / confirm / alert，
+// 直接调用会静默返回 null（表现就是「点了没反应」），所以统一用自绘弹窗。
+function askDialog({
+  title,
+  message = "",
+  defaultValue = null,
+  confirmText = "确定",
+  cancelText = "取消",
+  danger = false,
+  hideCancel = false,
+}) {
+  return new Promise((resolve) => {
+    const modal = $("modal");
+    const input = $("modal-input");
+    const confirm = $("modal-confirm");
+    const cancel = $("modal-cancel");
+
+    $("modal-title").textContent = title;
+    $("modal-message").textContent = message;
+    $("modal-message").classList.toggle("hidden", !message);
+
+    if (defaultValue === null) {
+      input.classList.add("hidden");
+      input.value = "";
+    } else {
+      input.classList.remove("hidden");
+      input.value = defaultValue;
+    }
+
+    confirm.textContent = confirmText;
+    confirm.classList.toggle("danger", danger);
+    cancel.textContent = cancelText;
+    cancel.classList.toggle("hidden", hideCancel);
+
+    modal.classList.remove("hidden");
+    if (defaultValue !== null) {
+      input.focus();
+      input.select();
+    }
+
+    const finish = (result) => {
+      modal.classList.add("hidden");
+      confirm.removeEventListener("click", onConfirm);
+      cancel.removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKey);
+      modal.removeEventListener("click", onBackdrop);
+      resolve(result);
+    };
+
+    const onConfirm = () => finish(defaultValue === null ? true : input.value.trim());
+    const onCancel = () => finish(defaultValue === null ? false : null);
+    const onKey = (event) => {
+      if (event.key === "Enter" && defaultValue !== null) onConfirm();
+      if (event.key === "Escape") onCancel();
+    };
+    const onBackdrop = (event) => {
+      if (event.target === modal) onCancel();
+    };
+
+    confirm.addEventListener("click", onConfirm);
+    cancel.addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKey);
+    modal.addEventListener("click", onBackdrop);
+  });
+}
+
 // ---------- 状态渲染 ----------
 
 function formatDeviceId(id) {
@@ -495,12 +563,18 @@ async function refreshDevices() {
     renameBtn.className = "ghost";
     renameBtn.textContent = "重命名";
     renameBtn.addEventListener("click", async () => {
-      const name = prompt("新的设备名（不超过 32 个字符）", device.name);
-      if (!name) return;
+      const name = await askDialog({
+        title: "重命名设备",
+        message: "不超过 32 个字符",
+        defaultValue: device.name || "",
+        confirmText: "保存",
+      });
+      if (name === null || name === "") return;
       try {
-        await invoke("rename_device", { deviceId: device.deviceId, name: name.trim() });
+        await invoke("rename_device", { deviceId: device.deviceId, name });
       } catch (problem) {
-        alert(`重命名失败：${problem}`);
+        await askDialog({ title: "重命名失败", message: String(problem), confirmText: "知道了", hideCancel: true });
+        return;
       }
       refreshDevices();
     });
@@ -524,7 +598,14 @@ document.addEventListener("click", () => $("user-menu").classList.add("hidden"))
 // ---------- 退出登录 ----------
 
 $("logout-btn").addEventListener("click", async () => {
-  if (!confirm("退出登录后本机将停止投送，需要重新登录才能继续。确定退出？")) return;
+  $("user-menu").classList.add("hidden");
+  const confirmed = await askDialog({
+    title: "退出登录",
+    message: "退出后本机将停止投送，需要重新登录才能继续。",
+    confirmText: "退出登录",
+    danger: true,
+  });
+  if (!confirmed) return;
   await invoke("logout");
   switchPage("cast");
   refresh();

@@ -436,14 +436,15 @@ fn request_approval(
                     break;
                 }
                 Ok(api::PollOutcome::Approved(grant)) => {
-                    // 记录历史（自有与否以账号归属为准）
-                    let own = state
-                        .creds
-                        .lock()
-                        .unwrap()
-                        .account_token
-                        .clone()
-                        .map(|token| api::device_is_mine(&token, &grant.room_name.trim_start_matches("device-").to_string()))
+                    // 记录历史（自有与否以账号归属为准）。
+                    // 注意：先把令牌取出来再发网络请求 —— 绝不能持锁做 I/O，
+                    // 否则界面轮询（get_state）会被同一个锁堵住，表现就是「应用卡死」。
+                    let token = { state.creds.lock().unwrap().account_token.clone() };
+                    let own = token
+                        .as_deref()
+                        .map(|token| {
+                            api::device_is_mine(token, grant.room_name.trim_start_matches("device-"))
+                        })
                         .unwrap_or(false);
                     api::record_watch(
                         grant.room_name.trim_start_matches("device-"),

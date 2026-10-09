@@ -392,3 +392,41 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   animation: pulse 1.2s ease-in-out infinite;
 }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* ---------- 应用内弹窗 ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 22, 34, .38);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-card {
+  width: 320px;
+  background: #fff;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 18px 48px rgba(16, 22, 34, .22);
+}
+.modal-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.modal-message { line-height: 1.6; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.modal-confirm {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.modal-confirm:hover { background: #2f6fd8; }
+.modal-confirm.danger { background: #d9483f; }
+.modal-confirm.danger:hover { background: #c33d35; }

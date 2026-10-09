@@ -15,6 +15,7 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'native_service.dart';
 
 /// 投屏质量设置（持久化到 SharedPreferences）。
 ///
@@ -207,6 +208,12 @@ class SessionManager extends ChangeNotifier {
       deviceName: deviceName,
     );
     startHeartbeat(reg);
+    // 让原生待命服务接管后台：MIUI 冻结应用后仍能收到观看请求
+    await NativeWatchService.start(
+      baseUrl: api.baseUrl,
+      deviceId: reg.deviceId,
+      sessionToken: reg.sessionToken,
+    );
     return reg;
   }
 
@@ -275,6 +282,8 @@ class SessionManager extends ChangeNotifier {
     _heartbeat?.cancel();
     _heartbeat = null;
     registration = null;
+    pendingRequests = [];
+    NativeWatchService.stop();
   }
 
   // MARK: - 投送

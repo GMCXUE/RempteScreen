@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  原生网络层（前台服务里的轮询）默认禁止明文 HTTP。
+  当前服务端是「IP + 无证书」的形态，这里只对这台服务器放行明文，
+  其余域名仍保持禁止。拿到域名并配置 TLS 后，应删掉这段 domain-config。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">91.208.104.182</domain>
+    </domain-config>
+</network-security-config>

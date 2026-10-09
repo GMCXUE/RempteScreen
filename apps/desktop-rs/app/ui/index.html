@@ -224,6 +224,19 @@
     </main>
   </div>
 
+  <!-- 应用内弹窗（Tauri 的 WebView 不支持 prompt/confirm/alert） -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div id="modal-title" class="modal-title">提示</div>
+      <div id="modal-message" class="modal-message muted small"></div>
+      <input id="modal-input" class="hidden" />
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost">取消</button>
+        <button id="modal-confirm" class="modal-confirm">确定</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>
