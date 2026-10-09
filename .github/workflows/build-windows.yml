@@ -1,0 +1,65 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 构建类型
+        required: true
+        default: release
+        type: choice
+        options:
+          - release
+          - debug
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-rs/app/src-tauri
+
+      - name: 安装 Tauri CLI
+        shell: pwsh
+        run: npm i -g @tauri-apps/cli@latest
+
+      - name: 构建（release）
+        if: inputs.build_type == 'release'
+        shell: pwsh
+        run: npx @tauri-apps/cli build
+        working-directory: apps/desktop-rs/app
+
+      - name: 构建（debug）
+        if: inputs.build_type == 'debug'
+        shell: pwsh
+        run: npx @tauri-apps/cli build --debug
+        working-directory: apps/desktop-rs/app
+
+      - name: 收集产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          if (Test-Path "apps/desktop-rs/app/src-tauri/target/release/remotescreen-desktop.exe") {
+            Copy-Item "apps/desktop-rs/app/src-tauri/target/release/remotescreen-desktop.exe" "dist/"
+          }
+          if (Test-Path "apps/desktop-rs/app/src-tauri/target/release/bundle/nsis/*.exe") {
+            Copy-Item "apps/desktop-rs/app/src-tauri/target/release/bundle/nsis/*.exe" "dist/"
+          }
+          if (Test-Path "apps/desktop-rs/app/src-tauri/target/release/bundle/msi/*.msi") {
+            Copy-Item "apps/desktop-rs/app/src-tauri/target/release/bundle/msi/*.msi" "dist/"
+          }
+          Get-ChildItem dist
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: RemoteScreen-windows
+          path: dist/*
+          retention-days: 14

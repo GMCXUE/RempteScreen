@@ -279,11 +279,12 @@ async fn run_session(
                 log_to_file(&message);
             }
         }
-    } else {
-        let message = "未找到音频采集器（macos-audio-capture），本次投送无声音";
+    } else if platform_audio.is_none() {
+        let message = "PlatformAudio 启用失败，本次投送无声音";
         println!("[publisher] {message}");
         log_to_file(message);
     }
+    // 注：Device 源由 ADM 直接采集录音设备，无需外部采集器
 
     // 采集循环（阻塞，独立线程），看到停止标志后退出
     let loop_stop = stop.clone();
