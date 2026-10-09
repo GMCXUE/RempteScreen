@@ -123,6 +123,40 @@ fn logout(state: tauri::State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// MARK: - 我的设备
+
+/// 账号名下的设备列表（用于「我的设备」页）。
+#[tauri::command]
+fn list_devices(state: tauri::State<AppState>) -> Result<Vec<api::DeviceInfo>, String> {
+    let token = state
+        .creds
+        .lock()
+        .unwrap()
+        .account_token
+        .clone()
+        .ok_or("请先登录")?;
+    api::list_devices(&token)
+}
+
+#[tauri::command]
+fn rename_device(device_id: String, name: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let token = state
+        .creds
+        .lock()
+        .unwrap()
+        .account_token
+        .clone()
+        .ok_or("请先登录")?;
+    api::rename_device(&token, &device_id, &name)?;
+    // 本机改名后同步到界面显示
+    if let Some(registration) = state.registration.lock().unwrap().as_mut() {
+        if registration.device_id == device_id {
+            registration.device_name = name;
+        }
+    }
+    Ok(())
+}
+
 // MARK: - 观看历史
 
 #[tauri::command]
@@ -586,6 +620,8 @@ fn main() {
             set_audio_enabled,
             has_audio,
             logout,
+            list_devices,
+            rename_device,
             get_history,
             clear_history,
             forget_device

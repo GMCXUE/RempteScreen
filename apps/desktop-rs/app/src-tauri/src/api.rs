@@ -68,6 +68,7 @@ pub fn save_creds(creds: &Credentials) {
 #[derive(Clone, Debug)]
 pub struct Registration {
     pub device_id: String,
+    pub device_name: String,
     pub password: String,
     pub session_token: String,
     pub livekit_url: String,
@@ -108,6 +109,63 @@ fn get_json(path: &str, token: &str) -> Result<serde_json::Value, String> {
     serde_json::from_str(&text).map_err(|error| error.to_string())
 }
 
+fn patch_json(path: &str, token: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let response = ureq::request("PATCH", &format!("{SERVER_URL}{path}"))
+        .timeout(std::time::Duration::from_secs(15))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|error| format!("{error}"))?;
+    let text = response.into_string().map_err(|error| error.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    if let Some(error) = parsed.get("error") {
+        return Err(error["message"].as_str().unwrap_or("请求失败").to_string());
+    }
+    Ok(parsed)
+}
+
+/// PostgreSQL 的 BIGINT 经 node-postgres 返回的是字符串，这里两种形态都接受。
+fn de_i64_from_any<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Number(number) => number.as_i64().unwrap_or(0),
+        serde_json::Value::String(text) => text.parse().unwrap_or(0),
+        _ => 0,
+    })
+}
+
+/// 账号名下的一台设备。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    #[serde(rename = "deviceId")]
+    pub device_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default)]
+    pub online: bool,
+    #[serde(rename = "lastSeenAt", default, deserialize_with = "de_i64_from_any")]
+    pub last_seen_at: i64,
+}
+
+pub fn list_devices(token: &str) -> Result<Vec<DeviceInfo>, String> {
+    let result = get_json("/v1/devices", token)?;
+    Ok(serde_json::from_value(result["devices"].clone()).unwrap_or_default())
+}
+
+pub fn rename_device(token: &str, device_id: &str, name: &str) -> Result<(), String> {
+    patch_json(
+        &format!("/v1/devices/{device_id}"),
+        token,
+        &json!({ "name": name }),
+    )
+    .map(|_| ())
+}
+
 /// 补齐账号展示信息（本地凭据里缺失时用，同时验证令牌是否仍然有效）。
 pub fn fetch_me(token: &str) -> Result<(String, String), String> {
     let result = get_json("/v1/me", token)?;
@@ -142,6 +200,11 @@ pub fn register_device(creds: &Credentials) -> Result<Registration, String> {
     let result = post("/v1/devices/register", Some(token), &body)?;
     Ok(Registration {
         device_id: result["deviceId"].as_str().unwrap_or("").to_string(),
+        device_name: result["deviceName"]
+            .as_str()
+            .or_else(|| result["name"].as_str())
+            .unwrap_or("RemoteScreen (Rust)")
+            .to_string(),
         password: result["password"].as_str().unwrap_or("").to_string(),
         session_token: result["sessionToken"].as_str().unwrap_or("").to_string(),
         livekit_url: result["livekitUrl"].as_str().unwrap_or("").to_string(),

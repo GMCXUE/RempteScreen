@@ -39,6 +39,10 @@
           <svg viewBox="0 0 16 16" class="ico"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.8"/></svg>
           观看设备
         </button>
+        <button class="nav-item" data-page="devices">
+          <svg viewBox="0 0 16 16" class="ico"><rect x="1.5" y="3" width="13" height="8" rx="1.5"/><path d="M5 13.5h6"/><circle cx="11.5" cy="6.5" r="1.2"/></svg>
+          我的设备
+        </button>
         <button class="nav-item" data-page="settings">
           <svg viewBox="0 0 16 16" class="ico"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/></svg>
           设置
@@ -157,6 +161,23 @@
               <button id="viewer-refocus" class="ghost">显示窗口</button>
               <button id="watch-stop" class="ghost">断开</button>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 我的设备 -->
+      <section id="page-devices" class="page hidden">
+        <h1 class="page-title">我的设备</h1>
+        <div class="card">
+          <div class="card-row">
+            <div>
+              <div class="card-title">账号名下的设备</div>
+              <div class="muted small">登录后会自动把本机注册到你的账号下，其余设备登录同一账号即可看到</div>
+            </div>
+            <button id="devices-refresh" class="ghost">刷新</button>
+          </div>
+          <div id="devices-list" class="history-list">
+            <p class="muted small">登录后这里会列出你名下的所有设备</p>
           </div>
         </div>
       </section>

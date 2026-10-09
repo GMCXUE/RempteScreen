@@ -4,6 +4,8 @@ const $ = (id) => document.getElementById(id);
 
 const SERVER_URL = "http://91.208.104.182";
 let currentPage = "cast";
+/** 本机设备号（来自后端状态），用于在设备列表里标记「本机」 */
+let ownDeviceId = "";
 
 // ---------- 视图切换 ----------
 
@@ -51,6 +53,7 @@ async function refresh() {
   showLogin(!state.logged_in);
   if (!state.logged_in) return;
 
+  ownDeviceId = state.device_id || "";
   $("device-id").textContent = state.registered ? formatDeviceId(state.device_id) : "注册中…";
   $("device-password").textContent = state.registered ? state.password : "— — —";
 
@@ -321,6 +324,121 @@ $("history-clear").addEventListener("click", async () => {
   refreshHistory();
 });
 
+// ---------- 我的设备 ----------
+
+const PLATFORM_LABEL = {
+  macos: "macOS",
+  darwin: "macOS",
+  "macos-rs": "macOS",
+  windows: "Windows",
+  android: "Android",
+  ios: "iOS",
+  linux: "Linux",
+};
+
+function platformLabel(platform) {
+  if (!platform) return "未知平台";
+  return PLATFORM_LABEL[platform] ?? platform;
+}
+
+async function refreshDevices() {
+  const list = $("devices-list");
+  if (!list) return;
+  let devices = [];
+  let error = "";
+  try {
+    devices = await invoke("list_devices");
+  } catch (problem) {
+    error = String(problem);
+  }
+
+  if (error) {
+    list.innerHTML = `<p class="muted small">${error}</p>`;
+    return;
+  }
+  if (!devices.length) {
+    list.innerHTML = '<p class="muted small">账号下还没有设备 —— 本机会在登录后自动注册</p>';
+    return;
+  }
+
+  list.innerHTML = "";
+  for (const device of devices) {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    item.style.cursor = "default";
+
+    const main = document.createElement("div");
+    main.className = "history-main";
+    const nameRow = document.createElement("div");
+    nameRow.className = "history-name";
+    nameRow.textContent = device.name || "未命名设备";
+
+    const statePill = document.createElement("span");
+    statePill.className = "pill";
+    statePill.textContent = device.online ? "在线" : "离线";
+    statePill.style.background = device.online ? "#e8f6ee" : "#f0f1f5";
+    statePill.style.color = device.online ? "#17784a" : "#8b93a5";
+    nameRow.appendChild(statePill);
+
+    if (ownDeviceId && device.deviceId === ownDeviceId) {
+      const ownPill = document.createElement("span");
+      ownPill.className = "pill";
+      ownPill.textContent = "本机";
+      nameRow.appendChild(ownPill);
+    }
+
+    const metaRow = document.createElement("div");
+    metaRow.className = "history-code";
+    const lastSeen = device.online
+      ? "在线中"
+      : relativeTime(Math.floor((device.lastSeenAt ?? 0) / 1000)) || "从未上线";
+    metaRow.textContent = `${formatDeviceId(device.deviceId)} · ${platformLabel(device.platform)} · ${lastSeen}`;
+    main.append(nameRow, metaRow);
+
+    const actions = document.createElement("div");
+    actions.className = "history-actions";
+
+    const watchBtn = document.createElement("button");
+    watchBtn.className = "ghost";
+    watchBtn.textContent = "观看";
+    watchBtn.addEventListener("click", async () => {
+      if (!device.online) {
+        $("watch-error").textContent = "该设备当前离线，无法观看";
+        switchPage("watch");
+        return;
+      }
+      try {
+        await invoke("start_watch", { deviceId: device.deviceId, password: "" });
+        await invoke("open_viewer_window");
+      } catch (problem) {
+        $("watch-error").textContent = String(problem);
+        switchPage("watch");
+      }
+      refreshWatch();
+    });
+
+    const renameBtn = document.createElement("button");
+    renameBtn.className = "ghost";
+    renameBtn.textContent = "重命名";
+    renameBtn.addEventListener("click", async () => {
+      const name = prompt("新的设备名（不超过 32 个字符）", device.name);
+      if (!name) return;
+      try {
+        await invoke("rename_device", { deviceId: device.deviceId, name: name.trim() });
+      } catch (problem) {
+        alert(`重命名失败：${problem}`);
+      }
+      refreshDevices();
+    });
+
+    actions.append(watchBtn, renameBtn);
+    item.append(main, actions);
+    list.appendChild(item);
+  }
+}
+
+$("devices-refresh").addEventListener("click", refreshDevices);
+
 // ---------- 右上角用户菜单 ----------
 
 $("user-chip").addEventListener("click", (event) => {
@@ -337,6 +455,7 @@ $("logout-btn").addEventListener("click", async () => {
   switchPage("cast");
   refresh();
   refreshHistory();
+  refreshDevices();
 });
 
 refresh();
@@ -345,3 +464,5 @@ refreshHistory();
 setInterval(refresh, 2000);
 setInterval(refreshWatch, 1500);
 setInterval(refreshHistory, 5000);
+refreshDevices();
+setInterval(refreshDevices, 10000);
