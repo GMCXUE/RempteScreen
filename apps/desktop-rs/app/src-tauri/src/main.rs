@@ -81,23 +81,51 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
     });
 }
 
+/// 应用状态快照（每把锁都在独立作用域里取用完就释放，规则同 `watch_snapshot`）。
+fn snapshot(state: &AppState) -> AppStateDto {
+    let (logged_in, account_name, account_email, share_height, share_fps) = {
+        let creds = state.creds.lock().unwrap();
+        (
+            creds.account_token.is_some(),
+            creds.account_name.clone().unwrap_or_default(),
+            creds.account_email.clone().unwrap_or_default(),
+            creds.share_height,
+            creds.share_fps,
+        )
+    };
+
+    let (registered, device_id, password) = {
+        let registration = state.registration.lock().unwrap();
+        match registration.as_ref() {
+            Some(registration) => (
+                true,
+                registration.device_id.clone(),
+                registration.password.clone(),
+            ),
+            None => (false, String::new(), String::new()),
+        }
+    };
+
+    let publishing = state.session.lock().unwrap().is_some();
+    let last_error = state.last_error.lock().unwrap().clone().unwrap_or_default();
+
+    AppStateDto {
+        logged_in,
+        registered,
+        device_id,
+        password,
+        publishing,
+        last_error,
+        share_height,
+        share_fps,
+        account_name,
+        account_email,
+    }
+}
+
 #[tauri::command]
 fn get_state(state: tauri::State<AppState>) -> AppStateDto {
-    let creds = state.creds.lock().unwrap();
-    let registration = state.registration.lock().unwrap();
-    let publishing = state.session.lock().unwrap().is_some();
-    AppStateDto {
-        logged_in: creds.account_token.is_some(),
-        registered: registration.is_some(),
-        device_id: registration.as_ref().map(|r| r.device_id.clone()).unwrap_or_default(),
-        password: registration.as_ref().map(|r| r.password.clone()).unwrap_or_default(),
-        publishing,
-        last_error: state.last_error.lock().unwrap().clone().unwrap_or_default(),
-        share_height: creds.share_height,
-        share_fps: creds.share_fps,
-        account_name: creds.account_name.clone().unwrap_or_default(),
-        account_email: creds.account_email.clone().unwrap_or_default(),
-    }
+    snapshot(&state)
 }
 
 #[tauri::command]
@@ -576,9 +604,31 @@ struct WatchStateDto {
     pending_seconds: i64,
 }
 
-#[tauri::command]
-fn get_watch_state(state: tauri::State<AppState>) -> WatchStateDto {
+/// 观看状态快照。
+///
+/// ⚠️ 每把锁都必须在**独立语句**（或显式作用域）里取用完就释放。
+/// 曾经在同一个结构体字面量里对 `pending_request` 取了两次 ——
+/// 结构体字面量的临时值会活到整条语句结束，而 Mutex 不可重入，
+/// 于是每次轮询都死锁，界面直接卡死。
+fn watch_snapshot(state: &AppState) -> WatchStateDto {
     let stats = state.watch_stats.lock().unwrap().clone();
+    let error = state.watch_error.lock().unwrap().clone().unwrap_or_default();
+    let has_audio = state.audio.lock().unwrap().is_some();
+
+    let (pending_device, pending_seconds) = {
+        let pending = state.pending_request.lock().unwrap();
+        match pending.as_ref() {
+            Some(pending) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_secs() as i64)
+                    .unwrap_or(0);
+                (pending.device_name.clone(), (pending.expires_at - now).max(0))
+            }
+            None => (String::new(), 0),
+        }
+    };
+
     WatchStateDto {
         watching: stats.active,
         width: stats.width,
@@ -586,31 +636,18 @@ fn get_watch_state(state: tauri::State<AppState>) -> WatchStateDto {
         fps: stats.fps,
         frames: stats.frames,
         device_name: stats.device_name,
-        error: state.watch_error.lock().unwrap().clone().unwrap_or_default(),
+        error,
         convert_ms: stats.convert_ms,
         encode_ms: stats.encode_ms,
-        has_audio: state.audio.lock().unwrap().is_some(),
-        pending_device: state
-            .pending_request
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|pending| pending.device_name.clone())
-            .unwrap_or_default(),
-        pending_seconds: state
-            .pending_request
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|pending| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|t| t.as_secs() as i64)
-                    .unwrap_or(0);
-                (pending.expires_at - now).max(0)
-            })
-            .unwrap_or(0),
+        has_audio,
+        pending_device,
+        pending_seconds,
     }
+}
+
+#[tauri::command]
+fn get_watch_state(state: tauri::State<AppState>) -> WatchStateDto {
+    watch_snapshot(&state)
 }
 
 /// 无界面自检：连接设备、订阅画面并打印统计（用于命令行验证观看链路）。
@@ -663,8 +700,57 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
     });
 }
 
+/// 无界面自检：验证状态快照不会死锁。
+///
+/// 这是回归防线 —— 「结构体字面量里重复加锁」这类死锁只在运行期暴露，
+/// 编译器不会报错，所以用命令行自检真跑一遍。
+fn run_state_check() {
+    let state = AppState {
+        creds: Mutex::new(api::load_creds()),
+        registration: Mutex::new(None),
+        heartbeat_stop: Mutex::new(None),
+        session: Mutex::new(None),
+        last_error: Arc::new(Mutex::new(None)),
+        watch: Mutex::new(None),
+        watch_error: Arc::new(Mutex::new(None)),
+        frames: Arc::new(Mutex::new(None)),
+        watch_stats: Arc::new(Mutex::new(viewer::WatchStats::default())),
+        audio: Arc::new(Mutex::new(None)),
+        pending_request: Arc::new(Mutex::new(Some(PendingRequest {
+            request_id: "self-check".into(),
+            device_name: "自检设备".into(),
+            expires_at: 4_000_000_000,
+            stop: Arc::new(AtomicBool::new(false)),
+        }))),
+        incoming_requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..5 {
+            let app = snapshot(&state);
+            let watch = watch_snapshot(&state);
+            let _ = tx.send((app.logged_in, watch.pending_device, watch.pending_seconds));
+        }
+    });
+
+    match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok((logged_in, device, seconds)) => println!(
+            "✅ 两个状态快照都正常返回（logged_in={logged_in} 等待中设备={device} 剩余{seconds}s）"
+        ),
+        Err(_) => {
+            println!("❌ 状态快照超时 —— 存在死锁");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "--state-check" {
+        run_state_check();
+        return;
+    }
     if args.len() >= 3 && args[1] == "--watch-test" {
         run_watch_test(
             &args[2],

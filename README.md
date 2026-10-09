@@ -74,6 +74,9 @@ npm test                      # 端到端 33 项断言
 ```bash
 cd apps/desktop-rs/app
 npx @tauri-apps/cli build     # 产出 .app 与 DMG
+
+# 回归自检：验证状态快照不会死锁（结构体字面量里重复加锁曾经导致界面卡死）
+./src-tauri/target/release/remotescreen-desktop --state-check
 ```
 
 首次开启投送需在「系统设置 → 隐私与安全性 → 屏幕录制」授权本应用。
