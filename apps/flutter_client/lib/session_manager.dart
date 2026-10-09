@@ -152,8 +152,19 @@ class ViewingSession extends ChangeNotifier {
         state = ViewingSessionState.connecting;
     }
 
+    // 音频轨订阅状态变化时记一条日志（排障用：确认远端音频有没有被订阅）
+    final hasAudioNow = room.remoteParticipants.values
+        .any((participant) => participant.audioTrackPublications.any((pub) => pub.subscribed));
+    if (hasAudioNow != _lastAudioSubscribed) {
+      _lastAudioSubscribed = hasAudioNow;
+      debugPrint('RemoteScreen 音频轨订阅: $hasAudioNow');
+    }
+
     notifyListeners();
   }
+
+  /// 上一次的音频订阅状态（用于变化检测，避免刷日志）。
+  bool _lastAudioSubscribed = false;
 
   /// 用户主动断开。
   ///
@@ -518,6 +529,16 @@ class SessionManager extends ChangeNotifier {
   }
 
   Future<ViewingSession> _attachSession(ViewerSession session) async {
+    // Android 默认走「通信模式」，远端音频路由到**听筒**——音量小到像没有声音。
+    // 观看投屏必须走扬声器。
+    try {
+      await Hardware.instance.setSpeakerphoneOn(true);
+      // setPreferSpeakerOutput 已废弃，新 API 走 AudioManager
+      await AudioManager.instance.setSpeakerOutputPreferred(true);
+    } catch (_) {
+      // 路由设置失败不影响连接
+    }
+
     final room = Room(roomOptions: const RoomOptions(adaptiveStream: true));
     await room.connect(session.livekitUrl, session.subscribeToken);
 
