@@ -855,23 +855,66 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
         )
         .unwrap();
 
+        // 接收端音频振幅测量：有 NativeAudioStream 拉到的帧才有数据，
+        // 以此区分「轨订阅了但没数据」和「数据真的在流动」
+        let mut audio_meter: Option<(i32, u32)> = None; // (峰值, 帧数)
         for second in 1..=seconds {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let snapshot = stats.lock().unwrap().clone();
             let jpeg_kb = frames.lock().unwrap().as_ref().map(|f| f.len() / 1024).unwrap_or(0);
-            let has_audio = audio.lock().unwrap().is_some();
+            let audio_info = match audio.lock().unwrap().as_ref() {
+                Some(track) => match audio_meter {
+                    Some((peak, frames)) => {
+                        if peak > 3000 {
+                            format!("已收到✅ 有声音（峰值 {peak}，{frames} 帧）")
+                        } else {
+                            format!("已收到但静音（峰值 {peak}，{frames} 帧）")
+                        }
+                    }
+                    None => "已订阅（测量中…）".to_string(),
+                },
+                None => "无".to_string(),
+            };
             println!(
-                "[{second:2}s] {}x{} {}fps 累计{}帧 jpeg={}KB 转换{:.1}ms 编码{:.1}ms 音频轨={} err={:?}",
+                "[{second:2}s] {}x{} {}fps 累计{}帧 jpeg={}KB 音频轨={audio_info} err={:?}",
                 snapshot.width,
                 snapshot.height,
                 snapshot.fps,
                 snapshot.frames,
                 jpeg_kb,
-                snapshot.convert_ms,
-                snapshot.encode_ms,
-                if has_audio { "已收到✅" } else { "无" },
                 error_sink.lock().unwrap().clone()
             );
+
+            // 音频轨出现后，挂一个 NativeAudioStream 测量接收到的振幅
+            if audio_meter.is_none() {
+                if let Some(track) = audio.lock().unwrap().as_ref() {
+                    let mut stream =
+                        livekit::webrtc::audio_stream::native::NativeAudioStream::new(
+                            track.rtc_track(),
+                            48_000,
+                            2,
+                        );
+                    audio_meter = Some((0, 0));
+                    tokio::spawn(async move {
+                        use tokio_stream::StreamExt;
+                        let mut stream = stream;
+                        while let Some(frame) = stream.next().await {
+                            let peak = frame
+                                .data
+                                .iter()
+                                .map(|s| (*s as i32).abs())
+                                .max()
+                                .unwrap_or(0);
+                            if let Some((ref mut max, ref mut frames)) = audio_meter {
+                                if peak > *max {
+                                    *max = peak;
+                                }
+                                *frames += 1;
+                            }
+                        }
+                    });
+                }
+            }
         }
         session.stop();
     });
