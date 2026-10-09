@@ -141,8 +141,9 @@ async fn run_watch(
         .await
         .map_err(|error| format!("连接失败: {error}"))?;
 
-    // 等订阅到对方的视频轨（最多 20 秒）
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // 等订阅到对方的视频轨：对方同意后可能还要过系统级的屏幕录制授权弹窗，
+    // 所以给足 60 秒，避免"人都同意了，画面却被超时挡掉"。
+    let deadline = Instant::now() + Duration::from_secs(60);
     let mut video_track = None;
     while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
         match tokio::time::timeout(Duration::from_millis(500), events.recv()).await {

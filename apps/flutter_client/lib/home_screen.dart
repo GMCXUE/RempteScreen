@@ -308,6 +308,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // MARK: - 连接其他设备
 
+  /// 连接一台设备。
+  ///
+  /// 没有连接密码 → 走「请求对方同意」：弹等待框，对方在自己设备上同意后自动接上，
+  /// 并且对方会顺带自动打开「允许远程观看本设备」。
+  /// 有连接密码 → 直接连（设备主人主动分享的凭据，不打扰对方）。
   Future<void> _connectToDevice(String deviceId, String password) async {
     final id = deviceId.replaceAll(RegExp(r'\D'), '');
     if (id.length != 9) {
@@ -315,24 +320,66 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    // 自己名下的设备可以不带密码（服务端按账号令牌放行）
-    final owned = _devices.any((item) => item.deviceId == id);
-    if (!owned && password.isEmpty) {
-      _toast('请输入连接密码（连自己的设备可留空）');
-      return;
-    }
-
     setState(() => _busy = true);
 
+    ValueNotifier<String>? status;
+    var dialogOpen = false;
+    if (password.isEmpty) {
+      status = ValueNotifier<String>('正在向对方发送观看请求…');
+      dialogOpen = true;
+      // 不 await：等待期间还要继续跑请求轮询
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('等待对方同意'),
+          content: ValueListenableBuilder<String>(
+            valueListenable: status!,
+            builder: (_, value, __) => Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(value, style: const TextStyle(fontSize: 13)),
+                const SizedBox(height: 14),
+                const LinearProgressIndicator(minHeight: 3),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                dialogOpen = false;
+                Navigator.of(dialogContext).pop();
+                _toast('已停止等待，对方那边的请求会自然过期');
+              },
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    void closeDialog() {
+      if (!dialogOpen) return;
+      dialogOpen = false;
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+
     try {
-      final session = await widget.manager.connectToDevice(
+      final session = await widget.manager.watchDevice(
         deviceId: id,
         password: password,
+        onStatus: (text) => status?.value = text,
       );
+      closeDialog();
       if (!mounted) return;
       _openSession(session);
     } on ApiException catch (error) {
+      closeDialog();
       if (mounted) _toast(error.message);
+    } catch (error) {
+      closeDialog();
+      if (mounted) _toast('连接失败：$error');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

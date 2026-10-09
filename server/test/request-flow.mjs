@@ -95,13 +95,19 @@ try {
   const { deviceId, sessionToken } = device;
   console.log(`  设备：${deviceId}`);
 
-  // ---- 1. 自己的设备：不需要请求 ----
+  // ---- 1. 自己的设备：同样需要请求确认，只是标记 owned ----
   let response = await api('POST', '/v1/connect-requests', {
     token: alice.token,
     body: { deviceId },
   });
-  check('自己名下的设备发起请求时直接返回 owned', response.status === 200 && response.body.owned === true,
+  check('自己名下的设备也生成请求（标记 owned）',
+    response.status === 200 && response.body.owned === true && /^[0-9a-f]{32}$/.test(response.body.requestId ?? ''),
     `owned=${response.body.owned}`);
+
+  // 自己提的这条请求先拒掉，避免影响后面的待处理数量断言
+  await api('POST', `/v1/connect-requests/${response.body.requestId}/decision`, {
+    body: { sessionToken, approve: false },
+  });
 
   // ---- 2. 他人设备：生成待处理请求 ----
   response = await api('POST', '/v1/connect-requests', {

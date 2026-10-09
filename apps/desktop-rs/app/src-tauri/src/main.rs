@@ -179,6 +179,7 @@ fn get_incoming_requests(state: tauri::State<AppState>) -> Vec<api::IncomingRequ
 fn decide_incoming_request(
     request_id: String,
     approve: bool,
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     let session_token = state
@@ -189,6 +190,19 @@ fn decide_incoming_request(
         .map(|registration| registration.session_token.clone())
         .ok_or("设备尚未注册")?;
     api::decide_connect_request(&request_id, &session_token, approve)?;
+
+    // 同意观看后自动开启投送（等价于用户手动打开「允许远程观看本设备」），
+    // 否则对方连上了却看不到画面。
+    if approve {
+        let publishing = state.session.lock().unwrap().is_some();
+        if !publishing {
+            if let Err(error) = start_publish(state.clone()) {
+                viewer::log_to_file(&format!("[approve] 自动开启投送失败: {error}"));
+            } else {
+                viewer::log_to_file("[approve] 已同意观看请求并自动开启投送");
+            }
+        }
+    }
     state
         .incoming_requests
         .lock()
@@ -412,19 +426,12 @@ fn start_watch(
 
     let account_token = state.creds.lock().unwrap().account_token.clone();
 
-    // 判定是否自有设备（自有 = 在我账号的设备列表里）
-    let mine = account_token
-        .as_deref()
-        .map(|token| api::device_is_mine(token, &device_id))
-        .unwrap_or(false);
-
-    if !mine && password.is_empty() {
-        // 走请求授权：先向对方设备发请求，等它同意
-        let outcome = api::create_connect_request(account_token.as_deref(), &device_id, "RemoteScreen 桌面端")?;
-        if !outcome.owned {
-            return request_approval(&app, &state, outcome);
-        }
-        // 服务端认定是自己的设备（本地列表还没刷新）→ 继续直连
+    if password.is_empty() {
+        // 一律走「请求确认」：即便是自己名下的设备，被观看也要由设备端点头。
+        // 只有拿得到设备连接密码时才直连 —— 那是设备主人主动分享的凭据。
+        let outcome =
+            api::create_connect_request(account_token.as_deref(), &device_id, "RemoteScreen 桌面端")?;
+        return request_approval(&app, &state, outcome);
     }
 
     let ticket = api::connect(&device_id, &password, account_token.as_deref(), "RemoteScreen 桌面端")?;

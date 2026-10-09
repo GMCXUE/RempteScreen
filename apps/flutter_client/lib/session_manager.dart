@@ -283,6 +283,17 @@ class SessionManager extends ChangeNotifier {
       );
     } catch (_) {
       // 失败就让它自然过期，界面上不再提示
+      return;
+    }
+
+    // 同意观看后自动开启投送（等价于手动打开「允许远程观看本设备」），
+    // 否则对方连上了也看不到画面。
+    if (approve && !publishing) {
+      try {
+        await startPublishing(reg);
+      } catch (error) {
+        debugPrint('同意后自动开启投送失败：$error');
+      }
     }
   }
 
@@ -343,7 +354,37 @@ class SessionManager extends ChangeNotifier {
     String? password,
   }) async {
     final session = await api.connect(deviceId: deviceId, password: password);
+    return _attachSession(session);
+  }
 
+  /// 观看一台设备：
+  ///   有连接密码 → 直接连（设备主人分享的凭据，不打扰对方）
+  ///   没有密码   → 发起观看请求，等对方在自己设备上同意
+  Future<ViewingSession> watchDevice({
+    required String deviceId,
+    String? password,
+    void Function(String status)? onStatus,
+  }) async {
+    if (password != null && password.isNotEmpty) {
+      return connectToDevice(deviceId: deviceId, password: password);
+    }
+
+    final handle = await api.createConnectRequest(deviceId: deviceId);
+    onStatus?.call('已向「${handle.deviceName}」发送观看请求，等待对方同意…');
+
+    final deadline = DateTime.now().add(Duration(seconds: handle.expiresInSec));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      final granted = await api.pollConnectRequest(handle.requestId);
+      if (granted != null) {
+        onStatus?.call('对方已同意，正在连接…');
+        return _attachSession(granted);
+      }
+    }
+    throw ApiException('timeout', '等待对方同意超时，请重试');
+  }
+
+  Future<ViewingSession> _attachSession(ViewerSession session) async {
     final room = Room(roomOptions: const RoomOptions(adaptiveStream: true));
     await room.connect(session.livekitUrl, session.subscribeToken);
 

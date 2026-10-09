@@ -161,6 +161,9 @@ export async function registerDevice({ body, request }) {
   const identity = `caster-${result.deviceId}`;
   return ok({
     deviceId: result.deviceId,
+    // 设备代码与请求中携带的不一致 → 说明这台机器换了账号（或凭据已失效），
+    // 服务端为它分配了新代码；客户端据此提示用户。见 docs/architecture.md「多账号同一设备」。
+    deviceIdChanged: Boolean(deviceId) && String(deviceId) !== result.deviceId,
     password: result.password,
     passwordLength: config.password.length,
     sessionToken: result.sessionToken,
@@ -231,11 +234,10 @@ export async function createConnectRequest({ body, request }) {
   const found = await store.findOnlineDevice(deviceId);
   if (found.error) return fail(404, 'device_offline', OFFLINE_MESSAGE);
 
+  // 即便是自己名下的设备也一律走「请求确认」：被观看这件事必须由设备端点头。
+  // 想免确认就用设备自己的连接密码（/v1/connect），那是设备主人主动分享的凭据。
   const user = await currentUser(request);
-  // 自己名下的设备直接按原路径连接，不需要请求确认
-  if (user && found.record.user_id === user.id) {
-    return ok({ owned: true, deviceId: found.record.device_id });
-  }
+  const owned = Boolean(user && found.record.user_id === user.id);
 
   const entry = requests.createRequest({
     deviceId: found.record.device_id,
@@ -245,7 +247,7 @@ export async function createConnectRequest({ body, request }) {
   connectLimiter.recordSuccess(deviceId);
 
   return ok({
-    owned: false,
+    owned,
     requestId: entry.id,
     expiresInSec: requests.ttlSec,
     deviceName: found.record.name,

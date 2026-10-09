@@ -117,6 +117,23 @@ class ViewerSession {
       );
 }
 
+/// 观看方发起的请求句柄。
+class ConnectRequestHandle {
+  ConnectRequestHandle({
+    required this.requestId,
+    required this.owned,
+    required this.deviceName,
+    required this.expiresInSec,
+  });
+
+  final String requestId;
+
+  /// 是否是自己名下的设备（界面上可据此提示，但确认流程一样要走）
+  final bool owned;
+  final String deviceName;
+  final int expiresInSec;
+}
+
 /// 服务端下发给设备的「观看请求」。
 class ConnectRequestInfo {
   ConnectRequestInfo({
@@ -306,6 +323,39 @@ class ApiService {
         .whereType<Map<String, dynamic>>()
         .map(ConnectRequestInfo.fromJson)
         .toList();
+  }
+
+  /// 发起观看请求（无密码连接时用），返回请求句柄。
+  Future<ConnectRequestHandle> createConnectRequest({
+    required String deviceId,
+    String viewerName = 'Flutter 观看端',
+  }) async {
+    final result = await _request('POST', '/v1/connect-requests', body: {
+      'deviceId': deviceId,
+      'viewerName': viewerName,
+    });
+    return ConnectRequestHandle(
+      requestId: result['requestId'] as String? ?? '',
+      owned: result['owned'] as bool? ?? false,
+      deviceName: result['deviceName'] as String? ?? '远程设备',
+      expiresInSec: (result['expiresInSec'] as num?)?.toInt() ?? 60,
+    );
+  }
+
+  /// 轮询观看请求：还在等待返回 null；同意则直接返回可连接的会话；
+  /// 被拒绝或过期抛出带原因的异常。
+  Future<ViewerSession?> pollConnectRequest(String requestId) async {
+    final result = await _request('GET', '/v1/connect-requests/$requestId');
+    switch (result['status'] as String? ?? 'pending') {
+      case 'approved':
+        return ViewerSession.fromJson({...result, 'via': 'approval'});
+      case 'denied':
+        throw ApiException('denied', '对方拒绝了这次观看请求');
+      case 'expired':
+        throw ApiException('expired', '对方没有在有效期内确认，请求已过期');
+      default:
+        return null;
+    }
   }
 
   /// 同意 / 拒绝一次观看请求。设备凭据即身份凭证。
