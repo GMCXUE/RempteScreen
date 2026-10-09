@@ -4,9 +4,6 @@
 use base64::Engine;
 use livekit::options::{DegradationPreference, TrackPublishOptions, VideoCodec, VideoEncoding};
 use livekit::prelude::*;
-use livekit::webrtc::audio_frame::AudioFrame;
-use livekit::webrtc::audio_source::native::NativeAudioSource;
-use livekit::webrtc::audio_source::AudioSourceOptions;
 use livekit::webrtc::prelude::{
     I420Buffer, RtcAudioSource, RtcVideoSource, VideoFrame, VideoResolution, VideoRotation,
 };
@@ -231,21 +228,28 @@ async fn run_session(
                         }
                     });
                 }
-                // 回声消除/降噪在「推帧」模式下会把数据处理管线指向麦克风路径，
-                // 实测会把推送的帧变成静音 —— 系统音频不需要这些处理，全部关掉直通。
-                let audio_source = NativeAudioSource::new(
-                    AudioSourceOptions {
-                        echo_cancellation: false,
-                        noise_suppression: false,
-                        auto_gain_control: false,
-                    },
-                    48_000, // 采样率
-                    1,      // 单声道（与文档示例一致；立体声路径实测不发送）
-                    2000,   // 缓冲时长（ms；issue #497 提到小队列有消费问题）
-                );
+                // 改用 SDK 主路径（RtcAudioSource::Device）：PlatformAudio 管理的
+                // 录音设备。当前录制设备 = 系统默认麦克风（实验验证 Device 路径）；
+                // 后续装 BlackHole 虚拟声卡后，用 set_recording_device 切到它
+                // 即可采集真正的系统音频（无需推帧，SDK 已验证的路径）。
+                let platform_audio = match PlatformAudio::new() {
+                    Ok(audio) => audio,
+                    Err(error) => {
+                        let message = format!("PlatformAudio 启用失败: {error}");
+                        println!("[publisher] {message}");
+                        log_to_file(&message);
+                        return Err(message);
+                    }
+                };
+                if let Err(error) = platform_audio.start_recording() {
+                    let message = format!("启动录音失败: {error}");
+                    println!("[publisher] {message}");
+                    log_to_file(&message);
+                    return Err(message);
+                }
                 let audio_track = LocalAudioTrack::create_audio_track(
                     "system-audio",
-                    RtcAudioSource::Native(audio_source.clone()),
+                    platform_audio.rtc_source(),
                 );
                 if let Err(error) = room
                     .local_participant()
@@ -266,77 +270,7 @@ async fn run_session(
                     println!("[publisher] 系统音频轨已发布");
                     log_to_file("系统音频轨已发布");
 
-                    // 喂数据：每帧 10ms（480 采样 × 2 字节 = 960 字节，单声道）。
-                    // 同时统计峰值电平（每 5 秒记一次）：区分「采集到静音」和「采集失败」。
-                    //
-                    // ⚠️ capture_frame 是 **async** —— 在阻塞线程里直接调用只会创建一个
-                    // 被丢弃的 Future，帧根本没有进队列（接收端只有静音）。
-                    // 所以拆成两段：阻塞线程只读 PCM 并投递到通道，async 任务里才 await。
-                    let audio_stop = stop.clone();
-                    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<Vec<i16>>(50);
-                    std::thread::spawn(move || {
-                        use std::io::Read;
-                        let mut reader = std::io::BufReader::new(stdout);
-                        let mut pcm = vec![0i16; 480];
-                        let mut peak: i32 = 0;
-                        let mut frames_since_log: u32 = 0;
-                        loop {
-                            if audio_stop.load(Ordering::Relaxed) {
-                                child.kill().ok();
-                                break;
-                            }
-                            // 按字节读满一帧（子进程是持续写入的）
-                            let bytes = unsafe {
-                                std::slice::from_raw_parts_mut(
-                                    pcm.as_mut_ptr() as *mut u8,
-                                    pcm.len() * 2,
-                                )
-                            };
-                            // 单声道：480 采样 × 2 字节 = 960 字节/帧
-                            if reader.read_exact(bytes).is_err() {
-                                log_to_file("音频采集器输出结束");
-                                break; // 采集器退出
-                            }
-                            for sample in &pcm {
-                                let v = (*sample as i32).abs();
-                                if v > peak {
-                                    peak = v;
-                                }
-                            }
-                            frames_since_log += 1;
-                            if frames_since_log >= 500 {
-                                // 500 帧 ≈ 5 秒
-                                let level = if peak > 3000 {
-                                    format!("有声音（峰值 {peak}）")
-                                } else if peak > 0 {
-                                    format!("接近静音（峰值 {peak}）")
-                                } else {
-                                    "完全静音".to_string()
-                                };
-                                log_to_file(&format!("音频电平：{level}"));
-                                peak = 0;
-                                frames_since_log = 0;
-                            }
-                            if frame_tx.blocking_send(pcm.clone()).is_err() {
-                                break; // 接收端已结束
-                            }
-                        }
-                    });
 
-                    // async 推帧任务：真正把音频帧送进 webrtc
-                    tokio::spawn(async move {
-                        while let Some(pcm) = frame_rx.recv().await {
-                            let frame = AudioFrame {
-                                data: pcm.into(),
-                                sample_rate: 48_000,
-                                num_channels: 2,
-                                samples_per_channel: 480,
-                            };
-                            if let Err(error) = audio_source.capture_frame(&frame).await {
-                                log_to_file(&format!("推音频帧失败: {error}"));
-                            }
-                        }
-                    });
                 }
             }
             Err(error) => {
