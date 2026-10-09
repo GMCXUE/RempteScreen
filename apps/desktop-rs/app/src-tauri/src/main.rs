@@ -494,9 +494,13 @@ fn start_watch(
         return Err("不能观看本机屏幕，请在你这台设备之外的另一台设备上观看".into());
     }
 
-    if password.is_empty() {
-        // 一律走「请求确认」：即便是自己名下的设备，被观看也要由设备端点头。
-        // 只有拿得到设备连接密码时才直连 —— 那是设备主人主动分享的凭据。
+    // 同账号设备免确认直连（账号即授权）；跨账号才需要设备端点头。
+    // 无密码 + 非自有设备 → 发起观看请求，等对方同意。
+    let mine = account_token
+        .as_deref()
+        .map(|token| api::device_is_mine(token, &device_id))
+        .unwrap_or(false);
+    if !mine && password.is_empty() {
         let outcome =
             api::create_connect_request(account_token.as_deref(), &device_id, "RemoteScreen 桌面端")?;
         return request_approval(&app, &state, outcome);

@@ -395,6 +395,22 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // 同账号设备免确认直连（账号即授权）；跨账号才需要对方同意
+    final owned = _devices.any((item) => item.deviceId == id);
+    if (owned) {
+      setState(() => _busy = true);
+      try {
+        final session = await widget.manager.connectToDevice(deviceId: id);
+        if (!mounted) return;
+        _openSession(session);
+      } on ApiException catch (error) {
+        if (mounted) _toast(error.message);
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
+      return;
+    }
+
     setState(() => _busy = true);
 
     ValueNotifier<String>? status;

@@ -236,10 +236,12 @@ export async function createConnectRequest({ body, request }) {
   const found = await store.findOnlineDevice(deviceId);
   if (found.error) return fail(404, 'device_offline', OFFLINE_MESSAGE);
 
-  // 即便是自己名下的设备也一律走「请求确认」：被观看这件事必须由设备端点头。
-  // 想免确认就用设备自己的连接密码（/v1/connect），那是设备主人主动分享的凭据。
+  // 自己名下的设备免确认直连（账号即授权）；跨账号才需要设备端点头。
   const user = await currentUser(request);
   const owned = Boolean(user && found.record.user_id === user.id);
+  if (owned) {
+    return ok({ owned: true, deviceId: found.record.device_id });
+  }
 
   const entry = requests.createRequest({
     deviceId: found.record.device_id,
