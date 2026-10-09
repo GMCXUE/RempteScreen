@@ -100,11 +100,12 @@ fn post(path: &str, token: Option<&str>, body: &serde_json::Value) -> Result<ser
 
 /// 带账号令牌的 GET 请求（目前只用于 /v1/me）。
 fn get_json(path: &str, token: &str) -> Result<serde_json::Value, String> {
-    let response = ureq::get(&format!("{SERVER_URL}{path}"))
-        .timeout(std::time::Duration::from_secs(15))
-        .set("Authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(|error| format!("{error}"))?;
+    let mut request = ureq::get(&format!("{SERVER_URL}{path}"))
+        .timeout(std::time::Duration::from_secs(15));
+    if !token.is_empty() {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    let response = request.call().map_err(|error| format!("{error}"))?;
     let text = response.into_string().map_err(|error| error.to_string())?;
     serde_json::from_str(&text).map_err(|error| error.to_string())
 }
@@ -251,11 +252,37 @@ pub fn refresh_password(device_id: &str, session_token: &str) -> Result<String, 
     Ok(result["password"].as_str().unwrap_or("").to_string())
 }
 
-pub fn heartbeat(device_id: &str, session_token: &str) -> Result<(), String> {
-    post(
+/// 设备侧的观看请求（服务端随心跳下发）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IncomingRequest {
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+    #[serde(rename = "viewerName", default)]
+    pub viewer_name: String,
+    #[serde(rename = "expiresInSec", default)]
+    pub expires_in_sec: u64,
+}
+
+/// 心跳：返回待用户处理的观看请求列表。
+pub fn heartbeat(device_id: &str, session_token: &str) -> Result<Vec<IncomingRequest>, String> {
+    let result = post(
         &format!("/v1/devices/{device_id}/heartbeat"),
         None,
         &json!({ "sessionToken": session_token }),
+    )?;
+    Ok(serde_json::from_value(result["pendingRequests"].clone()).unwrap_or_default())
+}
+
+/// 设备主人对观看请求做出决定（同意 / 拒绝）。
+pub fn decide_connect_request(
+    request_id: &str,
+    session_token: &str,
+    approve: bool,
+) -> Result<(), String> {
+    post(
+        &format!("/v1/connect-requests/{request_id}/decision"),
+        None,
+        &json!({ "sessionToken": session_token, "approve": approve }),
     )
     .map(|_| ())
 }
@@ -330,4 +357,70 @@ pub fn forget_device(device_id: &str) {
     let mut entries = load_history();
     entries.retain(|entry| entry.device_id != device_id);
     save_history(&entries);
+}
+
+
+// MARK: - 连接请求（请求观看 → 设备主人同意）
+
+/// 发起连接请求的结果。
+pub struct RequestOutcome {
+    /// 是否是自己名下的设备（免密码、无需请求）
+    pub owned: bool,
+    pub request_id: String,
+    pub device_name: String,
+    pub expires_in_sec: u64,
+}
+
+pub struct RequestGrant {
+    pub livekit_url: String,
+    pub token: String,
+    pub room_name: String,
+    pub device_name: String,
+}
+
+pub enum PollOutcome {
+    Pending,
+    Denied,
+    Expired,
+    Approved(RequestGrant),
+}
+
+/// 该设备是否属于我的账号（用自己的设备免密码，也不需要请求确认）。
+pub fn device_is_mine(token: &str, device_id: &str) -> bool {
+    list_devices(token)
+        .map(|devices| devices.iter().any(|device| device.device_id == device_id))
+        .unwrap_or(false)
+}
+
+pub fn create_connect_request(
+    token: Option<&str>,
+    device_id: &str,
+    viewer_name: &str,
+) -> Result<RequestOutcome, String> {
+    let result = post(
+        "/v1/connect-requests",
+        token,
+        &json!({ "deviceId": device_id, "viewerName": viewer_name }),
+    )?;
+    Ok(RequestOutcome {
+        owned: result["owned"].as_bool().unwrap_or(false),
+        request_id: result["requestId"].as_str().unwrap_or("").to_string(),
+        device_name: result["deviceName"].as_str().unwrap_or("").to_string(),
+        expires_in_sec: result["expiresInSec"].as_u64().unwrap_or(60),
+    })
+}
+
+pub fn poll_connect_request(request_id: &str) -> Result<PollOutcome, String> {
+    let result = get_json(&format!("/v1/connect-requests/{request_id}"), "")?;
+    Ok(match result["status"].as_str().unwrap_or("pending") {
+        "approved" => PollOutcome::Approved(RequestGrant {
+            livekit_url: result["livekitUrl"].as_str().unwrap_or("").to_string(),
+            token: result["token"].as_str().unwrap_or("").to_string(),
+            room_name: result["roomName"].as_str().unwrap_or("").to_string(),
+            device_name: result["deviceName"].as_str().unwrap_or("").to_string(),
+        }),
+        "denied" => PollOutcome::Denied,
+        "expired" => PollOutcome::Expired,
+        _ => PollOutcome::Pending,
+    })
 }

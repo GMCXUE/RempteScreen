@@ -170,6 +170,44 @@ $("refresh-pw").addEventListener("click", async () => {
 
 let lastWatching = false;
 
+// ---------- 收到的观看请求（别人要看本机）----------
+
+let incomingRequestId = "";
+
+async function refreshIncoming() {
+  let requests = [];
+  try {
+    requests = await invoke("get_incoming_requests");
+  } catch {
+    return;
+  }
+  const banner = $("incoming-request");
+  if (!banner) return;
+  if (!requests.length) {
+    banner.classList.add("hidden");
+    incomingRequestId = "";
+    return;
+  }
+  const request = requests[0];
+  incomingRequestId = request.requestId;
+  $("incoming-viewer").textContent = request.viewerName || "未知设备";
+  banner.classList.remove("hidden");
+}
+
+async function decideIncoming(approve) {
+  if (!incomingRequestId) return;
+  try {
+    await invoke("decide_incoming_request", { requestId: incomingRequestId, approve });
+  } catch (error) {
+    $("cast-error").textContent = `处理请求失败：${error}`;
+  }
+  incomingRequestId = "";
+  refreshIncoming();
+}
+
+$("incoming-approve").addEventListener("click", () => decideIncoming(true));
+$("incoming-deny").addEventListener("click", () => decideIncoming(false));
+
 async function refreshWatch() {
   let state;
   try {
@@ -181,6 +219,20 @@ async function refreshWatch() {
   const viewerCard = $("viewer-card");
   // 只以会话状态为准（累计帧数曾导致断开后卡片不消失）
   const active = state.watching;
+
+  // 等待对方同意：显示倒计时横幅
+  const pending = Boolean(state.pending_device);
+  if (pending) {
+    $("watch-pending").classList.remove("hidden");
+    $("pending-name").textContent = state.pending_device;
+    $("pending-countdown").textContent = state.pending_seconds > 0
+      ? `（${state.pending_seconds} 秒内有效）`
+      : "";
+    $("watch-btn").disabled = true;
+  } else {
+    $("watch-pending").classList.add("hidden");
+    $("watch-btn").disabled = false;
+  }
 
   if (state.error) {
     formCard.classList.remove("hidden");
@@ -208,17 +260,26 @@ $("watch-btn").addEventListener("click", async () => {
   $("watch-error").textContent = "";
   $("watch-btn").disabled = true;
   try {
-    await invoke("start_watch", {
+    const outcome = await invoke("start_watch", {
       deviceId: $("watch-id").value.trim(),
       password: $("watch-pw").value.trim(),
     });
-    // 画面与控制条都在独立窗口里
-    await invoke("open_viewer_window");
+    // 直连成功才立刻开窗；等待同意的路径由后端在批准后自动开窗
+    if (!String(outcome).includes("等待对方同意")) {
+      await invoke("open_viewer_window");
+    } else {
+      $("watch-error").textContent = "";
+    }
   } catch (error) {
     $("watch-error").textContent = String(error);
   } finally {
     $("watch-btn").disabled = false;
   }
+  refreshWatch();
+});
+
+$("pending-cancel").addEventListener("click", async () => {
+  await invoke("cancel_watch_request");
   refreshWatch();
 });
 
@@ -299,17 +360,20 @@ async function refreshHistory() {
     connectBtn.addEventListener("click", async (event) => {
       event.stopPropagation();
       $("watch-id").value = entry.device_id;
-      if (entry.own) {
-        // 自己的设备免密码，直接连
-        $("watch-pw").value = "";
-        await invoke("start_watch", { deviceId: entry.device_id, password: "" });
-        await invoke("open_viewer_window");
-        refreshWatch();
-      } else {
-        $("watch-pw").value = "";
-        $("watch-pw").focus();
-        $("watch-error").textContent = "这是别人的设备，请输入连接密码后点「连接」";
+      // 自有设备直连，别人的设备走「请求对方同意」；填了密码则按密码直连
+      const password = $("watch-pw").value.trim();
+      try {
+        const outcome = await invoke("start_watch", {
+          deviceId: entry.deviceId,
+          password,
+        });
+        if (!String(outcome).includes("等待对方同意")) {
+          await invoke("open_viewer_window");
+        }
+      } catch (error) {
+        $("watch-error").textContent = String(error);
       }
+      refreshWatch();
     });
 
     const removeBtn = document.createElement("button");
@@ -471,8 +535,10 @@ $("logout-btn").addEventListener("click", async () => {
 refresh();
 refreshWatch();
 refreshHistory();
+refreshIncoming();
 setInterval(refresh, 2000);
 setInterval(refreshWatch, 1500);
 setInterval(refreshHistory, 5000);
 refreshDevices();
 setInterval(refreshDevices, 10000);
+setInterval(refreshIncoming, 3000);

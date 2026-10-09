@@ -123,6 +123,17 @@
           <div class="card-hint">按屏幕长边等比缩放；切换后立即以新画质重启投送</div>
         </div>
 
+        <div id="incoming-request" class="pending hidden">
+          <div class="pending-text">
+            <span class="pending-dot"></span>
+            「<span id="incoming-viewer">某设备</span>」请求观看本机屏幕
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button id="incoming-deny" class="ghost">拒绝</button>
+            <button id="incoming-approve" class="ghost" style="color:#17784a; border-color:#c8e6d4;">同意</button>
+          </div>
+        </div>
+
         <p id="cast-error" class="error"></p>
       </section>
 
@@ -132,11 +143,22 @@
 
         <div id="watch-form-card" class="card">
           <div class="card-title">连接远程设备</div>
-          <div class="muted small">输入对方的设备代码与连接密码（观看你自己的设备可留空密码）</div>
+          <div class="muted small">
+            输入设备代码即可发起观看：自己名下的设备直接连接，别人的设备需要对方在设备上同意；<br />
+            知道对方的连接密码时也可以填密码直接连接，无需等待确认。
+          </div>
           <div class="watch-form">
             <input id="watch-id" placeholder="设备代码（9 位数字）" maxlength="9" />
             <input id="watch-pw" placeholder="连接密码" />
             <button id="watch-btn" class="primary">连接</button>
+          </div>
+          <div id="watch-pending" class="pending hidden">
+            <div class="pending-text">
+              <span class="pending-dot"></span>
+              已向「<span id="pending-name">设备</span>」发送观看请求，等待对方同意…
+              <span id="pending-countdown" class="muted"></span>
+            </div>
+            <button id="pending-cancel" class="ghost">取消请求</button>
           </div>
           <div id="watch-error" class="error"></div>
         </div>

@@ -215,16 +215,60 @@ class SessionManager extends ChangeNotifier {
   void startHeartbeat(DeviceRegistration reg) {
     registration = reg;
     _heartbeat?.cancel();
-    _heartbeat = Timer.periodic(const Duration(seconds: 15), (_) async {
-      final reg = registration;
-      if (reg == null) return;
-      try {
-        await api.heartbeat(reg.deviceId, reg.sessionToken);
-      } catch (_) {
-        // 心跳失败不打断使用；服务端会在超时后判离线，
-        // 客户端网络恢复后心跳会自动续上
+    // 立刻心跳一次，随后每 15 秒一次；心跳响应里带着待处理的观看请求
+    unawaited(_tickHeartbeat());
+    _heartbeat = Timer.periodic(const Duration(seconds: 15), (_) => unawaited(_tickHeartbeat()));
+  }
+
+  Future<void> _tickHeartbeat() async {
+    final reg = registration;
+    if (reg == null) return;
+    try {
+      final incoming = await api.heartbeat(reg.deviceId, reg.sessionToken);
+      if (incoming.isEmpty) {
+        if (pendingRequests.isNotEmpty) {
+          pendingRequests = [];
+          notifyListeners();
+        }
+        return;
       }
-    });
+      // 只保留还没处理过的请求，避免重复弹窗
+      final fresh = incoming
+          .where((request) => !_handledRequestIds.contains(request.requestId))
+          .toList();
+      if (fresh.isNotEmpty) {
+        pendingRequests = [...pendingRequests, ...fresh];
+        notifyListeners();
+      }
+    } catch (_) {
+      // 心跳失败不打断使用；服务端会在超时后判离线，网络恢复后自动续上
+    }
+  }
+
+  /// 待用户处理的观看请求（界面据此弹窗）。
+  List<ConnectRequestInfo> pendingRequests = [];
+
+  /// 已处理过的请求 id（同意/拒绝/超时后不再弹窗）。
+  final Set<String> _handledRequestIds = {};
+
+  /// 用户对观看请求做出决定。
+  Future<void> decideRequest(ConnectRequestInfo request, bool approve) async {
+    final reg = registration;
+    if (reg == null) return;
+    _handledRequestIds.add(request.requestId);
+    pendingRequests = pendingRequests
+        .where((item) => item.requestId != request.requestId)
+        .toList();
+    notifyListeners();
+    try {
+      await api.decideConnectRequest(
+        requestId: request.requestId,
+        sessionToken: reg.sessionToken,
+        approve: approve,
+      );
+    } catch (_) {
+      // 失败就让它自然过期，界面上不再提示
+    }
   }
 
   void stopHeartbeat() {

@@ -6,6 +6,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { config } from './config.mjs';
+import * as requests from './requests.mjs';
 import * as store from './store.mjs';
 import * as users from './users.mjs';
 import { signLiveKitToken } from './token.mjs';
@@ -203,7 +204,110 @@ export async function heartbeat({ body, params }) {
   const result = await store.heartbeat(params.deviceId, body?.sessionToken);
   if (result.error === 'device_unknown') return fail(404, 'device_unknown', '设备不存在或已解绑');
   if (result.error === 'unauthorized') return fail(401, 'unauthorized', '设备凭据无效');
-  return ok({ online: true, heartbeatIntervalSec: config.heartbeat.intervalSec });
+  // 顺带把待处理的「观看请求」带给设备，客户端据此弹窗征求同意
+  return ok({
+    online: true,
+    heartbeatIntervalSec: config.heartbeat.intervalSec,
+    pendingRequests: requests.listPendingForDevice(params.deviceId),
+  });
+}
+
+// MARK: - 连接请求（观看方发起 → 设备主人同意）
+
+/** 观看方发起：POST /v1/connect-requests { deviceId, viewerName } */
+export async function createConnectRequest({ body, request }) {
+  const deviceId = String(body?.deviceId ?? '').trim();
+  if (!isDeviceId(deviceId)) {
+    return fail(400, 'invalid_device_id', '设备 ID 必须是 9 位数字');
+  }
+
+  const limit = connectLimiter.check(deviceId);
+  if (limit.blocked) {
+    return fail(429, 'rate_limited', `尝试过于频繁，请 ${limit.retryAfterSec} 秒后重试`, {
+      retryAfterSec: limit.retryAfterSec,
+    });
+  }
+
+  const found = await store.findOnlineDevice(deviceId);
+  if (found.error) return fail(404, 'device_offline', OFFLINE_MESSAGE);
+
+  const user = await currentUser(request);
+  // 自己名下的设备直接按原路径连接，不需要请求确认
+  if (user && found.record.user_id === user.id) {
+    return ok({ owned: true, deviceId: found.record.device_id });
+  }
+
+  const entry = requests.createRequest({
+    deviceId: found.record.device_id,
+    viewerName: typeof body?.viewerName === 'string' ? body.viewerName.slice(0, 32) : '',
+    viewerAddress: request?.socket?.remoteAddress ?? '',
+  });
+  connectLimiter.recordSuccess(deviceId);
+
+  return ok({
+    owned: false,
+    requestId: entry.id,
+    expiresInSec: requests.ttlSec,
+    deviceName: found.record.name,
+  });
+}
+
+/** 观看方轮询：GET /v1/connect-requests/:requestId */
+export async function getConnectRequest({ params }) {
+  const entry = requests.getRequest(params.requestId);
+  if (!entry) return fail(404, 'not_found', '请求不存在或已失效');
+
+  if (entry.status === 'approved') {
+    if (!entry.grant) return ok({ status: 'pending' }); // 令牌还没挂上，继续等
+    return ok({
+      status: 'approved',
+      deviceId: entry.deviceId,
+      roomName: entry.grant.roomName,
+      livekitUrl: entry.grant.livekitUrl,
+      token: entry.grant.token,
+      deviceName: entry.grant.deviceName,
+    });
+  }
+
+  return ok({ status: entry.status });
+}
+
+/** 设备主人决策：POST /v1/connect-requests/:requestId/decision { sessionToken, approve } */
+export async function decideConnectRequest({ body, params }) {
+  const entry = requests.getRequest(params.requestId);
+  if (!entry) return fail(404, 'not_found', '请求不存在或已失效');
+
+  // 用设备凭据确认是这台设备本人在操作
+  const verified = await store.heartbeat(entry.deviceId, body?.sessionToken);
+  if (verified.error === 'device_unknown') return fail(404, 'device_unknown', '设备不存在或已解绑');
+  if (verified.error === 'unauthorized') return fail(401, 'unauthorized', '设备凭据无效');
+
+  if (entry.status !== 'pending') {
+    return fail(409, 'already_decided', '该请求已被处理');
+  }
+
+  const approve = body?.approve === true;
+  const decided = requests.decideRequest(entry.id, approve);
+  if (decided.error === 'not_found') return fail(404, 'not_found', '请求不存在或已失效');
+  if (!approve) return ok({ approved: false });
+
+  const identity = `viewer-${randomBytes(4).toString('hex')}`;
+  const roomName = `device-${entry.deviceId}`;
+  const token = signLiveKitToken({
+    identity,
+    room: roomName,
+    canPublish: false,
+    name: entry.viewerName || '观看端',
+  });
+  const device = await store.findOnlineDevice(entry.deviceId);
+  requests.attachGrant(entry.id, {
+    token,
+    roomName,
+    livekitUrl: config.livekit.url,
+    deviceName: device.record?.name ?? '',
+  });
+
+  return ok({ approved: true });
 }
 
 /** DELETE /v1/devices/:deviceId —— 设备主动解绑。 */

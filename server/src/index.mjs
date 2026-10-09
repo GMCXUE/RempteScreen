@@ -22,6 +22,7 @@ import http from 'node:http';
 import { config } from './config.mjs';
 import { openDatabase, purgeExpiredSessions, closeDatabase } from './db.mjs';
 import * as handlers from './handlers.mjs';
+import { startSweeper } from './requests.mjs';
 
 const routes = [
   ['POST', '/v1/auth/register', handlers.registerAccount],
@@ -38,6 +39,9 @@ const routes = [
   ['GET', '/v1/devices/:deviceId/status', handlers.deviceStatus],
 
   ['POST', '/v1/connect', handlers.connect],
+  ['POST', '/v1/connect-requests', handlers.createConnectRequest],
+  ['GET', '/v1/connect-requests/:requestId', handlers.getConnectRequest],
+  ['POST', '/v1/connect-requests/:requestId/decision', handlers.decideConnectRequest],
   ['GET', '/v1/health', handlers.health],
 ];
 
@@ -163,6 +167,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 // 定期清理过期会话，避免会话表无限增长
+startSweeper();
 const sweeper = setInterval(async () => {
   try {
     const removed = await purgeExpiredSessions();

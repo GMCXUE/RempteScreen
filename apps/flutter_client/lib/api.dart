@@ -117,6 +117,27 @@ class ViewerSession {
       );
 }
 
+/// 服务端下发给设备的「观看请求」。
+class ConnectRequestInfo {
+  ConnectRequestInfo({
+    required this.requestId,
+    required this.viewerName,
+    required this.expiresInSec,
+  });
+
+  final String requestId;
+  final String viewerName;
+  final int expiresInSec;
+
+  factory ConnectRequestInfo.fromJson(Map<String, dynamic> json) {
+    return ConnectRequestInfo(
+      requestId: json['requestId'] as String? ?? '',
+      viewerName: json['viewerName'] as String? ?? '未知设备',
+      expiresInSec: (json['expiresInSec'] as num?)?.toInt() ?? 60,
+    );
+  }
+}
+
 class ApiService {
   ApiService({required this.baseUrl});
 
@@ -273,9 +294,28 @@ class ApiService {
     return registration;
   }
 
-  Future<void> heartbeat(String deviceId, String sessionToken) async {
-    await _request('POST', '/v1/devices/$deviceId/heartbeat',
+  /// 心跳，同时带回「待处理的观看请求」（服务端下发给设备的）。
+  Future<List<ConnectRequestInfo>> heartbeat(
+    String deviceId,
+    String sessionToken,
+  ) async {
+    final result = await _request('POST', '/v1/devices/$deviceId/heartbeat',
         body: {'sessionToken': sessionToken});
+    final raw = (result['pendingRequests'] as List?) ?? const [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(ConnectRequestInfo.fromJson)
+        .toList();
+  }
+
+  /// 同意 / 拒绝一次观看请求。设备凭据即身份凭证。
+  Future<void> decideConnectRequest({
+    required String requestId,
+    required String sessionToken,
+    required bool approve,
+  }) async {
+    await _request('POST', '/v1/connect-requests/$requestId/decision',
+        body: {'sessionToken': sessionToken, 'approve': approve});
   }
 
   Future<String> refreshDevicePassword({

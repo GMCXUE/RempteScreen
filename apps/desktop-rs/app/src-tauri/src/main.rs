@@ -25,6 +25,17 @@ struct AppState {
     frames: viewer::FrameStore,
     watch_stats: Arc<Mutex<viewer::WatchStats>>,
     audio: viewer::AudioTrackStore,
+    /// 正在等待对方同意的连接请求（界面据此显示「等待同意」）
+    pending_request: Arc<Mutex<Option<PendingRequest>>>,
+    /// 别人发给我们这台设备的观看请求（待同意）
+    incoming_requests: Arc<Mutex<Vec<api::IncomingRequest>>>,
+}
+
+struct PendingRequest {
+    request_id: String,
+    device_name: String,
+    expires_at: i64,
+    stop: Arc<AtomicBool>,
 }
 
 #[derive(Serialize, Clone)]
@@ -41,7 +52,8 @@ struct AppStateDto {
     account_email: String,
 }
 
-fn spawn_heartbeat(state: &AppState, registration: api::Registration) {
+fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
+    let state = app.state::<AppState>();
     // 停掉旧的心跳
     if let Some(old) = state.heartbeat_stop.lock().unwrap().take() {
         old.store(true, Ordering::Relaxed);
@@ -50,14 +62,19 @@ fn spawn_heartbeat(state: &AppState, registration: api::Registration) {
     *state.heartbeat_stop.lock().unwrap() = Some(stop.clone());
     *state.registration.lock().unwrap() = Some(registration.clone());
 
+    let handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
         let mut timer = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            if let Err(error) = api::heartbeat(&registration.device_id, &registration.session_token) {
-                eprintln!("[heartbeat] {error}");
+            match api::heartbeat(&registration.device_id, &registration.session_token) {
+                Ok(incoming) => {
+                    *state.incoming_requests.lock().unwrap() = incoming;
+                }
+                Err(error) => eprintln!("[heartbeat] {error}"),
             }
             timer.tick().await;
         }
@@ -123,6 +140,35 @@ fn logout(state: tauri::State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// MARK: - 收到的观看请求（本机被别人请求观看）
+
+#[tauri::command]
+fn get_incoming_requests(state: tauri::State<AppState>) -> Vec<api::IncomingRequest> {
+    state.incoming_requests.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn decide_incoming_request(
+    request_id: String,
+    approve: bool,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let session_token = state
+        .registration
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|registration| registration.session_token.clone())
+        .ok_or("设备尚未注册")?;
+    api::decide_connect_request(&request_id, &session_token, approve)?;
+    state
+        .incoming_requests
+        .lock()
+        .unwrap()
+        .retain(|request| request.request_id != request_id);
+    Ok(())
+}
+
 // MARK: - 我的设备
 
 /// 账号名下的设备列表（用于「我的设备」页）。
@@ -175,7 +221,7 @@ fn forget_device(device_id: String) {
 }
 
 #[tauri::command]
-fn register_device(state: tauri::State<AppState>) -> Result<(), String> {
+fn register_device(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
     let creds = state.creds.lock().unwrap().clone();
     let registration = api::register_device(&creds)?;
 
@@ -187,7 +233,7 @@ fn register_device(state: tauri::State<AppState>) -> Result<(), String> {
         api::save_creds(&creds);
     }
 
-    spawn_heartbeat(&state, registration);
+    spawn_heartbeat(&app, registration);
     Ok(())
 }
 
@@ -275,10 +321,15 @@ fn set_quality(height: u32, fps: u32, state: tauri::State<AppState>) -> Result<(
 }
 
 /// 开始观看远端设备：先向服务端取观看票（自己的设备免密码），再订阅其屏幕轨道。
+/// 开始观看。三种路径：
+///   ① 自己名下的设备 → 免密码直连
+///   ② 提供了连接密码 → 按密码直连（对外分享的老路径）
+///   ③ 其他情况 → 向设备发起「观看请求」，对方在设备上同意后才建立连接
 #[tauri::command]
 fn start_watch(
     device_id: String,
     password: String,
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<String, String> {
     {
@@ -291,6 +342,22 @@ fn start_watch(
     *state.frames.lock().unwrap() = None;
 
     let account_token = state.creds.lock().unwrap().account_token.clone();
+
+    // 判定是否自有设备（自有 = 在我账号的设备列表里）
+    let mine = account_token
+        .as_deref()
+        .map(|token| api::device_is_mine(token, &device_id))
+        .unwrap_or(false);
+
+    if !mine && password.is_empty() {
+        // 走请求授权：先向对方设备发请求，等它同意
+        let outcome = api::create_connect_request(account_token.as_deref(), &device_id, "RemoteScreen 桌面端")?;
+        if !outcome.owned {
+            return request_approval(&app, &state, outcome);
+        }
+        // 服务端认定是自己的设备（本地列表还没刷新）→ 继续直连
+    }
+
     let ticket = api::connect(&device_id, &password, account_token.as_deref(), "RemoteScreen 桌面端")?;
     // 连接成功才写入历史（点击重连时就能看到设备名）
     let own = state
@@ -313,6 +380,115 @@ fn start_watch(
     )?;
     *state.watch.lock().unwrap() = Some(session);
     Ok(ticket.device_name)
+}
+
+/// 发起观看请求并后台轮询等待对方同意。同意后自动建立观看会话并打开观看窗口。
+fn request_approval(
+    app: &tauri::AppHandle,
+    state: &tauri::State<AppState>,
+    outcome: api::RequestOutcome,
+) -> Result<String, String> {
+    // 同一时间只保留一个待批准请求
+    if let Some(previous) = state.pending_request.lock().unwrap().take() {
+        previous.stop.store(true, Ordering::Relaxed);
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|t| t.as_secs() as i64 + outcome.expires_in_sec as i64)
+        .unwrap_or(0);
+    let device_name = if outcome.device_name.is_empty() {
+        outcome.request_id.clone()
+    } else {
+        outcome.device_name.clone()
+    };
+
+    *state.pending_request.lock().unwrap() = Some(PendingRequest {
+        request_id: outcome.request_id.clone(),
+        device_name: device_name.clone(),
+        expires_at,
+        stop: stop.clone(),
+    });
+
+    let handle = app.clone();
+    let request_id = outcome.request_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = handle.state::<AppState>();
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+
+            match api::poll_connect_request(&request_id) {
+                Ok(api::PollOutcome::Pending) => continue,
+                Ok(api::PollOutcome::Denied) => {
+                    *state.watch_error.lock().unwrap() = Some("对方拒绝了这次观看请求".into());
+                    break;
+                }
+                Ok(api::PollOutcome::Expired) => {
+                    *state.watch_error.lock().unwrap() =
+                        Some("观看请求已超时（对方未在 60 秒内确认）".into());
+                    break;
+                }
+                Ok(api::PollOutcome::Approved(grant)) => {
+                    // 记录历史（自有与否以账号归属为准）
+                    let own = state
+                        .creds
+                        .lock()
+                        .unwrap()
+                        .account_token
+                        .clone()
+                        .map(|token| api::device_is_mine(&token, &grant.room_name.trim_start_matches("device-").to_string()))
+                        .unwrap_or(false);
+                    api::record_watch(
+                        grant.room_name.trim_start_matches("device-"),
+                        &grant.device_name,
+                        own,
+                    );
+
+                    match viewer::start_watch(
+                        &grant.livekit_url,
+                        &grant.token,
+                        &grant.device_name,
+                        state.watch_error.clone(),
+                        state.frames.clone(),
+                        state.watch_stats.clone(),
+                        state.audio.clone(),
+                    ) {
+                        Ok(session) => {
+                            *state.watch.lock().unwrap() = Some(session);
+                            let _ = open_viewer_window(handle.clone());
+                        }
+                        Err(error) => {
+                            *state.watch_error.lock().unwrap() = Some(error);
+                        }
+                    }
+                    break;
+                }
+                Err(error) => {
+                    *state.watch_error.lock().unwrap() = Some(format!("请求状态查询失败：{error}"));
+                    break;
+                }
+            }
+        }
+        *state.pending_request.lock().unwrap() = None;
+    });
+
+    Ok(format!("已向「{device_name}」发送观看请求，等待对方同意…"))
+}
+
+/// 取消正在等待的观看请求。
+#[tauri::command]
+fn cancel_watch_request(state: tauri::State<AppState>) -> Result<(), String> {
+    if let Some(pending) = state.pending_request.lock().unwrap().take() {
+        pending.stop.store(true, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -394,6 +570,9 @@ struct WatchStateDto {
     convert_ms: f32,
     encode_ms: f32,
     has_audio: bool,
+    /// 等待对方同意的请求：空字符串表示没有
+    pending_device: String,
+    pending_seconds: i64,
 }
 
 #[tauri::command]
@@ -410,6 +589,26 @@ fn get_watch_state(state: tauri::State<AppState>) -> WatchStateDto {
         convert_ms: stats.convert_ms,
         encode_ms: stats.encode_ms,
         has_audio: state.audio.lock().unwrap().is_some(),
+        pending_device: state
+            .pending_request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|pending| pending.device_name.clone())
+            .unwrap_or_default(),
+        pending_seconds: state
+            .pending_request
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|pending| {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|t| t.as_secs() as i64)
+                    .unwrap_or(0);
+                (pending.expires_at - now).max(0)
+            })
+            .unwrap_or(0),
     }
 }
 
@@ -490,6 +689,8 @@ fn main() {
             frames,
             watch_stats: Arc::new(Mutex::new(viewer::WatchStats::default())),
             audio: Arc::new(Mutex::new(None)),
+            pending_request: Arc::new(Mutex::new(None)),
+            incoming_requests: Arc::new(Mutex::new(Vec::new())),
         })
         .setup(move |app| {
             // 启动自检流程：先补齐账号信息（顺带校验令牌），再注册设备并恢复心跳。
@@ -532,7 +733,7 @@ fn main() {
                         stored.device_session_token = Some(registration.session_token.clone());
                         api::save_creds(&stored);
                         drop(stored);
-                        spawn_heartbeat(&state, registration);
+                        spawn_heartbeat(&handle, registration);
                     }
                     Err(error) => {
                         let message = format!("设备注册失败：{error}");
@@ -616,7 +817,10 @@ fn main() {
             set_quality,
             refresh_password,
             start_watch,
+            cancel_watch_request,
             stop_watch,
+            get_incoming_requests,
+            decide_incoming_request,
             get_watch_state,
             open_viewer_window,
             close_viewer_window,

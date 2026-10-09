@@ -372,3 +372,23 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .menu-item:hover { background: #f2f5fa; }
 .menu-item.danger { color: #d9483f; }
 .menu-item.danger:hover { background: #fdeeed; }
+
+/* 等待对方同意 */
+.pending {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d6e4fb;
+  background: #f4f8ff;
+  border-radius: 10px;
+}
+.pending-text { font-size: 12.5px; color: #1d63d2; display: flex; align-items: center; gap: 6px; }
+.pending-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #3b82f6;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }

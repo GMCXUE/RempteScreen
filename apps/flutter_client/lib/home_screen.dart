@@ -64,6 +64,47 @@ class _HomeScreenState extends State<HomeScreen> {
   /// 管理器状态变化 → 刷新界面
   void _onManagerChanged() {
     if (mounted) setState(() {});
+    _maybeShowConnectRequest();
+  }
+
+  /// 有待处理的观看请求时弹窗征求用户同意（同一时刻只弹一个）。
+  bool _dialogShowing = false;
+
+  Future<void> _maybeShowConnectRequest() async {
+    if (_dialogShowing || !mounted) return;
+    final requests = widget.manager.pendingRequests;
+    if (requests.isEmpty) return;
+
+    _dialogShowing = true;
+    final request = requests.first;
+    final approved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('收到观看请求'),
+        content: Text('「${request.viewerName}」请求观看本机屏幕。\n\n'
+            '同意后对方即可实时看到这台设备的画面，可随时停止投送。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('拒绝'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('同意'),
+          ),
+        ],
+      ),
+    );
+    _dialogShowing = false;
+
+    if (approved == null) return;
+    await widget.manager.decideRequest(request, approved);
+    if (approved && mounted) {
+      _toast('已同意观看请求');
+    }
+    // 还有排队的请求就继续弹
+    _maybeShowConnectRequest();
   }
 
   void _toast(String message) {
