@@ -62,21 +62,27 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
     *state.heartbeat_stop.lock().unwrap() = Some(stop.clone());
     *state.registration.lock().unwrap() = Some(registration.clone());
 
+    // 用长轮询取代定时心跳：连接挂住等请求，服务端一有变化立刻返回，
+    // 同时长轮询本身就在刷新在线状态（服务端每次都会更新 last_heartbeat_at）。
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
-        let mut timer = tokio::time::interval(std::time::Duration::from_secs(15));
         loop {
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            match api::heartbeat(&registration.device_id, &registration.session_token) {
+
+            match api::wait_notifications(&registration.device_id, &registration.session_token, 25) {
                 Ok(incoming) => {
                     *state.incoming_requests.lock().unwrap() = incoming;
                 }
-                Err(error) => eprintln!("[heartbeat] {error}"),
+                Err(error) => {
+                    // 网络抖动或服务端重启：退回一次普通心跳保活，稍后重试长轮询
+                    eprintln!("[notifications] {error}");
+                    let _ = api::heartbeat(&registration.device_id, &registration.session_token);
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
             }
-            timer.tick().await;
         }
     });
 }
@@ -525,12 +531,9 @@ fn request_approval(
             if stop.load(Ordering::Relaxed) {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(1500)).await;
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
 
-            match api::poll_connect_request(&request_id) {
+            // 长轮询：服务端挂住 20 秒，对方一决策就立刻返回
+            match api::poll_connect_request_long(&request_id, 20) {
                 Ok(api::PollOutcome::Pending) => continue,
                 Ok(api::PollOutcome::Denied) => {
                     *state.watch_error.lock().unwrap() = Some("对方拒绝了这次观看请求".into());
@@ -592,8 +595,11 @@ fn request_approval(
 /// 取消正在等待的观看请求。
 #[tauri::command]
 fn cancel_watch_request(state: tauri::State<AppState>) -> Result<(), String> {
-    if let Some(pending) = state.pending_request.lock().unwrap().take() {
+    let taken = state.pending_request.lock().unwrap().take();
+    if let Some(pending) = taken {
         pending.stop.store(true, Ordering::Relaxed);
+        // 同步告诉服务端：对方那边会立刻不再显示这个请求（否则只能等 60 秒过期）
+        let _ = api::cancel_connect_request(&pending.request_id);
     }
     Ok(())
 }

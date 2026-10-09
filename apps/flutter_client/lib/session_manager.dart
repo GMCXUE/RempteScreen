@@ -170,6 +170,15 @@ class ViewingSession extends ChangeNotifier {
   }
 }
 
+/// 观看请求的取消令牌：界面点「取消」后置位，轮询循环会尽快结束并通知服务端。
+class WatchRequestToken {
+  WatchRequestToken();
+
+  /// 请求 id 由 watchDevice 填入，取消时用它通知服务端
+  String? requestId;
+  bool cancelled = false;
+}
+
 /// 会话管理器：应用级单例。
 ///
 /// 持有投送连接与全部观看会话 —— 它们活在应用生命周期里，
@@ -181,6 +190,8 @@ class SessionManager extends ChangeNotifier {
 
   // ---- 心跳（设备在线）----
   Timer? _heartbeat;
+  /// 长轮询循环的「代」：递增即让旧循环退出
+  int _heartbeatGeneration = 0;
   DeviceRegistration? registration;
 
   // ---- 投送 ----
@@ -230,9 +241,10 @@ class SessionManager extends ChangeNotifier {
   void startHeartbeat(DeviceRegistration reg) {
     registration = reg;
     _heartbeat?.cancel();
-    // 立刻心跳一次，随后每 15 秒一次；心跳响应里带着待处理的观看请求
-    unawaited(_tickHeartbeat());
-    _heartbeat = Timer.periodic(const Duration(seconds: 15), (_) => unawaited(_tickHeartbeat()));
+    // 长轮询循环：连接挂住等请求，服务端一有变化立刻返回（同时兼作心跳）。
+    // 「代」计数用于让旧循环在重启心跳时自行退出。
+    _heartbeatGeneration += 1;
+    unawaited(_notificationLoop(_heartbeatGeneration));
   }
 
   /// 设置/刷新连接密码，返回更新后的注册对象（界面据此刷新显示）。
@@ -251,28 +263,44 @@ class SessionManager extends ChangeNotifier {
     return updated;
   }
 
-  Future<void> _tickHeartbeat() async {
-    final reg = registration;
-    if (reg == null) return;
-    try {
-      final incoming = await api.heartbeat(reg.deviceId, reg.sessionToken);
-      if (incoming.isEmpty) {
-        if (pendingRequests.isNotEmpty) {
-          pendingRequests = [];
-          notifyListeners();
+  /// 长轮询循环：一直挂着，直到被 stopHeartbeat 或新一次 startHeartbeat 取代。
+  Future<void> _notificationLoop(int generation) async {
+    while (_heartbeatGeneration == generation) {
+      final reg = registration;
+      if (reg == null) return;
+
+      try {
+        final incoming = await api.waitNotifications(
+          deviceId: reg.deviceId,
+          sessionToken: reg.sessionToken,
+          waitSec: 25,
+        );
+        if (_heartbeatGeneration != generation) return;
+
+        if (incoming.isEmpty) {
+          if (pendingRequests.isNotEmpty) {
+            pendingRequests = [];
+            notifyListeners();
+          }
+        } else {
+          // 只保留还没处理过的请求，避免重复弹窗
+          final fresh = incoming
+              .where((request) => !_handledRequestIds.contains(request.requestId))
+              .toList();
+          if (fresh.isNotEmpty) {
+            pendingRequests = [...pendingRequests, ...fresh];
+            notifyListeners();
+          }
         }
-        return;
+      } catch (_) {
+        // 网络抖动或服务端重启：退回一次普通心跳保活，稍后重试长轮询
+        try {
+          await api.heartbeat(reg.deviceId, reg.sessionToken);
+        } catch (_) {
+          // 真的连不上，等一会儿再说
+        }
+        await Future<void>.delayed(const Duration(seconds: 2));
       }
-      // 只保留还没处理过的请求，避免重复弹窗
-      final fresh = incoming
-          .where((request) => !_handledRequestIds.contains(request.requestId))
-          .toList();
-      if (fresh.isNotEmpty) {
-        pendingRequests = [...pendingRequests, ...fresh];
-        notifyListeners();
-      }
-    } catch (_) {
-      // 心跳失败不打断使用；服务端会在超时后判离线，网络恢复后自动续上
     }
   }
 
@@ -314,6 +342,7 @@ class SessionManager extends ChangeNotifier {
   }
 
   void stopHeartbeat() {
+    _heartbeatGeneration += 1; // 让长轮询循环自行退出
     _heartbeat?.cancel();
     _heartbeat = null;
     registration = null;
@@ -380,18 +409,32 @@ class SessionManager extends ChangeNotifier {
     required String deviceId,
     String? password,
     void Function(String status)? onStatus,
+    WatchRequestToken? token,
   }) async {
     if (password != null && password.isNotEmpty) {
       return connectToDevice(deviceId: deviceId, password: password);
     }
 
     final handle = await api.createConnectRequest(deviceId: deviceId);
+    token?.requestId = handle.requestId;
+
+    // 发起后立刻检查一次：用户可能在请求刚建好时就点了取消
+    if (token?.cancelled ?? false) {
+      await api.cancelConnectRequest(handle.requestId);
+      throw ApiException('cancelled', '已取消等待');
+    }
+
     onStatus?.call('已向「${handle.deviceName}」发送观看请求，等待对方同意…');
 
     final deadline = DateTime.now().add(Duration(seconds: handle.expiresInSec));
     while (DateTime.now().isBefore(deadline)) {
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-      final granted = await api.pollConnectRequest(handle.requestId);
+      if (token?.cancelled ?? false) {
+        await api.cancelConnectRequest(handle.requestId);
+        throw ApiException('cancelled', '已取消等待');
+      }
+
+      // 长轮询：服务端挂住最多 20 秒，对方一决策就立刻返回
+      final granted = await api.pollConnectRequest(handle.requestId, waitSec: 20);
       if (granted != null) {
         onStatus?.call('对方已同意，正在连接…');
         return _attachSession(granted);

@@ -7,6 +7,7 @@
 import { randomBytes } from 'node:crypto';
 import { config } from './config.mjs';
 import * as requests from './requests.mjs';
+import { notify, waitFor } from './events.mjs';
 import * as store from './store.mjs';
 import * as users from './users.mjs';
 import { signLiveKitToken } from './token.mjs';
@@ -255,12 +256,27 @@ export async function createConnectRequest({ body, request }) {
 }
 
 /** 观看方轮询：GET /v1/connect-requests/:requestId */
-export async function getConnectRequest({ params }) {
-  const entry = requests.getRequest(params.requestId);
+export async function getConnectRequest({ params, query }) {
+  let entry = requests.getRequest(params.requestId);
   if (!entry) return fail(404, 'not_found', '请求不存在或已失效');
 
+  // 长轮询：wait=秒数（默认 0 = 立即返回）。仍在等待时挂住连接，
+  // 对方一决策就立刻返回，省掉客户端每 1.5 秒一次的轮询。
+  // query 是 URLSearchParams —— 必须用 get()，直接取属性会永远是 undefined
+  const waitParam = query?.get ? query.get('wait') : query?.wait;
+  const waitSec = Math.min(Math.max(Number(waitParam ?? 0) || 0, 0), 55);
+  if (waitSec > 0 && entry.status === 'pending') {
+    await waitFor(`request:${entry.id}`, waitSec * 1000);
+    entry = requests.getRequest(entry.id) ?? entry;
+  }
+
   if (entry.status === 'approved') {
-    if (!entry.grant) return ok({ status: 'pending' }); // 令牌还没挂上，继续等
+    // 极端情况下可能「已同意但令牌还差一步」——再挂一小会儿，别让客户端白跑
+    if (!entry.grant) {
+      await waitFor(`request:${entry.id}`, 2000);
+      entry = requests.getRequest(entry.id) ?? entry;
+    }
+    if (!entry.grant) return ok({ status: 'pending' }); // 仍然没有，让客户端重试
     return ok({
       status: 'approved',
       deviceId: entry.deviceId,
@@ -272,6 +288,37 @@ export async function getConnectRequest({ params }) {
   }
 
   return ok({ status: entry.status });
+}
+
+/**
+ * POST /v1/devices/:deviceId/notifications { sessionToken, waitSec }
+ *
+ * 设备侧的长轮询：把连接挂住，一旦有新的观看请求立刻返回；
+ * 顺便刷新 last_heartbeat_at，所以它**同时取代了 15 秒一次的定时心跳**。
+ */
+export async function deviceNotifications({ body, params }) {
+  const waitSec = Math.min(Math.max(Number(body?.waitSec ?? 25) || 0, 0), 55);
+
+  const result = await store.heartbeat(params.deviceId, body?.sessionToken);
+  if (result.error === 'device_unknown') return fail(404, 'device_unknown', '设备不存在或已解绑');
+  if (result.error === 'unauthorized') return fail(401, 'unauthorized', '设备凭据无效');
+
+  let pending = requests.listPendingForDevice(params.deviceId);
+  if (waitSec > 0 && pending.length === 0) {
+    await waitFor(`device:${params.deviceId}`, waitSec * 1000);
+    // 等待期间也算在线，再刷一次时间戳（长连接可能挂了一分钟）
+    await store.heartbeat(params.deviceId, body?.sessionToken);
+    pending = requests.listPendingForDevice(params.deviceId);
+  }
+
+  return ok({ online: true, pendingRequests: pending });
+}
+
+/** 观看方取消：DELETE /v1/connect-requests/:requestId（凭 requestId 即持有者） */
+export async function cancelConnectRequest({ params }) {
+  const result = requests.cancelRequest(params.requestId);
+  if (result.error === 'not_found') return fail(404, 'not_found', '请求不存在或已失效');
+  return ok({ status: result.request.status });
 }
 
 /** 设备主人决策：POST /v1/connect-requests/:requestId/decision { sessionToken, approve } */

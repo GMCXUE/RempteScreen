@@ -142,6 +142,21 @@ try {
       response.body.roomName === `device-${deviceId}` && Boolean(response.body.token),
     `房间 ${response.body.roomName}`);
 
+  // ---- 6.5 观看方主动取消：设备端不应再看到该请求 ----
+  const cancellable = (await api('POST', '/v1/connect-requests', {
+    token: bob.token,
+    body: { deviceId, viewerName: 'Bob 的电脑' },
+  })).body;
+  response = await api('DELETE', `/v1/connect-requests/${cancellable.requestId}`);
+  check('观看方可主动取消请求', response.status === 200 && response.body.status === 'cancelled',
+    response.body.status);
+
+  response = await api('POST', `/v1/devices/${deviceId}/heartbeat`, { body: { sessionToken } });
+  const stillPending = (response.body.pendingRequests ?? []).some(
+    (item) => item.requestId === cancellable.requestId,
+  );
+  check('取消后设备端不再看到该请求', !stillPending);
+
   // ---- 7. 重复决策被拒 ----
   response = await api('POST', `/v1/connect-requests/${requestId}/decision`, {
     body: { sessionToken, approve: true },

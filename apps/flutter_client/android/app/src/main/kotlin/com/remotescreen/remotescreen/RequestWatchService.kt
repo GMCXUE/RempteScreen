@@ -43,7 +43,8 @@ class RequestWatchService : Service() {
         private const val EXTRA_SESSION_TOKEN = "sessionToken"
         private const val EXTRA_REQUEST_ID = "requestId"
 
-        private const val POLL_INTERVAL_MS = 15_000L
+        /// 长轮询每次挂住的秒数（服务端最多支持 55）
+        private const val WAIT_SEC = 25
         private const val PREFS = "rs_service"
 
         /** 由 Flutter 侧调用：带上设备凭据启动待命。 */
@@ -136,25 +137,33 @@ class RequestWatchService : Service() {
                 try {
                     pollOnce()
                 } catch (error: Throwable) {
-                    Log.w(TAG, "轮询失败：${error.message}")
-                }
-                try {
-                    Thread.sleep(POLL_INTERVAL_MS)
-                } catch (interrupted: InterruptedException) {
-                    break
+                    Log.w(TAG, "长轮询失败：${error.message}")
+                    try {
+                        Thread.sleep(2_000)
+                    } catch (interrupted: InterruptedException) {
+                        break
+                    }
                 }
             }
         }.also { it.start() }
     }
 
+    /**
+     * 长轮询：把连接挂住最多 WAIT_SEC 秒，服务端一有请求立刻返回。
+     * 它同时兼作心跳（服务端每次都会刷新在线时间），因此不再需要 15 秒一次的定时上报 ——
+     * 后台弹窗的延迟从「最坏 15 秒」降到百毫秒级。
+     */
     private fun pollOnce() {
         val baseUrl = prefs.getString(EXTRA_BASE_URL, null) ?: return
         val deviceId = prefs.getString(EXTRA_DEVICE_ID, null) ?: return
         val sessionToken = prefs.getString(EXTRA_SESSION_TOKEN, null) ?: return
 
-        val body = JSONObject().put("sessionToken", sessionToken).toString()
+        val body = JSONObject()
+            .put("sessionToken", sessionToken)
+            .put("waitSec", WAIT_SEC)
+            .toString()
         val response = request(
-            "$baseUrl/v1/devices/$deviceId/heartbeat",
+            "$baseUrl/v1/devices/$deviceId/notifications",
             "POST",
             body,
         ) ?: return
@@ -246,7 +255,8 @@ class RequestWatchService : Service() {
             connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 10_000
-                readTimeout = 10_000
+                // 长轮询会把连接挂住 WAIT_SEC 秒，读超时要留余量
+                readTimeout = (WAIT_SEC + 15) * 1000
                 doOutput = body != null
                 setRequestProperty("Content-Type", "application/json")
             }

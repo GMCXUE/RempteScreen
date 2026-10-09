@@ -100,8 +100,16 @@ fn post(path: &str, token: Option<&str>, body: &serde_json::Value) -> Result<ser
 
 /// 带账号令牌的 GET 请求（目前只用于 /v1/me）。
 fn get_json(path: &str, token: &str) -> Result<serde_json::Value, String> {
+    get_json_with_timeout(path, token, 15)
+}
+
+fn get_json_with_timeout(
+    path: &str,
+    token: &str,
+    timeout_sec: u64,
+) -> Result<serde_json::Value, String> {
     let mut request = ureq::get(&format!("{SERVER_URL}{path}"))
-        .timeout(std::time::Duration::from_secs(15));
+        .timeout(std::time::Duration::from_secs(timeout_sec));
     if !token.is_empty() {
         request = request.set("Authorization", &format!("Bearer {token}"));
     }
@@ -301,6 +309,40 @@ pub fn heartbeat(device_id: &str, session_token: &str) -> Result<Vec<IncomingReq
     Ok(serde_json::from_value(result["pendingRequests"].clone()).unwrap_or_default())
 }
 
+/// 设备侧长轮询：把连接挂住等「新观看请求」。
+///
+/// 取代了原来每 15 秒一次的定时心跳 —— 长轮询期间服务端会持续刷新在线状态，
+/// 一有请求立刻返回，延迟从「最坏 15 秒」降到百毫秒级。
+/// 返回 None 表示等待超时（没有新请求）。
+pub fn wait_notifications(
+    device_id: &str,
+    session_token: &str,
+    wait_sec: u64,
+) -> Result<Vec<IncomingRequest>, String> {
+    let result = post(
+        &format!("/v1/devices/{device_id}/notifications"),
+        None,
+        &json!({ "sessionToken": session_token, "waitSec": wait_sec }),
+    )?;
+    Ok(serde_json::from_value(result["pendingRequests"].clone()).unwrap_or_default())
+}
+
+/// 观看请求的长轮询：status 变化或超时才返回。
+pub fn poll_connect_request_long(request_id: &str, wait_sec: u64) -> Result<PollOutcome, String> {
+    poll_connect_request_inner(request_id, Some(wait_sec))
+}
+
+/// 取消自己发出的观看请求（对方那边会立刻不再显示这个请求）。
+pub fn cancel_connect_request(request_id: &str) -> Result<(), String> {
+    let url = format!("{SERVER_URL}/v1/connect-requests/{request_id}");
+    let response = ureq::delete(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .call()
+        .map_err(|error| format!("{error}"))?;
+    let _ = response.into_string();
+    Ok(())
+}
+
 /// 设备主人对观看请求做出决定（同意 / 拒绝）。
 pub fn decide_connect_request(
     request_id: &str,
@@ -439,7 +481,23 @@ pub fn create_connect_request(
 }
 
 pub fn poll_connect_request(request_id: &str) -> Result<PollOutcome, String> {
-    let result = get_json(&format!("/v1/connect-requests/{request_id}"), "")?;
+    poll_connect_request_inner(request_id, None)
+}
+
+fn poll_connect_request_inner(request_id: &str, wait_sec: Option<u64>) -> Result<PollOutcome, String> {
+    // 服务端等待期间会把连接挂住不返回，客户端因此不需要高频轮询
+    let timeout = match wait_sec {
+        Some(wait) => wait + 15,
+        None => 15,
+    };
+    let result = get_json_with_timeout(
+        &match wait_sec {
+            Some(wait) => format!("/v1/connect-requests/{request_id}?wait={wait}"),
+            None => format!("/v1/connect-requests/{request_id}"),
+        },
+        "",
+        timeout,
+    )?;
     Ok(match result["status"].as_str().unwrap_or("pending") {
         "approved" => PollOutcome::Approved(RequestGrant {
             livekit_url: result["livekitUrl"].as_str().unwrap_or("").to_string(),

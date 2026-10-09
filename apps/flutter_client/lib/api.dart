@@ -322,18 +322,46 @@ class ApiService {
     return registration;
   }
 
-  /// 心跳，同时带回「待处理的观看请求」（服务端下发给设备的）。
+  /// 长轮询：把连接挂住等「新的观看请求」，服务端一有变化立刻返回。
+  ///
+  /// 取代了原来 15 秒一次的定时心跳 —— 它同时也在刷新在线状态，
+  /// 请求送达延迟从「最坏 15 秒」降到百毫秒级。
+  Future<List<ConnectRequestInfo>> waitNotifications({
+    required String deviceId,
+    required String sessionToken,
+    int waitSec = 25,
+  }) async {
+    final result = await _request(
+      'POST',
+      '/v1/devices/$deviceId/notifications',
+      body: {'sessionToken': sessionToken, 'waitSec': waitSec},
+      // 服务端会把连接挂住 waitSec 秒，读超时要留出余量
+      timeoutSeconds: waitSec + 15,
+    );
+    return _parseRequests(result);
+  }
+
+  /// 普通心跳（长轮询失败时兜底保活）。
   Future<List<ConnectRequestInfo>> heartbeat(
     String deviceId,
     String sessionToken,
   ) async {
     final result = await _request('POST', '/v1/devices/$deviceId/heartbeat',
         body: {'sessionToken': sessionToken});
+    return _parseRequests(result);
+  }
+
+  List<ConnectRequestInfo> _parseRequests(Map<String, dynamic> result) {
     final raw = (result['pendingRequests'] as List?) ?? const [];
     return raw
         .whereType<Map<String, dynamic>>()
         .map(ConnectRequestInfo.fromJson)
         .toList();
+  }
+
+  /// 取消自己发出的观看请求（对方那边会立刻不再显示）。
+  Future<void> cancelConnectRequest(String requestId) async {
+    await _request('DELETE', '/v1/connect-requests/$requestId');
   }
 
   /// 发起观看请求（无密码连接时用），返回请求句柄。
@@ -355,8 +383,11 @@ class ApiService {
 
   /// 轮询观看请求：还在等待返回 null；同意则直接返回可连接的会话；
   /// 被拒绝或过期抛出带原因的异常。
-  Future<ViewerSession?> pollConnectRequest(String requestId) async {
-    final result = await _request('GET', '/v1/connect-requests/$requestId');
+  Future<ViewerSession?> pollConnectRequest(String requestId, {int waitSec = 0}) async {
+    final path = waitSec > 0
+        ? '/v1/connect-requests/$requestId?wait=$waitSec'
+        : '/v1/connect-requests/$requestId';
+    final result = await _request('GET', path, timeoutSeconds: waitSec + 15);
     switch (result['status'] as String? ?? 'pending') {
       case 'approved':
         return ViewerSession.fromJson({...result, 'via': 'approval'});

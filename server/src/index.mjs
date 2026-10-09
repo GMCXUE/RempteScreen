@@ -34,6 +34,7 @@ const routes = [
   ['POST', '/v1/devices/register', handlers.registerDevice],
   ['PATCH', '/v1/devices/:deviceId', handlers.updateDevice],
   ['POST', '/v1/devices/:deviceId/heartbeat', handlers.heartbeat],
+  ['POST', '/v1/devices/:deviceId/notifications', handlers.deviceNotifications],
   ['DELETE', '/v1/devices/:deviceId', handlers.unregisterDevice],
   ['POST', '/v1/devices/:deviceId/password', handlers.refreshDevicePassword],
   ['GET', '/v1/devices/:deviceId/status', handlers.deviceStatus],
@@ -41,6 +42,7 @@ const routes = [
   ['POST', '/v1/connect', handlers.connect],
   ['POST', '/v1/connect-requests', handlers.createConnectRequest],
   ['GET', '/v1/connect-requests/:requestId', handlers.getConnectRequest],
+  ['DELETE', '/v1/connect-requests/:requestId', handlers.cancelConnectRequest],
   ['POST', '/v1/connect-requests/:requestId/decision', handlers.decideConnectRequest],
   ['GET', '/v1/health', handlers.health],
 ];

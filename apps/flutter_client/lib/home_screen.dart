@@ -399,6 +399,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
     ValueNotifier<String>? status;
     var dialogOpen = false;
+    // 取消令牌：点「取消」立刻置位，轮询循环随即结束并通知服务端
+    final token = WatchRequestToken();
     if (password.isEmpty) {
       status = ValueNotifier<String>('正在向对方发送观看请求…');
       dialogOpen = true;
@@ -423,9 +425,12 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () {
+                token.cancelled = true;   // 让轮询循环尽快收尾
                 dialogOpen = false;
                 Navigator.of(dialogContext).pop();
-                _toast('已停止等待，对方那边的请求会自然过期');
+                // 立刻复位，避免取消后界面一直转圈
+                if (mounted) setState(() => _busy = false);
+                _toast('已取消等待，对方那边的请求也一并撤销');
               },
               child: const Text('取消'),
             ),
@@ -445,19 +450,42 @@ class _HomeScreenState extends State<HomeScreen> {
         deviceId: id,
         password: password,
         onStatus: (text) => status?.value = text,
+        token: token,
       );
       closeDialog();
       if (!mounted) return;
       _openSession(session);
     } on ApiException catch (error) {
       closeDialog();
-      if (mounted) _toast(error.message);
+      if (!mounted) return;
+      // 用户自己取消的不必再弹窗；其余（被拒绝 / 过期 / 超时）要明确告知
+      if (error.code != 'cancelled') {
+        await _showNoticeDialog('无法连接', error.message);
+      }
     } catch (error) {
       closeDialog();
-      if (mounted) _toast('连接失败：$error');
+      if (mounted) await _showNoticeDialog('连接失败', '$error');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// 明确的结果提示（拒绝 / 超时这类需要用户知道的事，不能只用一个一闪而过的提示条）。
+  Future<void> _showNoticeDialog(String title, String message) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message, style: const TextStyle(fontSize: 13)),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
   }
 
   // MARK: - 构建
