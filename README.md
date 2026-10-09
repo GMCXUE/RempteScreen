@@ -1,94 +1,107 @@
 # RemoteScreen
 
-把电脑上的内容（画面 + 系统声音）实时投送到手机、平板观看。
+把一台设备的屏幕实时投送给另一台设备观看：**手机投给电脑看、电脑投给手机看、电脑投给电脑看**。
 
-## 目标形态
-
-连接模型对齐 ToDesk：**无账号体系，凭「设备 ID + 连接密码」配对**。
-
-| 角色 | 平台 | 形态 |
-| --- | --- | --- |
-| 采集端 | macOS / Windows | 原生 App，采集屏幕与系统音频并推流；界面展示自己的设备 ID 与连接密码 |
-| 接收端 | iOS / Android | 原生 App，输入设备 ID 与连接密码后拉流播放 |
-| 控制面 | 服务器 | 自建设备目录服务：ID 分配、密码校验、令牌签发 |
-| 媒体面 | 服务器 | 自托管 LiveKit（SFU + TURN 一体） |
+连接模型对齐 ToDesk：**无账号体系感知，凭「设备 ID + 连接密码」配对**（登录只是为了把设备绑定到你名下，方便免密码连自己的设备）。
 
 当前阶段只做**单向画面投送**，不含远程控制。选型理由见 [docs/architecture.md](docs/architecture.md)，实施顺序见 [docs/roadmap.md](docs/roadmap.md)。
 
-## 目录结构
+## 三端现状
+
+| 端 | 目录 | 技术栈 | 投送 | 观看 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| macOS / Windows 桌面端 | `apps/desktop-rs/` | Tauri 2 + Rust | ✅ 原生采集 60fps、画质可选 | ✅ 独立观看窗口（全屏/沉浸/显示模式） | **主推** |
+| 移动端 | `apps/flutter_client/` | Flutter + livekit_client | ✅ MediaProjection（Android） | ✅ | 可用 |
+| 桌面端（早期） | `apps/desktop/` | Electron | ✅ 含系统音频采集 | ✅（网页观看） | 保留参考 |
+| 原生 Android 原型 | `apps/android/` | Kotlin | — | — | 早期探索 |
+
+**服务端**：`server/`（设备目录服务）+ `deploy/`（LiveKit + PostgreSQL + Caddy 编排）。
+
+## 架构
 
 ```
-server/                 设备目录与令牌签发服务（Node，零第三方依赖）
-deploy/prod/            生产部署：LiveKit + 设备服务 + Caddy 三容器编排
-deploy/livekit/         本地开发用的单容器配置
-apps/desktop/           桌面端：一个应用、一个窗口，左栏投送、右栏观看
-apps/flutter_client/    Flutter 全平台客户端（Android / iOS / 桌面 / Web）
-tools/sc-audio-probe/   屏幕与系统音频采集能力探针（Swift，无依赖）
-tools/server-check/     媒体服务鉴权与房间巡检（Node，零第三方依赖）
+发布端（投送）                          观看端
+┌──────────────────┐              ┌──────────────────┐
+│ 原生采集          │              │ 订阅 + 解码       │
+│ ScreenCaptureKit │              │ I420 → RGB       │
+│ MediaProjection  │              │ → JPEG 帧池       │
+└────────┬─────────┘              └────────▲─────────┘
+         │ H.264 单层发布                    │ 订阅
+         ▼                                  │
+   ┌──────────────────────────────────────────────┐
+   │  自托管 LiveKit（SFU + TURN 一体）             │
+   │  房间名 = device-<9 位设备 ID>                │
+   │  caster 可发布 / viewer 只订阅（写进令牌）     │
+   └──────────────────────────────────────────────┘
+         ▲
+         │ 注册设备、心跳、签发令牌、校验连接密码
+   ┌──────────────────────┐
+   │ 设备目录服务 + PostgreSQL │
+   └──────────────────────┘
 ```
 
-macOS / iOS / Android 原生客户端尚未开始，等 Xcode 与 Android SDK 就绪后再建目录 —— 现在留空目录只会造成困惑。
+几个关键设计：
 
-## 怎么用
-
-```bash
-cd apps/desktop
-npm install && npm run vendor
-npm run start:remote
-```
-
-一个窗口两栏：
-
-1. **先登录**（右上角）：注册一个账号，设备会绑定到它
-2. **左栏「本机」**：显示设备 ID 与连接密码，选好内容后点「开始投送」
-3. **右栏「我的设备」**：列出你名下所有设备，点一下即可**免密码**连接自己的另一台设备
-4. **右栏「连接其他设备」**：输入对方的设备 ID 与密码 —— 对方**不需要注册**
-
-**手机 / 平板**打开 `http://91.208.104.182/viewer/` —— 同一份页面，检测到是浏览器加载时会自动只显示连接相关的部分。
-
-细节见 [apps/desktop/README.md](apps/desktop/README.md)。
+- **采集端必须原生**：macOS 的系统音频只有 ScreenCaptureKit 能拿到，浏览器方案做不到（这也是桌面临时用 Electron、最终转 Tauri + Rust 的原因）。
+- **观看端用 JPEG 帧池**：Rust 订阅解码后编成 JPEG，界面通过自定义协议 `frame://` 拉取。原始帧 1080p 一帧约 8MB，走 IPC 必然压垮通道；JPEG 一帧约 100KB 且编码仅 3ms。
+- **画质分档**：流畅（长边 720）/ 高清（1080）/ 原始，帧率 15/30/60 可选，编码上限与码率随档位联动，带宽吃紧时优先保帧率。
 
 ## 快速开始
 
-**一、启动媒体服务**
+### 1. 服务端
 
 ```bash
-cd deploy/livekit
-cp .env.example .env      # 生产环境务必替换密钥
+cd deploy/prod
+cp .env.example .env          # 生产环境务必替换密钥
 docker compose up -d
-curl -i http://127.0.0.1:7880/     # 期望 HTTP 200
 ```
 
-监听：`7880`（信令）、`7881`（TCP ICE）、`7882/udp`（UDP ICE）。
-
-**二、启动设备目录服务**
+### 2. 设备目录服务（本地开发）
 
 ```bash
 cd server
-node src/index.mjs        # 默认监听 127.0.0.1:8787
+npm install
+docker run -d --name rs-test-pg -e POSTGRES_PASSWORD=remotescreen \
+  -e POSTGRES_DB=remotescreen_test -p 54329:5432 postgres:17-alpine
+node src/index.mjs            # 默认监听 127.0.0.1:8787
+npm test                      # 端到端 33 项断言
 ```
 
-**三、自检**
+### 3. macOS 桌面端
 
 ```bash
-node server/test/e2e.mjs        # 配对链路 27 项断言
-node tools/server-check/check.mjs   # 媒体服务鉴权 5 项断言
+cd apps/desktop-rs/app
+npx @tauri-apps/cli build     # 产出 .app 与 DMG
+```
+
+首次开启投送需在「系统设置 → 隐私与安全性 → 屏幕录制」授权本应用。
+
+### 4. 移动端
+
+```bash
+cd apps/flutter_client
+flutter build apk --debug --target-platform android-arm64
 ```
 
 ## 环境依赖
 
-| 依赖 | 用途 | 状态 |
-| --- | --- | --- |
-| Docker + Compose | 自托管媒体服务 | 已就绪 |
-| Xcode | 构建 macOS / iOS 端 | **未安装，阻塞** |
-| Android SDK + Android Studio | 构建 Android 端 | **未安装，阻塞** |
-| Apple Developer 账号 | macOS / iOS 签名分发 | 需确认 |
-| 带证书的公网域名 | 生产环境 wss 接入 | 需确认 |
+| 依赖 | 用途 |
+| --- | --- |
+| Docker + Compose | 自托管 LiveKit、PostgreSQL |
+| Rust（stable） | 桌面端（Tauri） |
+| Node 20+ | 服务端、Tauri CLI |
+| Flutter SDK | 移动端 |
+| Android SDK | 构建 Android 包 |
+| Xcode Command Line Tools | 编译 Rust / 签名 |
 
-## 已知约束
+## 已知约束与坑
 
-- macOS 系统音频必须走 ScreenCaptureKit，浏览器方案拿不到，这是采集端必须原生的根本原因。
-- 生产环境 LiveKit 必须设置 `rtc.use_external_ip: true` 并放通 `7882/udp`，否则 ICE 候选不可达。
-- 屏幕录制权限属于系统级授权，首次使用需引导用户前往「系统设置 → 隐私与安全性 → 屏幕录制」开启。
-- ⚠️ **开发期摩擦**：用临时签名（`codesign --sign -`）时，每次重新构建都会改变签名值，系统会视为另一个 App，**已授予的屏幕录制权限随之失效，必须重新授权**。装好 Xcode 并登录 Apple ID 后会生成免费的 Apple Development 证书，改用它签名即可让授权跨构建保留。
-- 系统处于静音状态（输出音量为 0 或 muted）时，采集到的音频是静音，验证音频前需先解除静音。
+- **屏幕录制权限与签名绑定**：用 ad-hoc 签名时每次重新构建都会改变签名，系统视为新应用，**已授权限失效**。务必用固定证书签名（本项目用自签证书 `RemoteScreen Dev`），授权才能跨构建保留。
+- 应用必须**至少发起过一次采集请求**，macOS 才会把它登记进「屏幕录制」列表；授权后需**重启应用**才生效。
+- 生产环境 LiveKit 必须设 `rtc.use_external_ip: true` 并放通 `7882/udp`，否则 ICE 候选不可达；客户端连接需要 `wss`，因此需要域名 + 证书。
+- Android 17 强制要求 `mediaProjection` 前台服务，`apps/flutter_client/third_party/flutter_webrtc` 是为此打的补丁版本（同时实现了采集参数约束，否则分辨率/帧率设置不生效）。
+- 系统静音状态下采集到的音频是静音，验证音频前先解除静音。
+
+## 安全说明
+
+仓库内**不包含任何生产密钥**：LiveKit 的 key/secret、数据库密码都通过 `deploy/prod/.env` 在服务器本地注入（`.env` 已被 `.gitignore` 排除）。代码里的 `devsecret_*` 仅为本地开发占位值。
