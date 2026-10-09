@@ -2,6 +2,10 @@
 
 * { box-sizing: border-box; }
 
+/* 观看窗口自己的样式表里也必须定义 .hidden ——
+   之前只在主窗口的 style.css 里定义了它，导致这里的确认框永远显示。 */
+.hidden { display: none !important; }
+
 body {
   margin: 0;
   height: 100vh;

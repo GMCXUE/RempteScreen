@@ -165,19 +165,26 @@ $("stop-btn").addEventListener("click", async () => {
 
 const { event } = window.__TAURI__;
 
+invoke("ui_log", { message: "观看窗口已就绪" }).catch(() => {});
+
 event.listen("viewer:close-requested", () => {
+  invoke("ui_log", { message: "弹出关闭确认框" }).catch(() => {});
   // 正在观看时，关闭窗口等于断开连接 —— 先确认
   const name = $("device").textContent || "远程设备";
   $("close-device").textContent = name;
   $("close-modal").classList.remove("hidden");
+  // 标题带上状态：窗口被别的程序挡住时也能一眼看出是在等确认
+  document.title = "确认关闭 — RemoteScreen 观看";
 });
 
 $("close-cancel").addEventListener("click", () => {
   $("close-modal").classList.add("hidden");
+  invoke("ui_log", { message: "用户取消了关闭" }).catch(() => {});
 });
 
 $("close-confirm").addEventListener("click", async () => {
   $("close-modal").classList.add("hidden");
+  invoke("ui_log", { message: "用户确认断开并关闭" }).catch(() => {});
   try {
     await invoke("stop_watch");
   } catch {

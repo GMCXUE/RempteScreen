@@ -566,6 +566,13 @@ fn open_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 界面侧写入诊断日志（观看窗口的交互状态记录在 ~/.remotescreen-rs.log，
+/// 便于窗口被遮挡或远程排查时确认行为）。
+#[tauri::command]
+fn ui_log(message: String) {
+    viewer::log_to_file(&format!("[ui] {message}"));
+}
+
 #[tauri::command]
 fn close_viewer_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("viewer") {
@@ -930,6 +937,7 @@ fn main() {
             get_watch_state,
             open_viewer_window,
             close_viewer_window,
+            ui_log,
             set_viewer_fullscreen,
             set_audio_enabled,
             has_audio,
