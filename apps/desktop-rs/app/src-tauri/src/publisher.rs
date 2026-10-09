@@ -4,8 +4,11 @@
 use base64::Engine;
 use livekit::options::{DegradationPreference, TrackPublishOptions, VideoCodec, VideoEncoding};
 use livekit::prelude::*;
+use livekit::webrtc::audio_frame::AudioFrame;
+use livekit::webrtc::audio_source::native::NativeAudioSource;
+use livekit::webrtc::audio_source::AudioSourceOptions;
 use livekit::webrtc::prelude::{
-    I420Buffer, RtcVideoSource, VideoFrame, VideoResolution, VideoRotation,
+    I420Buffer, RtcAudioSource, RtcVideoSource, VideoFrame, VideoResolution, VideoRotation,
 };
 use livekit::webrtc::video_source::native::NativeVideoSource;
 use livekit::{Room, RoomOptions};
@@ -177,6 +180,106 @@ async fn run_session(
         .await
         .map_err(|error| format!("发布失败: {error}"))?;
     println!("[publisher] 视频轨已发布");
+
+    // ---- 系统音频（macOS）：ScreenCaptureKit 采集 → 子进程输出 PCM → 发布音频轨 ----
+    // 找采集器：优先应用包内（Contents/MacOS），开发态用 tools 目录
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|p| p.to_path_buf()));
+    let sidecar_candidates: Vec<std::path::PathBuf> = [
+        exe_dir.as_ref().map(|d| d.join("macos-audio-capture")),
+        std::env::var("CARGO_MANIFEST_DIR")
+            .ok()
+            .map(|dir| std::path::PathBuf::from(dir).join("../../tools/macos-audio-capture/macos-audio-capture")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let sidecar = sidecar_candidates
+        .iter()
+        .find(|path| path.exists())
+        .cloned();
+
+    if let Some(sidecar_path) = sidecar {
+        match std::process::Command::new(sidecar_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let mut stdout = child.stdout.take().expect("采集器 stdout");
+                let audio_source = NativeAudioSource::new(
+                    AudioSourceOptions::default(),
+                    48_000, // 采样率
+                    2,      // 双声道
+                    1000,   // 缓冲时长（ms）
+                );
+                let audio_track = LocalAudioTrack::create_audio_track(
+                    "system-audio",
+                    RtcAudioSource::Native(audio_source.clone()),
+                );
+                if let Err(error) = room
+                    .local_participant()
+                    .publish_track(
+                        LocalTrack::Audio(audio_track),
+                        TrackPublishOptions {
+                            source: TrackSource::ScreenshareAudio,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
+                    let message = format!("发布音频轨失败: {error}");
+                    println!("[publisher] {message}");
+                    log_to_file(&message);
+                    child.kill().ok();
+                } else {
+                    println!("[publisher] 系统音频轨已发布");
+                    log_to_file("系统音频轨已发布");
+
+                    // 喂数据：每帧 10ms（480 采样 × 双声道 × 2 字节 = 1920 字节）
+                    let audio_stop = stop.clone();
+                    std::thread::spawn(move || {
+                        use std::io::Read;
+                        let mut reader = std::io::BufReader::new(stdout);
+                        let mut pcm = vec![0i16; 480 * 2];
+                        loop {
+                            if audio_stop.load(Ordering::Relaxed) {
+                                child.kill().ok();
+                                break;
+                            }
+                            // 按字节读满一帧（子进程是持续写入的）
+                            let bytes = unsafe {
+                                std::slice::from_raw_parts_mut(
+                                    pcm.as_mut_ptr() as *mut u8,
+                                    pcm.len() * 2,
+                                )
+                            };
+                            if reader.read_exact(bytes).is_err() {
+                                break; // 采集器退出
+                            }
+                            let frame = AudioFrame {
+                                data: pcm.clone().into(),
+                                sample_rate: 48_000,
+                                num_channels: 2,
+                                samples_per_channel: 480,
+                            };
+                            let _ = audio_source.capture_frame(&frame);
+                        }
+                    });
+                }
+            }
+            Err(error) => {
+                let message = format!("启动音频采集器失败: {error}");
+                println!("[publisher] {message}");
+                log_to_file(&message);
+            }
+        }
+    } else {
+        let message = "未找到音频采集器（macos-audio-capture），本次投送无声音";
+        println!("[publisher] {message}");
+        log_to_file(message);
+    }
 
     // 采集循环（阻塞，独立线程），看到停止标志后退出
     let loop_stop = stop.clone();

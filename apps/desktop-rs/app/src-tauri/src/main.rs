@@ -851,7 +851,7 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
             error_sink.clone(),
             frames.clone(),
             stats.clone(),
-            audio,
+            audio.clone(),
         )
         .unwrap();
 
@@ -859,8 +859,9 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let snapshot = stats.lock().unwrap().clone();
             let jpeg_kb = frames.lock().unwrap().as_ref().map(|f| f.len() / 1024).unwrap_or(0);
+            let has_audio = audio.lock().unwrap().is_some();
             println!(
-                "[{second:2}s] {}x{} {}fps 累计{}帧 jpeg={}KB 转换{:.1}ms 编码{:.1}ms err={:?}",
+                "[{second:2}s] {}x{} {}fps 累计{}帧 jpeg={}KB 转换{:.1}ms 编码{:.1}ms 音频轨={} err={:?}",
                 snapshot.width,
                 snapshot.height,
                 snapshot.fps,
@@ -868,11 +869,54 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
                 jpeg_kb,
                 snapshot.convert_ms,
                 snapshot.encode_ms,
+                if has_audio { "已收到✅" } else { "无" },
                 error_sink.lock().unwrap().clone()
             );
         }
         session.stop();
     });
+}
+
+/// 无界面自检：启动投送（屏幕 + 系统音频）N 秒后自动结束，验证音频轨发布。
+/// 用法：remotescreen-desktop --publish-test <秒数>
+fn run_publish_test(seconds: u64) {
+    // 投送需要**发布令牌**（canPublish）；重新注册一次即可拿到（和启动时一样）
+    let creds = api::load_creds();
+    let registration = match api::register_device(&creds) {
+        Ok(registration) => registration,
+        Err(error) => {
+            println!("注册失败: {error}");
+            return;
+        }
+    };
+    // 凭据轮换后覆盖写入
+    let mut creds = creds;
+    creds.device_id = Some(registration.device_id.clone());
+    creds.device_session_token = Some(registration.session_token.clone());
+    api::save_creds(&creds);
+
+    println!(
+        "开始投送（{seconds} 秒）→ 房间 device-{}",
+        registration.device_id
+    );
+
+    let session = match publisher::start_publish(
+        &registration.livekit_url,
+        &registration.publish_token,
+        Arc::new(Mutex::new(None)),
+        1080,
+        30,
+    ) {
+        Ok(session) => session,
+        Err(error) => {
+            println!("投送启动失败: {error}");
+            return;
+        }
+    };
+
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    session.stop();
+    println!("投送已停止（音频轨是否发布看上方日志与 LiveKit）");
 }
 
 /// 无界面自检：验证状态快照不会死锁。
@@ -924,6 +968,11 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() >= 2 && args[1] == "--state-check" {
         run_state_check();
+        return;
+    }
+    if args.len() >= 3 && args[1] == "--publish-test" {
+        let seconds: u64 = args[2].parse().unwrap_or(20);
+        run_publish_test(seconds);
         return;
     }
     if args.len() >= 3 && args[1] == "--watch-test" {
