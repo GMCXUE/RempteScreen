@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::json;
 use std::path::PathBuf;
 
-pub const SERVER_URL: &str = "http://91.208.104.182";
+pub const SERVER_URL: &str = "http://121.43.102.154";
 
 /// 本地持久化的凭据（账号令牌 + 设备凭据）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
