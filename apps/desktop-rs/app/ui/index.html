@@ -14,11 +14,12 @@
         <span class="logo"></span>
         <span class="login-title">RemoteScreen</span>
       </div>
-      <p class="muted small">登录账号，把本机屏幕投送给其他设备</p>
+      <p class="muted small">登录账号后，本机可被远程观看，也能观看你名下的其他设备</p>
       <input id="email" type="email" placeholder="邮箱" autocomplete="username" />
       <input id="password" type="password" placeholder="密码" autocomplete="current-password" />
       <button id="login-btn" class="primary">登录</button>
       <p id="login-error" class="error"></p>
+      <p class="muted small" style="margin-top:10px;">观看别人的设备不需要登录，直接在「观看设备」里输入设备代码与密码即可</p>
     </div>
   </section>
 
@@ -50,6 +51,21 @@
     </aside>
 
     <main class="content">
+      <header class="topbar">
+        <div class="user-chip" id="user-chip">
+          <div id="account-avatar" class="avatar">—</div>
+          <span id="account-name" class="user-name">未登录</span>
+          <svg viewBox="0 0 16 16" class="caret"><path d="M4 6.5l4 4 4-4"/></svg>
+        </div>
+        <div id="user-menu" class="user-menu hidden">
+          <div class="menu-head">
+            <div class="menu-name" id="menu-name">—</div>
+            <div class="menu-email" id="menu-email">—</div>
+          </div>
+          <button id="logout-btn" class="menu-item danger">退出登录</button>
+        </div>
+      </header>
+
       <!-- 投送 -->
       <section id="page-cast" class="page">
         <h1 class="page-title">投送本机</h1>
@@ -121,6 +137,16 @@
           <div id="watch-error" class="error"></div>
         </div>
 
+        <div id="history-card" class="card">
+          <div class="card-row">
+            <span class="card-title">最近观看</span>
+            <button id="history-clear" class="ghost">清空</button>
+          </div>
+          <div id="history-list" class="history-list">
+            <p class="muted small">还没有观看记录 —— 连接过的设备会出现在这里，方便下次一键重连</p>
+          </div>
+        </div>
+
         <div id="viewer-card" class="card hidden">
           <div class="viewer-head">
             <div>
@@ -138,6 +164,7 @@
       <!-- 设置 -->
       <section id="page-settings" class="page hidden">
         <h1 class="page-title">设置</h1>
+
         <div class="card">
           <div class="kv"><span class="muted">服务器</span><span id="set-server" class="mono-sm">—</span></div>
           <div class="kv"><span class="muted">当前画质</span><span id="set-quality">—</span></div>

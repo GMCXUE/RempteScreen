@@ -37,6 +37,8 @@ struct AppStateDto {
     last_error: String,
     share_height: u32,
     share_fps: u32,
+    account_name: String,
+    account_email: String,
 }
 
 fn spawn_heartbeat(state: &AppState, registration: api::Registration) {
@@ -76,6 +78,8 @@ fn get_state(state: tauri::State<AppState>) -> AppStateDto {
         last_error: state.last_error.lock().unwrap().clone().unwrap_or_default(),
         share_height: creds.share_height,
         share_fps: creds.share_fps,
+        account_name: creds.account_name.clone().unwrap_or_default(),
+        account_email: creds.account_email.clone().unwrap_or_default(),
     }
 }
 
@@ -85,9 +89,55 @@ fn login(email: String, password: String, state: tauri::State<AppState>) -> Resu
     {
         let mut creds = state.creds.lock().unwrap();
         creds.account_token = Some(token);
+        creds.account_name = Some(name.clone());
+        creds.account_email = Some(email);
         api::save_creds(&creds);
     }
     Ok(name)
+}
+
+/// 退出登录：停掉心跳、投送与观看，清空账号与设备凭据（画质设置保留）。
+#[tauri::command]
+fn logout(state: tauri::State<AppState>) -> Result<(), String> {
+    if let Some(stop) = state.heartbeat_stop.lock().unwrap().take() {
+        stop.store(true, Ordering::Relaxed);
+    }
+    if let Some(session) = state.session.lock().unwrap().take() {
+        session.stop();
+    }
+    if let Some(session) = state.watch.lock().unwrap().take() {
+        session.stop();
+    }
+    *state.registration.lock().unwrap() = None;
+    *state.frames.lock().unwrap() = None;
+    *state.last_error.lock().unwrap() = None;
+    {
+        let mut creds = state.creds.lock().unwrap();
+        creds.account_token = None;
+        creds.account_name = None;
+        creds.account_email = None;
+        creds.device_id = None;
+        creds.device_session_token = None;
+        api::save_creds(&creds);
+    }
+    Ok(())
+}
+
+// MARK: - 观看历史
+
+#[tauri::command]
+fn get_history() -> Vec<api::WatchHistoryEntry> {
+    api::load_history()
+}
+
+#[tauri::command]
+fn clear_history() {
+    api::clear_history();
+}
+
+#[tauri::command]
+fn forget_device(device_id: String) {
+    api::forget_device(&device_id);
 }
 
 #[tauri::command]
@@ -208,6 +258,16 @@ fn start_watch(
 
     let account_token = state.creds.lock().unwrap().account_token.clone();
     let ticket = api::connect(&device_id, &password, account_token.as_deref(), "RemoteScreen 桌面端")?;
+    // 连接成功才写入历史（点击重连时就能看到设备名）
+    let own = state
+        .creds
+        .lock()
+        .unwrap()
+        .device_id
+        .as_deref()
+        .map(|own_id| own_id == ticket.device_id)
+        .unwrap_or(false);
+    api::record_watch(&ticket.device_id, &ticket.device_name, own);
     let session = viewer::start_watch(
         &ticket.livekit_url,
         &ticket.token,
@@ -394,31 +454,56 @@ fn main() {
             audio: Arc::new(Mutex::new(None)),
         })
         .setup(move |app| {
-            // 已有账号凭据 → 启动即自动注册设备并恢复心跳
-            // （此前注册只在登录流程触发，重启后会卡在「注册中…」）
-            let creds = initial_creds.clone();
-            if creds.account_token.is_some() {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = handle.state::<AppState>();
-                    match api::register_device(&creds) {
-                        Ok(registration) => {
-                            let mut creds = state.creds.lock().unwrap();
-                            creds.device_id = Some(registration.device_id.clone());
-                            creds.device_session_token = Some(registration.session_token.clone());
-                            api::save_creds(&creds);
-                            drop(creds);
-                            spawn_heartbeat(&state, registration);
+            // 启动自检流程：先补齐账号信息（顺带校验令牌），再注册设备并恢复心跳。
+            // 注意：所有凭据读写都走 state 里的那一份，避免旧快照把新写入覆盖掉。
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = handle.state::<AppState>();
+                let token = state.creds.lock().unwrap().account_token.clone();
+                let Some(token) = token else { return };
+
+                if state.creds.lock().unwrap().account_name.is_none() {
+                    match api::fetch_me(&token) {
+                        Ok((name, email)) => {
+                            let mut stored = state.creds.lock().unwrap();
+                            stored.account_name = Some(name);
+                            stored.account_email = Some(email);
+                            api::save_creds(&stored);
+                            println!("[startup] 账号信息已补全");
                         }
                         Err(error) => {
-                            let message = format!("设备注册失败：{error}");
-                            publisher::log_to_file(&message);
-                            *state.last_error.lock().unwrap() = Some(message);
+                            // 令牌失效：清登录态回到登录页
+                            viewer::log_to_file(&format!("[startup] /v1/me 失败，清除登录态: {error}"));
+                            let mut stored = state.creds.lock().unwrap();
+                            stored.account_token = None;
+                            stored.account_name = None;
+                            stored.account_email = None;
+                            stored.device_id = None;
+                            stored.device_session_token = None;
+                            api::save_creds(&stored);
+                            return;
                         }
                     }
-                });
-            }
-            // 调试钩子：启动后自动观看指定设备（用于无人值守自检）
+                }
+
+                let creds = state.creds.lock().unwrap().clone();
+                match api::register_device(&creds) {
+                    Ok(registration) => {
+                        let mut stored = state.creds.lock().unwrap();
+                        stored.device_id = Some(registration.device_id.clone());
+                        stored.device_session_token = Some(registration.session_token.clone());
+                        api::save_creds(&stored);
+                        drop(stored);
+                        spawn_heartbeat(&state, registration);
+                    }
+                    Err(error) => {
+                        let message = format!("设备注册失败：{error}");
+                        viewer::log_to_file(&message);
+                        *state.last_error.lock().unwrap() = Some(message);
+                    }
+                }
+            });
+
             // 触发方式：环境变量 RS_AUTO_WATCH，或 ~/.remotescreen-autowatch 文件内容
             let auto_watch = std::env::var("RS_AUTO_WATCH").ok().or_else(|| {
                 dirs::home_dir()
@@ -435,6 +520,15 @@ fn main() {
                     match api::connect(&device_id, "", account_token.as_deref(), "自检") {
                         Ok(ticket) => {
                             viewer::log_to_file(&format!("[autowatch] 取票成功 {}", ticket.device_id));
+                            let own = state
+                                .creds
+                                .lock()
+                                .unwrap()
+                                .device_id
+                                .as_deref()
+                                .map(|own_id| own_id == ticket.device_id)
+                                .unwrap_or(false);
+                            api::record_watch(&ticket.device_id, &ticket.device_name, own);
                             if let Ok(session) = viewer::start_watch(
                                 &ticket.livekit_url,
                                 &ticket.token,
@@ -490,7 +584,11 @@ fn main() {
             close_viewer_window,
             set_viewer_fullscreen,
             set_audio_enabled,
-            has_audio
+            has_audio,
+            logout,
+            get_history,
+            clear_history,
+            forget_device
         ])
         .run(tauri::generate_context!())
         .expect("tauri 应用启动失败");

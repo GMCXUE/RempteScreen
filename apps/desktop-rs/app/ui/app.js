@@ -70,14 +70,30 @@ async function refresh() {
     chip.classList.toggle("active", Number(chip.dataset.fps) === state.share_fps);
   }
 
-  const connected = state.registered && !state.last_error;
-  $("server-dot").className = `dot ${connected ? "ok" : "bad"}`;
-  $("server-text").textContent = connected ? "已连接服务器" : "连接异常";
+  // 注册完成前属于「连接中」，只有真的报错才显示异常（此前启动瞬间会误报）
+  if (state.last_error) {
+    $("server-dot").className = "dot bad";
+    $("server-text").textContent = "连接异常";
+  } else if (state.registered) {
+    $("server-dot").className = "dot ok";
+    $("server-text").textContent = "已连接服务器";
+  } else {
+    $("server-dot").className = "dot";
+    $("server-text").textContent = "正在连接…";
+  }
 
   $("cast-error").textContent = state.last_error || "";
 
   $("set-server").textContent = SERVER_URL;
   $("set-quality").textContent = qualityLabel(state.share_height, state.share_fps);
+
+  const name = state.account_name || "未登录";
+  $("account-name").textContent = name;
+  $("menu-name").textContent = name;
+  $("menu-email").textContent = state.account_email || "—";
+  $("account-avatar").textContent =
+    name === "未登录" ? "—" : name.trim().slice(0, 1).toUpperCase();
+  $("user-chip").classList.toggle("hidden", !state.logged_in);
 }
 
 // ---------- 交互 ----------
@@ -210,7 +226,122 @@ $("watch-stop").addEventListener("click", async () => {
   refreshWatch();
 });
 
+// ---------- 观看历史 ----------
+
+function relativeTime(unixSeconds) {
+  if (!unixSeconds) return "";
+  const seconds = Math.floor(Date.now() / 1000 - unixSeconds);
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  if (seconds < 86400 * 30) return `${Math.floor(seconds / 86400)} 天前`;
+  return new Date(unixSeconds * 1000).toLocaleDateString("zh-CN");
+}
+
+async function refreshHistory() {
+  const list = $("history-list");
+  let entries = [];
+  try {
+    entries = await invoke("get_history");
+  } catch {
+    return;
+  }
+
+  if (!entries.length) {
+    list.innerHTML =
+      '<p class="muted small">还没有观看记录 —— 连接过的设备会出现在这里，方便下次一键重连</p>';
+    $("history-clear").classList.add("hidden");
+    return;
+  }
+
+  $("history-clear").classList.remove("hidden");
+  list.innerHTML = "";
+  for (const entry of entries) {
+    const item = document.createElement("div");
+    item.className = "history-item";
+
+    const main = document.createElement("div");
+    main.className = "history-main";
+    const nameRow = document.createElement("div");
+    nameRow.className = "history-name";
+    nameRow.textContent = entry.device_name || "未知设备";
+    if (entry.own) {
+      const pill = document.createElement("span");
+      pill.className = "pill";
+      pill.textContent = "我的设备";
+      nameRow.appendChild(pill);
+    }
+    const codeRow = document.createElement("div");
+    codeRow.className = "history-code";
+    codeRow.textContent = `${formatDeviceId(entry.device_id)} · ${relativeTime(entry.last_at)}` +
+      (entry.times > 1 ? ` · 连接过 ${entry.times} 次` : "");
+    main.append(nameRow, codeRow);
+
+    const actions = document.createElement("div");
+    actions.className = "history-actions";
+
+    const connectBtn = document.createElement("button");
+    connectBtn.className = "ghost";
+    connectBtn.textContent = entry.own ? "连接" : "连接";
+    connectBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      $("watch-id").value = entry.device_id;
+      if (entry.own) {
+        // 自己的设备免密码，直接连
+        $("watch-pw").value = "";
+        await invoke("start_watch", { deviceId: entry.device_id, password: "" });
+        await invoke("open_viewer_window");
+        refreshWatch();
+      } else {
+        $("watch-pw").value = "";
+        $("watch-pw").focus();
+        $("watch-error").textContent = "这是别人的设备，请输入连接密码后点「连接」";
+      }
+    });
+
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "ghost";
+    removeBtn.textContent = "移除";
+    removeBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      await invoke("forget_device", { deviceId: entry.device_id });
+      refreshHistory();
+    });
+
+    actions.append(connectBtn, removeBtn);
+    item.append(main, actions);
+    // 点击整行等同于点「连接」
+    item.addEventListener("click", () => connectBtn.click());
+    list.appendChild(item);
+  }
+}
+
+$("history-clear").addEventListener("click", async () => {
+  await invoke("clear_history");
+  refreshHistory();
+});
+
+// ---------- 右上角用户菜单 ----------
+
+$("user-chip").addEventListener("click", (event) => {
+  event.stopPropagation();
+  $("user-menu").classList.toggle("hidden");
+});
+document.addEventListener("click", () => $("user-menu").classList.add("hidden"));
+
+// ---------- 退出登录 ----------
+
+$("logout-btn").addEventListener("click", async () => {
+  if (!confirm("退出登录后本机将停止投送，需要重新登录才能继续。确定退出？")) return;
+  await invoke("logout");
+  switchPage("cast");
+  refresh();
+  refreshHistory();
+});
+
 refresh();
 refreshWatch();
+refreshHistory();
 setInterval(refresh, 2000);
 setInterval(refreshWatch, 1500);
+setInterval(refreshHistory, 5000);

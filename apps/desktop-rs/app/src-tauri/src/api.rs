@@ -13,6 +13,11 @@ pub const SERVER_URL: &str = "http://91.208.104.182";
 pub struct Credentials {
     #[serde(default)]
     pub account_token: Option<String>,
+    /// 登录账号的展示信息（登出时清空）
+    #[serde(default)]
+    pub account_name: Option<String>,
+    #[serde(default)]
+    pub account_email: Option<String>,
     #[serde(default)]
     pub device_id: Option<String>,
     #[serde(default)]
@@ -32,6 +37,8 @@ impl Default for Credentials {
     fn default() -> Self {
         Self {
             account_token: None,
+            account_name: None,
+            account_email: None,
             device_id: None,
             device_session_token: None,
             share_height: 1080,
@@ -88,6 +95,25 @@ fn post(path: &str, token: Option<&str>, body: &serde_json::Value) -> Result<ser
             .to_string());
     }
     Ok(parsed)
+}
+
+/// 带账号令牌的 GET 请求（目前只用于 /v1/me）。
+fn get_json(path: &str, token: &str) -> Result<serde_json::Value, String> {
+    let response = ureq::get(&format!("{SERVER_URL}{path}"))
+        .timeout(std::time::Duration::from_secs(15))
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|error| format!("{error}"))?;
+    let text = response.into_string().map_err(|error| error.to_string())?;
+    serde_json::from_str(&text).map_err(|error| error.to_string())
+}
+
+/// 补齐账号展示信息（本地凭据里缺失时用，同时验证令牌是否仍然有效）。
+pub fn fetch_me(token: &str) -> Result<(String, String), String> {
+    let result = get_json("/v1/me", token)?;
+    let name = result["user"]["name"].as_str().unwrap_or("").to_string();
+    let email = result["user"]["email"].as_str().unwrap_or("").to_string();
+    Ok((name, email))
 }
 
 pub fn login(email: &str, password: &str) -> Result<(String, String), String> {
@@ -169,4 +195,76 @@ pub fn heartbeat(device_id: &str, session_token: &str) -> Result<(), String> {
         &json!({ "sessionToken": session_token }),
     )
     .map(|_| ())
+}
+
+
+// MARK: - 观看历史
+
+/// 一条「看过某台设备」的记录。刻意不保存连接密码：自己的设备免密码，
+/// 别人的设备下次仍需输入密码，避免明文口令落盘。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WatchHistoryEntry {
+    pub device_id: String,
+    pub device_name: String,
+    /// 最近连接时间（Unix 秒）
+    pub last_at: i64,
+    /// 累计连接次数
+    pub times: u32,
+    /// 是否是自己名下的设备（免密码）
+    pub own: bool,
+}
+
+fn history_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".remotescreen-rs.history.json")
+}
+
+pub fn load_history() -> Vec<WatchHistoryEntry> {
+    std::fs::read_to_string(history_path())
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<WatchHistoryEntry>>(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_history(entries: &[WatchHistoryEntry]) {
+    let _ = std::fs::write(history_path(), serde_json::to_string_pretty(entries).unwrap());
+}
+
+/// 记录一次观看：同一设备只保留一条，更新时间与次数后置顶。
+pub fn record_watch(device_id: &str, device_name: &str, own: bool) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|t| t.as_secs() as i64)
+        .unwrap_or(0);
+
+    let mut entries = load_history();
+    let previous_times = entries
+        .iter()
+        .find(|entry| entry.device_id == device_id)
+        .map(|entry| entry.times)
+        .unwrap_or(0);
+    entries.retain(|entry| entry.device_id != device_id);
+    entries.insert(
+        0,
+        WatchHistoryEntry {
+            device_id: device_id.to_string(),
+            device_name: device_name.to_string(),
+            last_at: now,
+            times: previous_times + 1,
+            own,
+        },
+    );
+    entries.truncate(20);
+    save_history(&entries);
+}
+
+pub fn clear_history() {
+    save_history(&[]);
+}
+
+pub fn forget_device(device_id: &str) {
+    let mut entries = load_history();
+    entries.retain(|entry| entry.device_id != device_id);
+    save_history(&entries);
 }
