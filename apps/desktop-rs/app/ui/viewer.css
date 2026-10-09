@@ -96,3 +96,29 @@ body.pinned .controls { background: rgba(8, 12, 20, .92); }
   accent-color: #3b82f6;
   cursor: pointer;
 }
+
+/* ---------- 关闭确认弹窗 ---------- */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 10, 18, .62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+.modal-card {
+  width: 320px;
+  background: #171d29;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 14px;
+  padding: 20px;
+}
+.modal-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.modal-message { font-size: 12.5px; color: #98a6bd; line-height: 1.7; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}

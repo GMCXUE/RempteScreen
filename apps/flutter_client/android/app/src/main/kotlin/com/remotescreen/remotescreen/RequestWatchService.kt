@@ -29,7 +29,7 @@ class RequestWatchService : Service() {
 
     companion object {
         private const val TAG = "RS-RequestWatch"
-        private const val CHANNEL_STANDBY = "rs_standby"
+        private const val CHANNEL_STANDBY = "rs_standby_v2"
         private const val CHANNEL_REQUESTS = "rs_requests"
         private const val STANDBY_NOTIFICATION_ID = 1001
 
@@ -175,11 +175,18 @@ class RequestWatchService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
 
+        // 前台服务必须挂通知，但把它压到最低优先级：
+        // 状态栏无图标、不响铃、不打扰，通知栏里也只收在「静默」分组。
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_STANDBY, "待命状态", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "保持设备在线，随时接收观看请求"
+            NotificationChannel(CHANNEL_STANDBY, "待命状态", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "保持设备在线，随时接收观看请求（后台常驻，无提示）"
+                setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
             },
         )
+        // 清理上一版遗留的可见渠道，避免用户看到多余的开关
+        manager.deleteNotificationChannel("rs_standby")
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_REQUESTS, "观看请求", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "有人请求观看本机屏幕时需要你确认"
@@ -200,6 +207,10 @@ class RequestWatchService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentIntent(open)
             .setOngoing(true)
+            // 不显示时间、不显示角标，尽量不打扰（静音由渠道优先级控制）
+            .setShowWhen(false)
+            .setPriority(Notification.PRIORITY_MIN)
+            .setVisibility(Notification.VISIBILITY_SECRET)
             .build()
     }
 

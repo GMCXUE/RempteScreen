@@ -33,6 +33,20 @@
     </div>
   </div>
 
+  <!-- 关闭确认（点窗口 × 时弹出） -->
+  <div id="close-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-title">关闭观看窗口</div>
+      <div class="modal-message">
+        关闭后将断开与「<span id="close-device">远程设备</span>」的连接，确定关闭吗？
+      </div>
+      <div class="modal-actions">
+        <button id="close-cancel" class="ctl">取消</button>
+        <button id="close-confirm" class="ctl danger">断开并关闭</button>
+      </div>
+    </div>
+  </div>
+
   <script src="viewer.js"></script>
 </body>
 </html>

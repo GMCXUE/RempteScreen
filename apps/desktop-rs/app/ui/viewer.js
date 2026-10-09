@@ -161,6 +161,32 @@ $("stop-btn").addEventListener("click", async () => {
   }
 });
 
+// ---------- 点窗口关闭按钮（×）时的二次确认 ----------
+
+const { event } = window.__TAURI__;
+
+event.listen("viewer:close-requested", () => {
+  // 正在观看时，关闭窗口等于断开连接 —— 先确认
+  const name = $("device").textContent || "远程设备";
+  $("close-device").textContent = name;
+  $("close-modal").classList.remove("hidden");
+});
+
+$("close-cancel").addEventListener("click", () => {
+  $("close-modal").classList.add("hidden");
+});
+
+$("close-confirm").addEventListener("click", async () => {
+  $("close-modal").classList.add("hidden");
+  try {
+    await invoke("stop_watch");
+  } catch {
+    // 断开失败也要把窗口关掉，避免卡住
+  }
+  stopFrames();
+  await invoke("close_viewer_window");
+});
+
 // 双击画面切换全屏
 canvas.addEventListener("dblclick", () => $("full-btn").click());
 

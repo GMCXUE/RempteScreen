@@ -6,7 +6,7 @@ mod api;
 mod publisher;
 mod viewer;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -540,19 +540,38 @@ fn open_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
         let _ = window.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(&app, "viewer", tauri::WebviewUrl::App("viewer.html".into()))
-        .title("RemoteScreen 观看")
-        .inner_size(1100.0, 760.0)
-        .min_inner_size(520.0, 360.0)
-        .build()
-        .map_err(|error| format!("打开观看窗口失败: {error}"))?;
+    let window =
+        tauri::WebviewWindowBuilder::new(&app, "viewer", tauri::WebviewUrl::App("viewer.html".into()))
+            .title("RemoteScreen 观看")
+            .inner_size(1100.0, 760.0)
+            .min_inner_size(520.0, 360.0)
+            .build()
+            .map_err(|error| format!("打开观看窗口失败: {error}"))?;
+
+    // 点窗口关闭按钮（×）时：正在观看就先拦下来，让界面确认「关闭会断开连接」。
+    let handle = app.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let watching = {
+                let state = handle.state::<AppState>();
+                let watching = state.watch.lock().unwrap().is_some();
+                watching
+            };
+            if watching {
+                api.prevent_close();
+                let _ = handle.emit_to("viewer", "viewer:close-requested", ());
+            }
+        }
+    });
     Ok(())
 }
 
 #[tauri::command]
 fn close_viewer_window(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("viewer") {
-        let _ = window.close();
+        // 用 destroy 而不是 close：close 会再次触发 CloseRequested，
+        // 而那里为了「确认后断开」做了拦截，会互相递归。
+        let _ = window.destroy();
     }
 }
 
