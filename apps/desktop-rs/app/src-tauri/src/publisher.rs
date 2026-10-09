@@ -228,8 +228,14 @@ async fn run_session(
                         }
                     });
                 }
+                // 回声消除/降噪在「推帧」模式下会把数据处理管线指向麦克风路径，
+                // 实测会把推送的帧变成静音 —— 系统音频不需要这些处理，全部关掉直通。
                 let audio_source = NativeAudioSource::new(
-                    AudioSourceOptions::default(),
+                    AudioSourceOptions {
+                        echo_cancellation: false,
+                        noise_suppression: false,
+                        auto_gain_control: false,
+                    },
                     48_000, // 采样率
                     2,      // 双声道
                     1000,   // 缓冲时长（ms）
