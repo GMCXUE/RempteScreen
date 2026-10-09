@@ -87,6 +87,18 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
 
 let semaphore = DispatchSemaphore(value: 0)
 
+// 先报告（并在需要时请求）麦克风权限：webrtc 的音频数据泵由麦克风设备时钟驱动，
+// 没有麦克风授权时泵不转，推送的系统音频帧永远发不出去（表现为观看端只有静音）。
+import AVFoundation
+let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+FileHandle.standardError.write("mic 授权状态: \(micStatus.rawValue)（3=已授权，0=未询问，2=已拒绝）\n".data(using: .utf8)!)
+if micStatus != .authorized {
+    AVCaptureDevice.requestAccess(for: .audio) { granted in
+        FileHandle.standardError.write("mic 授权结果: \(granted)\n".data(using: .utf8)!)
+        if !granted { exit(2) }
+    }
+}
+
 Task {
     do {
         // 音频采集仍需要一个内容过滤器（拿到主显示器即可，视频我们不用）
