@@ -84,7 +84,10 @@ export async function registerDevice({ deviceId, sessionToken, platform, deviceN
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT(device_id) DO UPDATE SET
       user_id            = excluded.user_id,
-      name               = excluded.name,
+      -- 名字归用户所有：设备已存在时保留库里的名字（改名只能走 PATCH），
+      -- 否则客户端每次重启注册都会把用户改的名字冲回默认值。
+      -- 仅当库里的名字为空时才采用本次注册上报的名字。
+      name               = COALESCE(NULLIF(devices.name, ''), excluded.name),
       platform           = excluded.platform,
       password_salt      = excluded.password_salt,
       password_hash      = excluded.password_hash,
