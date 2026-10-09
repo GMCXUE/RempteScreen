@@ -7,7 +7,8 @@
 import { randomBytes } from 'node:crypto';
 import { config } from './config.mjs';
 import * as requests from './requests.mjs';
-import { notify, waitFor } from './events.mjs';
+import { notify, waitFor, subscribe } from './events.mjs';
+import { openSSE } from './sse.mjs';
 import * as store from './store.mjs';
 import * as users from './users.mjs';
 import { signLiveKitToken } from './token.mjs';
@@ -303,15 +304,77 @@ export async function deviceNotifications({ body, params }) {
   if (result.error === 'device_unknown') return fail(404, 'device_unknown', '设备不存在或已解绑');
   if (result.error === 'unauthorized') return fail(401, 'unauthorized', '设备凭据无效');
 
-  let pending = requests.listPendingForDevice(params.deviceId);
-  if (waitSec > 0 && pending.length === 0) {
+  // 客户端把它**已经知道**的请求 id 带上来（seen）。
+  // 只有出现了它没见过的请求才立刻返回；否则照常挂住等待 ——
+  // 否则「有请求待处理」会让客户端拿到响应后马上再问，变成每秒好几次的空转。
+  const seen = new Set(Array.isArray(body?.seen) ? body.seen.map(String) : []);
+  const listPending = () => requests.listPendingForDevice(params.deviceId);
+  let pending = listPending();
+  const hasNew = pending.some((item) => !seen.has(item.requestId));
+
+  if (waitSec > 0 && !hasNew) {
     await waitFor(`device:${params.deviceId}`, waitSec * 1000);
     // 等待期间也算在线，再刷一次时间戳（长连接可能挂了一分钟）
     await store.heartbeat(params.deviceId, body?.sessionToken);
-    pending = requests.listPendingForDevice(params.deviceId);
+    pending = listPending();
   }
 
   return ok({ online: true, pendingRequests: pending });
+}
+
+/**
+ * GET /v1/devices/:deviceId/notifications/stream —— SSE 推送流。
+ *
+ * 与长轮询接口等价，但连接是**持续**的：一有变化服务端立刻推 `requests` 事件，
+ * 每 15 秒发一个 keep-alive（顺便刷新在线状态）。连接最长挂 10 分钟，
+ * 之后服务端主动断开，客户端（或原生服务）自动重连。
+ *
+ * 鉴权用 X-Device-Token 请求头（SSE 是 GET，令牌不放 URL 里以免进日志）。
+ */
+export async function deviceNotificationsStream({ params, request, response }) {
+  const sessionToken = String(request.headers['x-device-token'] ?? '');
+  const result = await store.heartbeat(params.deviceId, sessionToken);
+  if (result.error === 'device_unknown') {
+    response.writeHead(404, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ error: { code: 'device_unknown', message: '设备不存在或已解绑' } }));
+    return { __sse: true };
+  }
+  if (result.error === 'unauthorized') {
+    response.writeHead(401, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ error: { code: 'unauthorized', message: '设备凭据无效' } }));
+    return { __sse: true };
+  }
+
+  const stream = openSSE(response);
+  const deviceId = params.deviceId;
+
+  const sendCurrent = () => {
+    stream.send('requests', {
+      pendingRequests: requests.listPendingForDevice(deviceId),
+    });
+  };
+
+  sendCurrent();
+
+  const unsubscribeEvents = subscribe(`device:${deviceId}`, () => sendCurrent());
+
+  // 每 15 秒：保活 + 刷新在线状态
+  const keepAlive = setInterval(() => {
+    void store.heartbeat(deviceId, String(sessionToken));
+    stream.comment('ping');
+  }, 15_000);
+
+  // 连接最长 10 分钟：让客户端重连（顺便清内存、轮换连接）
+  const maxAge = setTimeout(() => stream.close(), 10 * 60_000);
+  if (maxAge.unref) maxAge.unref();
+
+  stream.onclose(() => {
+    unsubscribeEvents();
+    clearInterval(keepAlive);
+    clearTimeout(maxAge);
+  });
+
+  return { __sse: true };
 }
 
 /** 观看方取消：DELETE /v1/connect-requests/:requestId（凭 requestId 即持有者） */

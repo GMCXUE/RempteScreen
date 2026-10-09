@@ -330,11 +330,14 @@ class ApiService {
     required String deviceId,
     required String sessionToken,
     int waitSec = 25,
+    List<String> seen = const [],
   }) async {
     final result = await _request(
       'POST',
       '/v1/devices/$deviceId/notifications',
-      body: {'sessionToken': sessionToken, 'waitSec': waitSec},
+      // seen：已经知道的请求 id。不带它的话，服务端一见有请求就立刻返回，
+      // 客户端拿到又马上再问 —— 会变成每秒好几次的空转。
+      body: {'sessionToken': sessionToken, 'waitSec': waitSec, 'seen': seen},
       // 服务端会把连接挂住 waitSec 秒，读超时要留出余量
       timeoutSeconds: waitSec + 15,
     );

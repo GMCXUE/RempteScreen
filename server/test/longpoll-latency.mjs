@@ -142,6 +142,24 @@ try {
   const status = await api('GET', `/v1/devices/${deviceId}/status?sessionToken=${sessionToken}`);
   check('长轮询期间设备仍被判在线', status.body.online === true, `online=${status.body.online}`);
 
+  // ---- 3.5 已知道的请求不应让长轮询立刻返回（否则会变成客户端空转） ----
+  const second = (
+    await api('POST', '/v1/connect-requests', {
+      body: { deviceId, viewerName: '空转检测' },
+    })
+  ).body;
+  const spinStart = Date.now();
+  const spun = await api('POST', `/v1/devices/${deviceId}/notifications`, {
+    body: { sessionToken, waitSec: 2, seen: [second.requestId] },
+  });
+  const spinElapsed = Date.now() - spinStart;
+  check(
+    '已知的请求不会让长轮询立刻返回（防空转）',
+    spinElapsed > 1500 && (spun.body.pendingRequests ?? []).length === 1,
+    `${spinElapsed}ms`,
+  );
+  await api('DELETE', `/v1/connect-requests/${second.requestId}`);
+
   // ---- 4. 超时行为：无变化时应按时返回空结果（不能把连接挂死） ----
   const idleStart = Date.now();
   const idle = await api('POST', `/v1/devices/${deviceId}/notifications`, {

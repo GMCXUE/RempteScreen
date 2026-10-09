@@ -3,6 +3,7 @@
 // 与 Flutter/桌面旧版调用同一套接口（server/README.md 的契约）：
 // 账号登录 → 注册设备（带上次凭据，服务端认出同一台设备）→ 心跳保活。
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -318,11 +319,14 @@ pub fn wait_notifications(
     device_id: &str,
     session_token: &str,
     wait_sec: u64,
+    seen: &[String],
 ) -> Result<Vec<IncomingRequest>, String> {
+    // seen：我们已经知道的请求 id。不带它的话服务端一见有请求就立刻返回，
+    // 客户端拿到又马上再问 —— 会变成每秒好几次的空转。
     let result = post(
         &format!("/v1/devices/{device_id}/notifications"),
         None,
-        &json!({ "sessionToken": session_token, "waitSec": wait_sec }),
+        &json!({ "sessionToken": session_token, "waitSec": wait_sec, "seen": seen }),
     )?;
     Ok(serde_json::from_value(result["pendingRequests"].clone()).unwrap_or_default())
 }
@@ -340,6 +344,62 @@ pub fn cancel_connect_request(request_id: &str) -> Result<(), String> {
         .call()
         .map_err(|error| format!("{error}"))?;
     let _ = response.into_string();
+    Ok(())
+}
+
+/// SSE 流消费：订阅本机的「观看请求」通知流。
+///
+/// 服务端一有变化立刻推 `requests` 事件（实测 ~10ms）；每 15 秒有一个 keep-alive 注释行，
+/// 因此读超时设 45 秒即可（不能设总超时，否则 10 分钟的长流会被掐断）。
+/// 流正常结束（服务端 10 分钟上限）或断开时返回，由调用方决定重连。
+pub fn stream_notifications(
+    device_id: &str,
+    session_token: &str,
+    stop: &AtomicBool,
+    mut on_event: impl FnMut(Vec<IncomingRequest>) + Send,
+) -> Result<(), String> {
+    use std::io::BufRead;
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(std::time::Duration::from_secs(45))
+        .timeout_connect(std::time::Duration::from_secs(10))
+        .build();
+    let response = agent
+        .get(&format!(
+            "{SERVER_URL}/v1/devices/{device_id}/notifications/stream"
+        ))
+        .set("X-Device-Token", session_token)
+        .set("Accept", "text/event-stream")
+        .call()
+        .map_err(|error| format!("建立通知流失败: {error}"))?;
+
+    let reader = std::io::BufReader::new(response.into_reader());
+    let mut event_name = String::new();
+    let mut data_buffer = String::new();
+
+    for line in reader.lines() {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(()); // 调用方要求停止（退出登录/关窗）
+        }
+        let line = line.map_err(|error| format!("读取通知流失败: {error}"))?;
+
+        if let Some(name) = line.strip_prefix("event:") {
+            event_name = name.trim().to_string();
+        } else if let Some(data) = line.strip_prefix("data:") {
+            data_buffer = data.trim().to_string();
+        } else if line.is_empty() && !data_buffer.is_empty() {
+            // 空行 = 一条事件结束
+            if event_name == "requests" {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&data_buffer).unwrap_or_default();
+                let incoming: Vec<IncomingRequest> =
+                    serde_json::from_value(parsed["pendingRequests"].clone()).unwrap_or_default();
+                on_event(incoming);
+            }
+            event_name.clear();
+            data_buffer.clear();
+        }
+    }
     Ok(())
 }
 

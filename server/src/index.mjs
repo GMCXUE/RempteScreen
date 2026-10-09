@@ -35,6 +35,7 @@ const routes = [
   ['PATCH', '/v1/devices/:deviceId', handlers.updateDevice],
   ['POST', '/v1/devices/:deviceId/heartbeat', handlers.heartbeat],
   ['POST', '/v1/devices/:deviceId/notifications', handlers.deviceNotifications],
+  ['GET', '/v1/devices/:deviceId/notifications/stream', handlers.deviceNotificationsStream],
   ['DELETE', '/v1/devices/:deviceId', handlers.unregisterDevice],
   ['POST', '/v1/devices/:deviceId/password', handlers.refreshDevicePassword],
   ['GET', '/v1/devices/:deviceId/status', handlers.deviceStatus],
@@ -152,7 +153,16 @@ const server = http.createServer(async (request, response) => {
   try {
     const hasBody = request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH' || request.method === 'DELETE';
     const body = hasBody ? await readJsonBody(request) : {};
-    const result = await route.handler({ body, params: route.params, query: url.searchParams, request });
+    const result = await route.handler({
+      body,
+      params: route.params,
+      query: url.searchParams,
+      request,
+      response,
+    });
+
+    // SSE 类处理器已经接管了响应（长连接），分发器不再收尾
+    if (result && result.__sse) return;
 
     if (pathname !== '/v1/health') {
       const detail = result.body?.deviceId ? `deviceId=${result.body.deviceId}` : '';

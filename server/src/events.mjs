@@ -1,16 +1,14 @@
-// 轻量事件总线：给长轮询（long-polling）用。
+// 轻量事件总线：给推送通道用（SSE 长连接 + 长轮询兜底）。
 //
 // 为什么不用 WebSocket：服务端刻意保持**零第三方依赖**（见 README），
-// 而我们的推送是单向的（服务端 → 客户端），长轮询就够用：
-//   · 服务端把请求挂住不返回，一有变化立刻写回 → 延迟毫秒级
-//   · 客户端不需要额外协议栈，HTTP 客户端原生支持
-//   · 每个等待者只占一个空闲 HTTP 连接（本项目规模下完全够）
-//
+// 而通知是纯单向（服务端 → 客户端）——SSE 只是一个长挂的 HTTP 流，
+// 不需要协议升级、不需要依赖，断线重连也只是客户端重新发起请求。
 // key 是任意字符串：设备用 `device:<id>`，观看请求用 `request:<id>`。
 
-const waiters = new Map(); // key -> Set<resolve>
+const waiters = new Map(); // key -> Set<resolve>          （长轮询用）
+const subscribers = new Map(); // key -> Set<callback>      （SSE 用）
 
-/** 注册一个等待者，返回取消函数。 */
+/** 长轮询：注册一个一次性等待者，返回取消函数。 */
 function addWaiter(key, resolve) {
   let set = waiters.get(key);
   if (!set) {
@@ -40,22 +38,47 @@ export function waitFor(key, timeoutMs) {
     };
     const removeWaiter = addWaiter(key, () => finish(true));
     const timer = setTimeout(() => finish(false), timeoutMs);
-    // 客户端断开连接时（长轮询特有的情况）也要清掉等待者
     if (timer.unref) timer.unref();
   });
 }
 
-/** 唤醒某个 key 上的全部等待者。 */
-export function notify(key) {
-  const set = waiters.get(key);
-  if (!set) return;
-  // 复制一份再回调：回调里会把自己从集合中摘掉
-  for (const resolve of [...set]) resolve();
+/** SSE：持续订阅某个 key，返回退订函数。回调会收到通知时的负载（可能为空）。 */
+export function subscribe(key, callback) {
+  let set = subscribers.get(key);
+  if (!set) {
+    set = new Set();
+    subscribers.set(key, set);
+  }
+  set.add(callback);
+  return () => {
+    set.delete(callback);
+    if (set.size === 0) subscribers.delete(key);
+  };
 }
 
-/** 当前等待者数量（诊断用）。 */
-export function waiterCount() {
-  let total = 0;
-  for (const set of waiters.values()) total += set.size;
-  return total;
+/** 唤醒某个 key：长轮询的等待者被释放，SSE 订阅者收到负载。 */
+export function notify(key, payload = null) {
+  const waitSet = waiters.get(key);
+  if (waitSet) {
+    for (const resolve of [...waitSet]) resolve();
+  }
+  const subSet = subscribers.get(key);
+  if (subSet) {
+    for (const callback of [...subSet]) {
+      try {
+        callback(payload);
+      } catch (error) {
+        // 单个订阅者出错不能影响别人
+      }
+    }
+  }
+}
+
+/** 当前等待者与订阅者数量（诊断用）。 */
+export function counts() {
+  let waitersTotal = 0;
+  for (const set of waiters.values()) waitersTotal += set.size;
+  let subscribersTotal = 0;
+  for (const set of subscribers.values()) subscribersTotal += set.size;
+  return { waiters: waitersTotal, subscribers: subscribersTotal };
 }

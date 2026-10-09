@@ -426,6 +426,12 @@ class _HomeScreenState extends State<HomeScreen> {
             TextButton(
               onPressed: () {
                 token.cancelled = true;   // 让轮询循环尽快收尾
+                // 立刻通知服务端撤销：不能等长轮询返回（最多 20 秒），
+                // 否则对方设备上会一直挂着这个请求
+                final requestId = token.requestId;
+                if (requestId != null) {
+                  widget.manager.cancelWatchRequest(requestId);
+                }
                 dialogOpen = false;
                 Navigator.of(dialogContext).pop();
                 // 立刻复位，避免取消后界面一直转圈

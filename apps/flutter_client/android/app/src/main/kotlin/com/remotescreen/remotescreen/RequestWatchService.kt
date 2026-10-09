@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -149,26 +151,52 @@ class RequestWatchService : Service() {
     }
 
     /**
-     * 长轮询：把连接挂住最多 WAIT_SEC 秒，服务端一有请求立刻返回。
-     * 它同时兼作心跳（服务端每次都会刷新在线时间），因此不再需要 15 秒一次的定时上报 ——
-     * 后台弹窗的延迟从「最坏 15 秒」降到百毫秒级。
+     * SSE 长连接：服务端一有请求立刻推（实测 ~10ms）。
+     * 它同时兼作心跳（服务端每 15 秒的 keep-alive 会刷新在线时间），
+     * 连接最长 10 分钟由服务端轮换，这里自动重连。
      */
     private fun pollOnce() {
         val baseUrl = prefs.getString(EXTRA_BASE_URL, null) ?: return
         val deviceId = prefs.getString(EXTRA_DEVICE_ID, null) ?: return
         val sessionToken = prefs.getString(EXTRA_SESSION_TOKEN, null) ?: return
 
-        val body = JSONObject()
-            .put("sessionToken", sessionToken)
-            .put("waitSec", WAIT_SEC)
-            .toString()
-        val response = request(
-            "$baseUrl/v1/devices/$deviceId/notifications",
-            "POST",
-            body,
-        ) ?: return
+        val connection = (URL("$baseUrl/v1/devices/$deviceId/notifications/stream")
+            .openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 10_000
+            // 服务端每 15 秒有 keep-alive，45 秒读超时足够
+            readTimeout = 45_000
+            setRequestProperty("X-Device-Token", sessionToken)
+            setRequestProperty("Accept", "text/event-stream")
+        }
 
-        val pending = response.optJSONArray("pendingRequests") ?: return
+        val reader = BufferedReader(InputStreamReader(connection.inputStream))
+        var event = ""
+        var data = ""
+        reader.useLines { lines ->
+            for (line in lines) {
+                if (!running) break
+                when {
+                    line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                    line.startsWith("data:") -> data = line.removePrefix("data:").trim()
+                    line.isEmpty() -> {
+                        if (event == "requests" && data.isNotEmpty()) {
+                            handlePendingPayload(data)
+                        }
+                        event = ""
+                        data = ""
+                    }
+                }
+            }
+        }
+        connection.disconnect()
+        // 流结束（10 分钟轮换或断开）→ 调用方稍后重连
+    }
+
+    /** 解析 pendingRequests 列表，把没见过的请求弹成通知。 */
+    private fun handlePendingPayload(data: String) {
+        val parsed = JSONObject(data)
+        val pending = parsed.optJSONArray("pendingRequests") ?: return
         for (index in 0 until pending.length()) {
             val item = pending.optJSONObject(index) ?: continue
             val requestId = item.optString("requestId")
@@ -255,8 +283,8 @@ class RequestWatchService : Service() {
             connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
                 connectTimeout = 10_000
-                // 长轮询会把连接挂住 WAIT_SEC 秒，读超时要留余量
-                readTimeout = (WAIT_SEC + 15) * 1000
+                // SSE 流每 15 秒有 keep-alive，45 秒读超时足够
+                readTimeout = 45_000
                 doOutput = body != null
                 setRequestProperty("Content-Type", "application/json")
             }

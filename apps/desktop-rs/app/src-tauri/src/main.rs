@@ -62,25 +62,38 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
     *state.heartbeat_stop.lock().unwrap() = Some(stop.clone());
     *state.registration.lock().unwrap() = Some(registration.clone());
 
-    // 用长轮询取代定时心跳：连接挂住等请求，服务端一有变化立刻返回，
-    // 同时长轮询本身就在刷新在线状态（服务端每次都会更新 last_heartbeat_at）。
+    // 用 SSE 长连接取代轮询：服务端一有变化立刻推（实测 ~10ms），
+    // 连接每 10 分钟由服务端轮换一次，这里循环重连即可。
+    // 心跳也由服务端在流内处理（每 15 秒刷新在线状态），客户端不再需要定时上报。
     let handle = app.clone();
-    tauri::async_runtime::spawn(async move {
+    tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
         loop {
             if stop.load(Ordering::Relaxed) {
                 break;
             }
 
-            match api::wait_notifications(&registration.device_id, &registration.session_token, 25) {
-                Ok(incoming) => {
+            let result = api::stream_notifications(
+                &registration.device_id,
+                &registration.session_token,
+                &stop,
+                |incoming| {
                     *state.incoming_requests.lock().unwrap() = incoming;
+                },
+            );
+
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            match result {
+                Ok(()) => {
+                    // 流正常结束（服务端 10 分钟轮换）→ 立即重连
                 }
                 Err(error) => {
-                    // 网络抖动或服务端重启：退回一次普通心跳保活，稍后重试长轮询
                     eprintln!("[notifications] {error}");
+                    // 网络抖动：退回一次普通心跳保活，稍后重连
                     let _ = api::heartbeat(&registration.device_id, &registration.session_token);
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    std::thread::sleep(std::time::Duration::from_secs(2));
                 }
             }
         }

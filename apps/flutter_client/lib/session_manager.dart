@@ -1,3 +1,4 @@
+import 'dart:convert';
 // 会话管理器 —— 应用级单例，持有所有连接的生命周期。
 //
 // 这层存在的意义：把「连接」从页面生命周期里解放出来。
@@ -11,6 +12,7 @@
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -247,6 +249,14 @@ class SessionManager extends ChangeNotifier {
     unawaited(_notificationLoop(_heartbeatGeneration));
   }
 
+  /// 立刻撤销一个观看请求（界面点「取消」时调用，不等长轮询返回）。
+  ///
+  /// 只在客户端停轮询是不够的：设备端是靠服务端下发的列表弹窗的，
+  /// 不撤销的话对方那边会一直看到这个请求（直到 60 秒过期）。
+  void cancelWatchRequest(String requestId) {
+    unawaited(api.cancelConnectRequest(requestId).catchError((_) {}));
+  }
+
   /// 设置/刷新连接密码，返回更新后的注册对象（界面据此刷新显示）。
   Future<DeviceRegistration> setConnectionPassword(String? password) async {
     final current = registration;
@@ -263,44 +273,89 @@ class SessionManager extends ChangeNotifier {
     return updated;
   }
 
-  /// 长轮询循环：一直挂着，直到被 stopHeartbeat 或新一次 startHeartbeat 取代。
+  /// SSE 长连接循环：服务端一有变化立刻推（实测 ~10ms），
+  /// 连接每 10 分钟由服务端轮换一次，这里自动重连即可。
+  /// 心跳也由服务端在流内处理（每 15 秒刷新在线状态），客户端不再需要定时上报。
   Future<void> _notificationLoop(int generation) async {
     while (_heartbeatGeneration == generation) {
       final reg = registration;
       if (reg == null) return;
 
+      final client = http.Client();
       try {
-        final incoming = await api.waitNotifications(
-          deviceId: reg.deviceId,
-          sessionToken: reg.sessionToken,
-          waitSec: 25,
+        final request = http.Request(
+          'GET',
+          Uri.parse('${api.baseUrl}/v1/devices/${reg.deviceId}/notifications/stream'),
         );
+        request.headers['X-Device-Token'] = reg.sessionToken;
+        request.headers['Accept'] = 'text/event-stream';
+
+        final response = await client.send(request);
+        if (response.statusCode != 200) {
+          throw ApiException('stream', '通知流连接失败（HTTP ${response.statusCode}）');
+        }
         if (_heartbeatGeneration != generation) return;
 
-        if (incoming.isEmpty) {
-          if (pendingRequests.isNotEmpty) {
-            pendingRequests = [];
-            notifyListeners();
-          }
-        } else {
-          // 只保留还没处理过的请求，避免重复弹窗
-          final fresh = incoming
-              .where((request) => !_handledRequestIds.contains(request.requestId))
-              .toList();
-          if (fresh.isNotEmpty) {
-            pendingRequests = [...pendingRequests, ...fresh];
-            notifyListeners();
+        var buffer = '';
+        await for (final chunk in response.stream.transform(utf8.decoder)) {
+          if (_heartbeatGeneration != generation) return;
+          buffer += chunk;
+
+          // 按「空行」切事件块
+          while (buffer.contains('\n\n')) {
+            final boundary = buffer.indexOf('\n\n');
+            final block = buffer.substring(0, boundary + 2);
+            buffer = buffer.substring(boundary + 2);
+            _handleEventBlock(block);
           }
         }
+        // 流正常结束（服务端 10 分钟轮换）→ 循环重连
       } catch (_) {
-        // 网络抖动或服务端重启：退回一次普通心跳保活，稍后重试长轮询
+        // 网络抖动：退回一次普通心跳保活，稍后重连
         try {
           await api.heartbeat(reg.deviceId, reg.sessionToken);
         } catch (_) {
           // 真的连不上，等一会儿再说
         }
         await Future<void>.delayed(const Duration(seconds: 2));
+      } finally {
+        client.close();
       }
+    }
+  }
+
+  /// 解析一条 SSE 事件块，把请求列表同步到本地状态。
+  void _handleEventBlock(String block) {
+    String eventName = '';
+    String data = '';
+    for (final line in block.split('\n')) {
+      if (line.startsWith('event:')) eventName = line.substring(6).trim();
+      if (line.startsWith('data:')) data = line.substring(5).trim();
+    }
+    if (eventName != 'requests' || data.isEmpty) return;
+
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final raw = (parsed['pendingRequests'] as List?) ?? const [];
+    final incoming = raw
+        .whereType<Map<String, dynamic>>()
+        .map(ConnectRequestInfo.fromJson)
+        .toList();
+
+    if (incoming.isEmpty) {
+      if (pendingRequests.isNotEmpty) {
+        pendingRequests = [];
+        notifyListeners();
+      }
+      return;
+    }
+
+    // 只保留还没处理过的请求，避免重复弹窗
+    final fresh = incoming
+        .where((request) => !_handledRequestIds.contains(request.requestId))
+        .toList();
+    if (fresh.isNotEmpty) {
+      pendingRequests = [...pendingRequests, ...fresh];
+      notifyListeners();
     }
   }
 
