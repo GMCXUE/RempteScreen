@@ -62,6 +62,25 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
     *state.heartbeat_stop.lock().unwrap() = Some(stop.clone());
     *state.registration.lock().unwrap() = Some(registration.clone());
 
+    // 启动时请求麦克风权限（弹窗归属应用）：webrtc 音频数据泵由麦克风设备驱动，
+    // 没有授权时泵不转，音频帧发不出去。提前拿到授权，投送时就不会卡权限。
+    {
+        if let Some(helper) = find_audio_capture_helper() {
+            std::thread::spawn(move || {
+                if let Ok(output) = std::process::Command::new(helper)
+                    .arg("--request-mic")
+                    .stderr(std::process::Stdio::piped())
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stderr);
+                    for line in text.lines() {
+                        crate::publisher::log_to_file(&format!("[mic] {line}"));
+                    }
+                }
+            });
+        }
+    }
+
     // 用 SSE 长连接取代轮询：服务端一有变化立刻推（实测 ~10ms），
     // 连接每 10 分钟由服务端轮换一次，这里循环重连即可。
     // 心跳也由服务端在流内处理（每 15 秒刷新在线状态），客户端不再需要定时上报。
@@ -892,7 +911,7 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
                         livekit::webrtc::audio_stream::native::NativeAudioStream::new(
                             track.rtc_track(),
                             48_000,
-                            2,
+                            1,
                         );
                     audio_meter = Some((0, 0));
                     tokio::spawn(async move {
@@ -918,6 +937,22 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
         }
         session.stop();
     });
+}
+
+/// 定位音频采集器：优先应用包内（Contents/MacOS），开发态用 target/release 与 tools 目录
+fn find_audio_capture_helper() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|p| p.to_path_buf()));
+    [
+        exe_dir.as_ref().map(|d| d.join("macos-audio-capture")),
+        std::env::var("CARGO_MANIFEST_DIR").ok().map(|dir| {
+            std::path::PathBuf::from(dir).join("../../tools/macos-audio-capture/macos-audio-capture")
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|path| path.exists())
 }
 
 /// 无界面自检：启动投送（屏幕 + 系统音频）N 秒后自动结束，验证音频轨发布。

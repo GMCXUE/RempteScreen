@@ -193,22 +193,25 @@ async fn run_session(
 
     // ---- 系统音频（macOS）：ScreenCaptureKit 采集 → 子进程输出 PCM → 发布音频轨 ----
     // 找采集器：优先应用包内（Contents/MacOS），开发态用 tools 目录
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|p| p.to_path_buf()));
-    let sidecar_candidates: Vec<std::path::PathBuf> = [
-        exe_dir.as_ref().map(|d| d.join("macos-audio-capture")),
-        std::env::var("CARGO_MANIFEST_DIR")
-            .ok()
-            .map(|dir| std::path::PathBuf::from(dir).join("../../tools/macos-audio-capture/macos-audio-capture")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    let sidecar = sidecar_candidates
-        .iter()
-        .find(|path| path.exists())
-        .cloned();
+    // 启用平台音频时钟：纯手动推帧模式下 ADM 不会启动，推入的帧没人消费
+    // （接收端只有静音）。创建实例后音频时钟开始运行，推入的帧才会被编码发送。
+    // 实例需要保活到会话结束（drop 会关闭 ADM）。
+    let platform_audio = match PlatformAudio::new() {
+        Ok(audio) => {
+            // 关键：RtcAudioSource::Native 的轨道不会自动启动 ADM 录音，
+            // 而音频数据泵靠录音时钟驱动 —— 必须手动 start_recording。
+            match audio.start_recording() {
+                Ok(()) => log_to_file("PlatformAudio 已启用，录音时钟已启动"),
+                Err(error) => log_to_file(&format!("start_recording 失败: {error}")),
+            }
+            Some(audio)
+        }
+        Err(error) => {
+            log_to_file(&format!("PlatformAudio 启用失败: {error}"));
+            None
+        }
+    };
+    let sidecar = crate::find_audio_capture_helper();
 
     if let Some(sidecar_path) = sidecar {
         match std::process::Command::new(sidecar_path)
@@ -237,7 +240,7 @@ async fn run_session(
                         auto_gain_control: false,
                     },
                     48_000, // 采样率
-                    2,      // 双声道
+                    1,      // 单声道（与文档示例一致；立体声路径实测不发送）
                     1000,   // 缓冲时长（ms）
                 );
                 let audio_track = LocalAudioTrack::create_audio_track(
@@ -263,7 +266,7 @@ async fn run_session(
                     println!("[publisher] 系统音频轨已发布");
                     log_to_file("系统音频轨已发布");
 
-                    // 喂数据：每帧 10ms（480 采样 × 双声道 × 2 字节 = 1920 字节）。
+                    // 喂数据：每帧 10ms（480 采样 × 2 字节 = 960 字节，单声道）。
                     // 同时统计峰值电平（每 5 秒记一次）：区分「采集到静音」和「采集失败」。
                     //
                     // ⚠️ capture_frame 是 **async** —— 在阻塞线程里直接调用只会创建一个
@@ -274,7 +277,7 @@ async fn run_session(
                     std::thread::spawn(move || {
                         use std::io::Read;
                         let mut reader = std::io::BufReader::new(stdout);
-                        let mut pcm = vec![0i16; 480 * 2];
+                        let mut pcm = vec![0i16; 480];
                         let mut peak: i32 = 0;
                         let mut frames_since_log: u32 = 0;
                         loop {
@@ -289,6 +292,7 @@ async fn run_session(
                                     pcm.len() * 2,
                                 )
                             };
+                            // 单声道：480 采样 × 2 字节 = 960 字节/帧
                             if reader.read_exact(bytes).is_err() {
                                 log_to_file("音频采集器输出结束");
                                 break; // 采集器退出

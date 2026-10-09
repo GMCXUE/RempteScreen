@@ -68,17 +68,18 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
         let frameCount = Int(buffers[0].mDataByteSize) / MemoryLayout<Float32>.size
         guard frameCount > 0, let left = left, let right = right else { return }
 
-        // Float32 非交错 → Int16 交错
+        // Float32 非交错双声道 → Int16 单声道（左右平均）。
+        // 单声道与 LiveKit Rust SDK 文档示例一致（48k/1ch），立体声路径实测有问题。
         // 注意：必须用 Data(count:)（真实长度）而不是 Data(capacity:)（只分配、长度为 0），
         // 否则写入的数据不算在 Data 里，stdout 永远是 0 字节。
-        var pcm = Data(count: frameCount * 4)
+        var pcm = Data(count: frameCount * 2)
         pcm.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
             let out = raw.bindMemory(to: Int16.self)
             for i in 0..<frameCount {
                 let l = max(-1.0, min(1.0, left[i]))
                 let r = max(-1.0, min(1.0, right[i]))
-                out[i * 2] = Int16(l * 32767.0)
-                out[i * 2 + 1] = Int16(r * 32767.0)
+                let mono = (l + r) * 0.5
+                out[i] = Int16(mono * 32767.0)
             }
         }
         stdoutHandle.write(pcm)
@@ -86,6 +87,21 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
 }
 
 let semaphore = DispatchSemaphore(value: 0)
+
+// --request-mic 模式：仅请求麦克风授权后退出（应用启动时调用，提前把权限拿到手）
+if CommandLine.arguments.contains("--request-mic") {
+    let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    FileHandle.standardError.write("mic 当前状态: \(status.rawValue)\n".data(using: .utf8)!)
+    if status == .notDetermined {
+        let sem = DispatchSemaphore(value: 0)
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            FileHandle.standardError.write("mic 授权弹窗结果: \(granted)\n".data(using: .utf8)!)
+            sem.signal()
+        }
+        sem.wait()
+    }
+    exit(0)
+}
 
 // 先报告（并在需要时请求）麦克风权限：webrtc 的音频数据泵由麦克风设备时钟驱动，
 // 没有麦克风授权时泵不转，推送的系统音频帧永远发不出去（表现为观看端只有静音）。
