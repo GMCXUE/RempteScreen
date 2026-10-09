@@ -25,7 +25,17 @@ pub fn log_to_file(message: &str) {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|t| t.as_secs())
             .unwrap_or(0);
-        let _ = std::fs::write(path, format!("[{stamp}] {message}\n"));
+        // 追加而非覆盖：排障需要历史。超过 512KB 时截断一半，防止无限增长。
+        use std::io::Write;
+        let append = |message: &str| -> std::io::Result<()> {
+            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+            file.write_all(format!("[{stamp}] {message}\n").as_bytes())
+        };
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if size > 512 * 1024 {
+            let _ = std::fs::write(&path, ""); // 截断后重新追加
+        }
+        let _ = append(message);
     }
 }
 
@@ -203,11 +213,21 @@ async fn run_session(
     if let Some(sidecar_path) = sidecar {
         match std::process::Command::new(sidecar_path)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
         {
             Ok(mut child) => {
                 let mut stdout = child.stdout.take().expect("采集器 stdout");
+                // 采集器的 stderr 单独记录（启动错误都在这里）
+                if let Some(stderr) = child.stderr.take() {
+                    std::thread::spawn(move || {
+                        use std::io::BufRead;
+                        let reader = std::io::BufReader::new(stderr);
+                        for line in reader.lines().flatten() {
+                            log_to_file(&format!("[audio-capture] {line}"));
+                        }
+                    });
+                }
                 let audio_source = NativeAudioSource::new(
                     AudioSourceOptions::default(),
                     48_000, // 采样率
@@ -237,12 +257,15 @@ async fn run_session(
                     println!("[publisher] 系统音频轨已发布");
                     log_to_file("系统音频轨已发布");
 
-                    // 喂数据：每帧 10ms（480 采样 × 双声道 × 2 字节 = 1920 字节）
+                    // 喂数据：每帧 10ms（480 采样 × 双声道 × 2 字节 = 1920 字节）。
+                    // 同时统计峰值电平（每 5 秒记一次）：区分「采集到静音」和「采集失败」。
                     let audio_stop = stop.clone();
                     std::thread::spawn(move || {
                         use std::io::Read;
                         let mut reader = std::io::BufReader::new(stdout);
                         let mut pcm = vec![0i16; 480 * 2];
+                        let mut peak: i32 = 0;
+                        let mut frames_since_log: u32 = 0;
                         loop {
                             if audio_stop.load(Ordering::Relaxed) {
                                 child.kill().ok();
@@ -256,7 +279,28 @@ async fn run_session(
                                 )
                             };
                             if reader.read_exact(bytes).is_err() {
+                                log_to_file("音频采集器输出结束");
                                 break; // 采集器退出
+                            }
+                            for sample in &pcm {
+                                let v = (*sample as i32).abs();
+                                if v > peak {
+                                    peak = v;
+                                }
+                            }
+                            frames_since_log += 1;
+                            if frames_since_log >= 500 {
+                                // 500 帧 ≈ 5 秒
+                                let level = if peak > 3000 {
+                                    format!("有声音（峰值 {peak}）")
+                                } else if peak > 0 {
+                                    format!("接近静音（峰值 {peak}）")
+                                } else {
+                                    "完全静音".to_string()
+                                };
+                                log_to_file(&format!("音频电平：{level}"));
+                                peak = 0;
+                                frames_since_log = 0;
                             }
                             let frame = AudioFrame {
                                 data: pcm.clone().into(),

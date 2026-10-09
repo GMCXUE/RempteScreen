@@ -12,11 +12,31 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
+/// 全局保活：SCStream/delegate 是局部变量的话，Task 结束就会被释放，
+/// 流随之销毁、音频回调停摆 —— 之前「采集器活着但没有数据」就是这个原因。
+enum StreamHolder {
+    static var stream: SCStream?
+    static let tap = AudioTap()
+    static let queue = DispatchQueue(label: "remotescreen.audio-capture")
+}
+
 final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sendable {
     let stdoutHandle = FileHandle.standardOutput
+    var callbackCount: Int64 = 0
+    var audioCallbackCount: Int64 = 0
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        FileHandle.standardError.write("流异常终止：\(error)\n".data(using: .utf8)!)
+    }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, sampleBuffer.isValid else { return }
+        callbackCount += 1
+        if callbackCount % 60 == 1 {
+            FileHandle.standardError.write("回调统计：共 \(callbackCount) 次（音频 \(audioCallbackCount) 次）\n".data(using: .utf8)!)
+        }
+        guard type == .audio else { return }
+        audioCallbackCount += 1
+        guard sampleBuffer.isValid else { return }
 
         var blockBuffer: CMBlockBuffer?
         // SCStream 输出的是非交错（non-interleaved）Float32 立体声：
@@ -49,7 +69,9 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
         guard frameCount > 0, let left = left, let right = right else { return }
 
         // Float32 非交错 → Int16 交错
-        var pcm = Data(capacity: frameCount * 4)
+        // 注意：必须用 Data(count:)（真实长度）而不是 Data(capacity:)（只分配、长度为 0），
+        // 否则写入的数据不算在 Data 里，stdout 永远是 0 字节。
+        var pcm = Data(count: frameCount * 4)
         pcm.withUnsafeMutableBytes { (raw: UnsafeMutableRawBufferPointer) in
             let out = raw.bindMemory(to: Int16.self)
             for i in 0..<frameCount {
@@ -87,21 +109,22 @@ Task {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 2)
         config.queueDepth = 3
 
-        let queue = DispatchQueue(label: "remotescreen.audio-capture")
-        let tap = AudioTap()
+        let queue = StreamHolder.queue
+        let tap = StreamHolder.tap
         let stream = SCStream(filter: filter, configuration: config, delegate: tap)
+        StreamHolder.stream = stream
         do {
             try stream.addStreamOutput(tap, type: .audio, sampleHandlerQueue: queue)
+            // 视频输出也注册（回调里忽略视频帧）：部分系统版本要求视频路径运行才有音频
+            try stream.addStreamOutput(tap, type: .screen, sampleHandlerQueue: queue)
         } catch {
-            FileHandle.standardError.write("添加音频输出失败：\(error)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("添加输出失败：\(error)\n".data(using: .utf8)!)
             exit(1)
         }
         try await stream.startCapture()
         FileHandle.standardError.write("audio-capture: started\n".data(using: .utf8)!)
-        semaphore.signal()
-
-        // 常驻：父进程负责终止
-        dispatchMain()
+        // 常驻由主线程的 dispatchMain() 负责（Task 到此结束）；
+        // dispatchMain 只能在主线程调用，在这里调会直接 abort —— 之前就是这个问题
     } catch {
         FileHandle.standardError.write("audio-capture 初始化失败：\(error)\n".data(using: .utf8)!)
         exit(1)
