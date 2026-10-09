@@ -166,6 +166,7 @@ async fn run_watch(
     let track = video_track.ok_or("对方还没有开启投送")?;
     {
         let mut stats = stats.lock().unwrap();
+        *stats = WatchStats::default();
         stats.active = true;
         stats.device_name = device_name.to_string();
     }
@@ -279,6 +280,8 @@ async fn run_watch(
 
     *frames.lock().unwrap() = None;
     *audio.lock().unwrap() = None;
+    // 统计整体复位：否则累计帧数会一直 > 0，界面以为会话还在
+    *stats.lock().unwrap() = WatchStats::default();
     let _ = room.close().await;
     println!("[viewer] 会话已结束");
     Ok(())

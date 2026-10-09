@@ -179,7 +179,8 @@ async function refreshWatch() {
   }
   const formCard = $("watch-form-card");
   const viewerCard = $("viewer-card");
-  const active = state.watching || state.frames > 0;
+  // 只以会话状态为准（累计帧数曾导致断开后卡片不消失）
+  const active = state.watching;
 
   if (state.error) {
     formCard.classList.remove("hidden");
@@ -224,8 +225,17 @@ $("watch-btn").addEventListener("click", async () => {
 $("viewer-refocus").addEventListener("click", () => invoke("open_viewer_window"));
 
 $("watch-stop").addEventListener("click", async () => {
-  await invoke("stop_watch");
-  await invoke("close_viewer_window");
+  // 任何一步失败都要继续把界面刷回来（否则看起来像「点了没反应」）
+  try {
+    await invoke("stop_watch");
+  } catch (error) {
+    $("watch-error").textContent = `断开失败：${error}`;
+  }
+  try {
+    await invoke("close_viewer_window");
+  } catch {
+    // 窗口可能已经关掉了，忽略
+  }
   refreshWatch();
 });
 

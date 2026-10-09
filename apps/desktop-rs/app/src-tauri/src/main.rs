@@ -321,6 +321,10 @@ fn stop_watch(state: tauri::State<AppState>) -> Result<(), String> {
         session.stop();
     }
     *state.frames.lock().unwrap() = None;
+    *state.audio.lock().unwrap() = None;
+    // 立即复位统计与错误，界面据此收起「正在观看」卡片
+    *state.watch_stats.lock().unwrap() = viewer::WatchStats::default();
+    *state.watch_error.lock().unwrap() = None;
     Ok(())
 }
 
