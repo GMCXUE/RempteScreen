@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>观看</title>
+  <link rel="stylesheet" href="viewer.css" />
+</head>
+<body>
+  <div id="stage" class="stage">
+    <canvas id="screen"></canvas>
+    <div id="status" class="status">连接中…</div>
+  </div>
+
+  <!-- 控制条：鼠标移入显示；沉��模式下由按钮锁定显隐 -->
+  <div id="controls" class="controls">
+    <div class="left">
+      <span id="device" class="device">—</span>
+      <span id="meta" class="meta">—</span>
+    </div>
+    <div class="right">
+      <button id="audio-btn" class="ctl" title="声音">
+        <svg viewBox="0 0 16 16" class="ico"><path d="M3 6h2.5L8.5 3.5v9L5.5 10H3z"/><path d="M11 6.2a2.6 2.6 0 010 3.6M12.8 4.4a5 5 0 010 7.2" class="wave"/></svg>
+        <span id="audio-label">声音</span>
+      </button>
+      <input id="volume" class="volume" type="range" min="0" max="100" value="100" title="音量" />
+      <button id="fit-btn" class="ctl" title="显示模式">适应窗口</button>
+      <button id="full-btn" class="ctl" title="全屏">
+        <svg viewBox="0 0 16 16" class="ico"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg>
+      </button>
+      <button id="hide-btn" class="ctl" title="沉浸模式（隐藏控制条）">沉浸</button>
+      <button id="stop-btn" class="ctl danger" title="断开并关闭窗口">断开</button>
+    </div>
+  </div>
+
+  <script src="viewer.js"></script>
+</body>
+</html>

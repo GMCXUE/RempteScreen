@@ -1,0 +1,102 @@
+name: remotescreen
+
+services:
+  # 媒体面：SFU 转发 + ICE
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: remotescreen-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    environment:
+      # 密钥从 .env 注入，不落盘在配置文件里
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      # 只绑本机回环：便于通过 SSH 做诊断，不对公网暴露
+      - "127.0.0.1:7880:7880"
+      # ICE：这两个必须对公网开放
+      - "7881:7881"
+      - "7882:7882/udp"
+    # 注意：不要在这里用 sysctls 去调 net.core.rmem_max。
+    # 容器的网络命名空间与 procfs 挂载方式会让 Docker 拒绝写入，报
+    #   "open sysctl net.core.rmem_max file: unsafe procfs detected"
+    # 并直接导致容器无法启动。LiveKit 启动时的
+    #   "UDP receive buffer is too small for a production set-up"
+    # 告警属于提示性质，不影响功能；若要真正调优，需改用 host 网络模式，
+    # 或在宿主机上设置并让容器共享宿主网络命名空间。
+    networks:
+      - remotescreen
+
+  # 控制面：账号、设备目录与令牌签发
+  device-service:
+    build: ../../server
+    container_name: remotescreen-device-service
+    restart: unless-stopped
+    environment:
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      # 下发给客户端的公网地址，必须与 DOMAIN 一致
+      LIVEKIT_URL: "${PUBLIC_LIVEKIT_URL}"
+      LIVEKIT_API_KEY: "${LIVEKIT_API_KEY}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET}"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-remotescreen}:${POSTGRES_PASSWORD:-remotescreen}@postgres:5432/${POSTGRES_DB:-remotescreen}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - remotescreen
+
+  # 持久化：账号、会话、设备绑定。只在内网容器网络中可达，不对公网暴露端口。
+  postgres:
+    image: postgres:17-alpine
+    container_name: remotescreen-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-remotescreen}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-remotescreen}"
+      POSTGRES_DB: "${POSTGRES_DB:-remotescreen}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-remotescreen} -d ${POSTGRES_DB:-remotescreen}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - remotescreen
+
+  # TLS 终止：自动申请与续期 Let's Encrypt 证书
+  caddy:
+    image: caddy:2-alpine
+    container_name: remotescreen-caddy
+    restart: unless-stopped
+    environment:
+      DOMAIN: "${DOMAIN}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 桌面端的渲染目录：只读挂载。手机浏览器打开时页面会自动只显示「连接」那一栏。
+      - ../../apps/desktop/src/renderer:/srv/viewer:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - remotescreen
+    depends_on:
+      - livekit
+      - device-service
+
+networks:
+  remotescreen:
+    driver: bridge
+
+volumes:
+  # Caddy 的证书与账户数据，必须持久化，否则每次重启都会重新申请证书而触发限流
+  caddy_data:
+  caddy_config:
+  # PostgreSQL 的全部数据
+  postgres_data:
+  # 旧 SQLite 数据（迁移后仅作备份保留）
+  device_data:

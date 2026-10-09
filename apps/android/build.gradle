@@ -1,0 +1,9 @@
+// 根构建脚本。
+//
+// 这是个极简的 WebView 壳工程，刻意不用 AppCompat 等 AndroidX 依赖 ——
+// 内容全部来自服务器上的同一份界面，壳子只需要把 WebView 起起来。
+// 少一层依赖，构建更快、APK 更小，也没有版本冲突要处理。
+
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

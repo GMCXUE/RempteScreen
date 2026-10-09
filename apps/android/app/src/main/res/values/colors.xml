@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与网页端同一套配色，避免启动瞬间白屏闪一下 -->
+    <color name="background">#FF0A0C10</color>
+    <color name="accent">#FF4C8DFF</color>
+</resources>

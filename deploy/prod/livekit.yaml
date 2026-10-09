@@ -1,0 +1,30 @@
+# LiveKit 生产配置（公网部署）
+#
+# 与本地开发配置的关键差别只有一处：rtc.use_external_ip 必须为 true。
+# 否则服务端无法把自己真实的公网 IP 通告给客户端，ICE 候选全部不可达，
+# 表现为「能连上信令但一直看不到画面」，而且日志里看不出明显报错。
+
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+
+  # 公网部署必须为 true：让服务端自动探测并通告公网 IP
+  use_external_ip: true
+
+room:
+  auto_create: true
+  # 采集端断开后房间保留 5 分钟，便于接收端短暂重连
+  empty_timeout: 300
+  # 一个投送房间的参与者上限（1 个采集端 + 若干接收端）
+  max_participants: 16
+
+logging:
+  level: info
+  # 容器环境下输出 JSON，便于日志系统采集
+  json: true
+
+# keys 不写在这里。
+# 生产环境的密钥通过 LIVEKIT_KEYS 环境变量注入，避免密钥落盘在配置文件里，
+# 也避免误把配置文件提交进版本库。格式：<key>: <secret>

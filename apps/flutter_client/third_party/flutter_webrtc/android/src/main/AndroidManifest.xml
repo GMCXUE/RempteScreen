@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="com.cloudwebrtc.webrtc">
+  <application>
+    <!--
+      投屏前台服务：Android 14+ 要求 getMediaProjection() 之前必须有
+      mediaProjection 类型的前台服务在运行。stopWithTask 保证应用被划掉时服务一并结束。
+    -->
+    <service
+      android:name="com.cloudwebrtc.webrtc.ScreenProjectionService"
+      android:exported="false"
+      android:stopWithTask="true"
+      android:foregroundServiceType="mediaProjection" />
+  </application>
+</manifest>

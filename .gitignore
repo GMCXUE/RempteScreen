@@ -1,0 +1,51 @@
+# ---------- 通用 ----------
+.DS_Store
+*.log
+.workbuddy/
+
+# ---------- 服务端 ----------
+server/node_modules/
+server/data/
+
+# ---------- 桌面端（Electron）----------
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/out/
+
+# ---------- 桌面端（Tauri / Rust）----------
+apps/desktop-rs/app/src-tauri/target/
+apps/desktop-rs/app/src-tauri/gen/
+apps/desktop-rs/spikes/*/target/
+apps/desktop-rs/spikes/*/.cargo/
+*.dmg
+*.app
+*.exe
+
+# ---------- 移动端（Flutter）----------
+apps/flutter_client/build/
+apps/flutter_client/.dart_tool/
+apps/flutter_client/.flutter-plugins*
+apps/flutter_client/android/.gradle/
+apps/flutter_client/android/local.properties
+apps/flutter_client/third_party/flutter_webrtc/example/
+apps/flutter_client/third_party/flutter_webrtc/*/build/
+
+# ---------- 安卓原生原型 ----------
+apps/android/app/build/
+apps/android/.gradle/
+apps/android/build/
+apps/android/local.properties
+
+# ---------- 本地产物 ----------
+dist/
+ui-preview.png
+*.apk
+*.ipa
+
+# ---------- 密钥（绝不入库）----------
+.env
+.env.local
+**/.env
+!**/.env.example
+*.pem
+*.key

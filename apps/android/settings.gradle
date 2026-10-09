@@ -1,0 +1,25 @@
+pluginManagement {
+    repositories {
+        // 国内镜像放在前面：Android Gradle 插件与依赖默认走 Google Maven，
+        // 直连不稳定时会卡很久。这些镜像是公开的，在国内外的机器上都能用。
+        maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "RemoteScreen"
+include ':app'

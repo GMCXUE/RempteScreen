@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RemoteScreen</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 登录：整窗居中卡片 -->
+  <section id="login-view" class="login-wrap hidden">
+    <div class="login-card">
+      <div class="brand-large">
+        <span class="logo"></span>
+        <span class="login-title">RemoteScreen</span>
+      </div>
+      <p class="muted small">登录账号，把本机屏幕投送给其他设备</p>
+      <input id="email" type="email" placeholder="邮箱" autocomplete="username" />
+      <input id="password" type="password" placeholder="密码" autocomplete="current-password" />
+      <button id="login-btn" class="primary">登录</button>
+      <p id="login-error" class="error"></p>
+    </div>
+  </section>
+
+  <!-- 主界面：左侧导航 + 右侧内容 -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo"></span>
+        <span>RemoteScreen</span>
+      </div>
+      <nav>
+        <button class="nav-item active" data-page="cast">
+          <svg viewBox="0 0 16 16" class="ico"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5.5 14h5"/></svg>
+          投送本机
+        </button>
+        <button class="nav-item" data-page="watch">
+          <svg viewBox="0 0 16 16" class="ico"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.8"/></svg>
+          观看设备
+        </button>
+        <button class="nav-item" data-page="settings">
+          <svg viewBox="0 0 16 16" class="ico"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2"/></svg>
+          设置
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="server-dot" class="dot"></span>
+        <span id="server-text">连接中…</span>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- 投送 -->
+      <section id="page-cast" class="page">
+        <h1 class="page-title">投送本机</h1>
+
+        <div class="card">
+          <div class="card-row">
+            <div>
+              <div class="card-title">允许远程观看本设备</div>
+              <div id="publish-status" class="muted small">打开后，其他设备输入下面的设备代码与密码即可观看本机屏幕</div>
+            </div>
+            <span id="publish-badge" class="badge hidden">投送中</span>
+            <label class="switch">
+              <input id="publish-toggle" type="checkbox" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="cred-grid">
+            <div class="cred">
+              <div class="cred-label">设备代码</div>
+              <div class="cred-value">
+                <span id="device-id" class="mono">— — —</span>
+                <button id="copy-id" class="ghost">复制</button>
+              </div>
+            </div>
+            <div class="cred">
+              <div class="cred-label">连接密码</div>
+              <div class="cred-value">
+                <span id="device-password" class="mono">— — —</span>
+                <button id="refresh-pw" class="ghost">刷新</button>
+              </div>
+            </div>
+          </div>
+          <div class="card-hint">把这两项告诉对方即可观看</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">投屏画质</div>
+          <div class="chip-row" id="quality-res">
+            <button class="chip" data-h="720">流畅</button>
+            <button class="chip" data-h="1080">高清</button>
+            <button class="chip" data-h="0">原始</button>
+          </div>
+          <div class="chip-row" id="quality-fps">
+            <button class="chip" data-fps="15">15 帧</button>
+            <button class="chip" data-fps="30">30 帧</button>
+            <button class="chip" data-fps="60">60 帧</button>
+          </div>
+          <div class="card-hint">按屏幕长边等比缩放；切换后立即以新画质重启投送</div>
+        </div>
+
+        <p id="cast-error" class="error"></p>
+      </section>
+
+      <!-- 观看 -->
+      <section id="page-watch" class="page wide hidden">
+        <h1 class="page-title">观看设备</h1>
+
+        <div id="watch-form-card" class="card">
+          <div class="card-title">连接远程设备</div>
+          <div class="muted small">输入对方的设备代码与连接密码（观看你自己的设备可留空密码）</div>
+          <div class="watch-form">
+            <input id="watch-id" placeholder="设备代码（9 位数字）" maxlength="9" />
+            <input id="watch-pw" placeholder="连接密码" />
+            <button id="watch-btn" class="primary">连接</button>
+          </div>
+          <div id="watch-error" class="error"></div>
+        </div>
+
+        <div id="viewer-card" class="card hidden">
+          <div class="viewer-head">
+            <div>
+              <span class="card-title">正在观看 <span id="viewer-name">远程设备</span></span>
+              <div id="viewer-meta" class="muted small">画面在独立窗口中显示</div>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button id="viewer-refocus" class="ghost">显示窗口</button>
+              <button id="watch-stop" class="ghost">断开</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section id="page-settings" class="page hidden">
+        <h1 class="page-title">设置</h1>
+        <div class="card">
+          <div class="kv"><span class="muted">服务器</span><span id="set-server" class="mono-sm">—</span></div>
+          <div class="kv"><span class="muted">当前画质</span><span id="set-quality">—</span></div>
+          <div class="kv last"><span class="muted">客户端版本</span><span>0.1.1 · Tauri / Rust</span></div>
+        </div>
+        <div class="card">
+          <div class="card-title">关于采集</div>
+          <div class="muted small" style="line-height:1.8">
+            采集走 macOS ScreenCaptureKit 原生接口，H.264 单层发布，带宽吃紧时优先保帧率。<br />
+            首次开启投送需在「系统设置 → 隐私与安全性 → 屏幕录制」中授权本应用。
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

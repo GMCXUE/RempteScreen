@@ -1,0 +1,38 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.remotescreen.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.remotescreen.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        debug {
+            // 调试包直接可装，用于自测与内部试用
+        }
+        release {
+            minifyEnabled false
+            // 用调试签名，保证产出的 APK 可以直接安装试用。
+            // 要正式分发必须换成自己的签名证书，否则无法上架也无法升级覆盖安装。
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // 这个工程没有 Java 源的资源混淆需求，关掉 lint 阻断以免无关告警挡住构建
+    lint {
+        abortOnError false
+    }
+}

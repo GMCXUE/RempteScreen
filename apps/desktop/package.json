@@ -1,0 +1,21 @@
+{
+  "name": "remotescreen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RemoteScreen 桌面端：投送本机屏幕，或观看其他设备的屏幕",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "start:remote": "REMOTESCREEN_SERVER=http://91.208.104.182 electron .",
+    "vendor": "node scripts/vendor.mjs",
+    "selftest": "env -u ELECTRON_RUN_AS_NODE electron . --self-test --no-sandbox",
+    "selftest:viewer": "env -u ELECTRON_RUN_AS_NODE electron . --self-test-viewer --no-sandbox",
+    "package:win": "node scripts/package.mjs win32 x64",
+    "package:mac": "node scripts/package.mjs darwin arm64"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.7.0",
+    "livekit-client": "^2.22.3"
+  }
+}

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src *;" />
+  <title>RemoteScreen</title>
+
+  <!-- 让手机可以「添加到主屏幕」，点开就是全屏应用，不再有浏览器地址栏 -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/favicon.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="theme-color" content="#22303f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="RemoteScreen" />
+
+  <link rel="stylesheet" href="styles.css?v=0.2.0" />
+</head>
+<body>
+
+  <!-- 左侧导航栏 -->
+  <aside class="sidebar">
+    <button class="profile" id="account-button" type="button">
+      <span class="avatar" id="account-avatar">?</span>
+      <span class="profile-name" id="account-name">立即登录</span>
+    </button>
+
+    <nav class="nav">
+      <button class="nav-item active" data-page="share" type="button">
+        <span class="nav-icon nav-icon-share" aria-hidden="true"></span>远程投送
+      </button>
+      <button class="nav-item" data-page="devices" type="button">
+        <span class="nav-icon nav-icon-devices" aria-hidden="true"></span>我的设备
+      </button>
+      <button class="nav-item" data-page="settings" type="button">
+        <span class="nav-icon nav-icon-settings" aria-hidden="true"></span>投送设置
+      </button>
+    </nav>
+
+    <div class="sidebar-brand">
+      <span class="brand-mark" aria-hidden="true"></span>RemoteScreen
+    </div>
+  </aside>
+
+  <!-- 主区域 -->
+  <div class="main">
+    <header class="topbar">
+      <span class="dot" id="heartbeat-dot"></span>
+      <span id="connection-label" class="muted small">正在初始化…</span>
+      <button id="logout-button" class="ghost hidden" type="button">退出登录</button>
+    </header>
+
+    <!-- 页面：远程投送 -->
+    <div class="page" id="page-share">
+      <section class="card">
+        <div class="row-between">
+          <h2 class="section-title">允许远程观看本设备</h2>
+          <label class="switch">
+            <input type="checkbox" id="share-toggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <p class="section-sub">打开后，其他设备就能看到这台电脑的屏幕</p>
+        <p id="capture-note" class="capture-note hidden"></p>
+
+        <div class="cred-grid">
+          <div class="cred">
+            <div class="cred-label">设备代码</div>
+            <div class="cred-value">
+              <span id="device-id">— — —</span>
+              <button id="copy-device-id" class="text-button" type="button">复制</button>
+            </div>
+          </div>
+          <div class="cred">
+            <div class="cred-label">连接密码</div>
+            <div class="cred-value">
+              <span id="password">— — —</span>
+              <button id="toggle-password" class="text-button" type="button">显示</button>
+              <button id="refresh-password" class="text-button" type="button">换一个</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="meta-row">
+          <span id="device-name" class="muted small"></span>
+          <span class="meta-right">
+            <span class="muted small">观看 <b id="viewers">0</b> 人</span>
+            <span id="share-status" class="badge">未投送</span>
+          </span>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="row-between">
+          <h2 class="section-title">连接其他设备</h2>
+          <span class="ready-badge">已准备好连接</span>
+        </div>
+
+        <div id="connect-pane">
+          <div class="connect-row">
+            <input id="remote-device-id" type="text" inputmode="numeric" autocomplete="off"
+                   maxlength="9" placeholder="请输入对方设备代码" />
+            <button id="connect" class="connect-button" type="button">连接</button>
+          </div>
+
+          <input id="remote-password" class="password-input" type="text" autocomplete="off"
+                 maxlength="6" placeholder="连接密码（连自己的设备可留空）" />
+
+          <p id="error" class="error" role="alert"></p>
+        </div>
+
+        <!-- 连上后画面替换掉连接表单 -->
+        <div id="stage" class="stage hidden">
+          <video id="screen" autoplay playsinline muted></video>
+
+          <div id="overlay" class="overlay">
+            <div class="overlay-left">
+              <span class="dot on"></span>
+              <span id="peer-name">已连接</span>
+              <span id="quality" class="muted"></span>
+            </div>
+            <div class="overlay-right">
+              <button id="unmute" class="ghost hidden" type="button">开启声音</button>
+              <button id="fullscreen" class="ghost" type="button">全屏</button>
+              <button id="disconnect" class="ghost danger" type="button">断开</button>
+            </div>
+          </div>
+
+          <div id="waiting" class="waiting">
+            <div class="spinner"></div>
+            <p>正在等待画面…</p>
+            <p class="hint small">请确认对方已经打开投送开关</p>
+          </div>
+        </div>
+      </section>
+
+      <p id="message" class="message"></p>
+    </div>
+
+    <!-- 页面：我的设备 -->
+    <div class="page hidden" id="page-devices">
+      <section class="card">
+        <div class="row-between">
+          <h2 class="section-title">我的设备</h2>
+          <button id="refresh-devices" class="text-button" type="button">刷新</button>
+        </div>
+        <p class="section-sub">绑定在你账号下的所有设备，在线的可直接连接</p>
+        <div id="my-devices" class="device-list"></div>
+      </section>
+    </div>
+
+    <!-- 页面：投送设置 -->
+    <div class="page hidden" id="page-settings">
+      <section class="card">
+        <div class="row-between">
+          <h2 class="section-title">选择要投送的内容</h2>
+          <button id="reload-sources" class="text-button" type="button">重新扫描</button>
+        </div>
+        <p class="section-sub">投送过程中不能修改，需要先关闭「允许远程观看」</p>
+        <div id="sources" class="sources"></div>
+      </section>
+
+      <section class="card">
+        <h2 class="section-title">画质与编码</h2>
+        <div class="options">
+          <label>
+            <span>分辨率</span>
+            <select id="resolution">
+              <option value="source">跟随屏幕原始尺寸</option>
+              <option value="2560x1440">2560 × 1440</option>
+              <option value="1920x1080">1920 × 1080</option>
+              <option value="1280x720">1280 × 720</option>
+            </select>
+          </label>
+          <label>
+            <span>帧率</span>
+            <select id="framerate">
+              <option value="15">15 fps</option>
+              <option value="30">30 fps（上限，受浏览器采集限制）</option>
+            </select>
+          </label>
+          <label>
+            <span>画质</span>
+            <select id="quality">
+              <option value="smooth">流畅 · 1.5 Mbps</option>
+              <option value="balanced">均衡 · 3 Mbps</option>
+              <option value="sharp">高清 · 6 Mbps</option>
+            </select>
+          </label>
+          <label>
+            <span>编码格式</span>
+            <select id="codec">
+              <option value="h264">H.264（硬件编解码）</option>
+              <option value="vp8">VP8（软件编码）</option>
+              <option value="vp9">VP9（压缩率高）</option>
+            </select>
+          </label>
+        </div>
+        <p class="muted small options-note">改动会在下一次打开「允许远程观看」时生效</p>
+
+        <label class="switch-row">
+          <input id="system-audio" type="checkbox" checked />
+          <span>同时传输电脑的声音</span>
+          <em id="audio-note" class="muted small"></em>
+        </label>
+      </section>
+
+      <section class="card">
+        <h2 class="section-title">服务器地址</h2>
+        <p class="section-sub">账号与媒体转发的地址，一般不需要改</p>
+        <input id="server-url" type="text" placeholder="http://127.0.0.1:8787" />
+      </section>
+    </div>
+  </div>
+
+  <!-- 账号弹层 -->
+  <div id="account-modal" class="modal hidden">
+    <div class="modal-backdrop" data-dismiss="1"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <h2 id="modal-title">登录</h2>
+        <button class="icon-button" id="modal-close" type="button" aria-label="关闭">✕</button>
+      </div>
+
+      <div id="auth-pane">
+        <div class="tabs" role="tablist">
+          <button id="tab-login" class="tab active" type="button">登录</button>
+          <button id="tab-register" class="tab" type="button">注册</button>
+        </div>
+
+        <label for="auth-email">邮箱</label>
+        <input id="auth-email" type="email" autocomplete="username" placeholder="you@example.com" />
+
+        <div id="name-field" class="hidden">
+          <label for="auth-name">昵称</label>
+          <input id="auth-name" type="text" autocomplete="nickname" placeholder="怎么称呼你" />
+        </div>
+
+        <label for="auth-password">密码</label>
+        <input id="auth-password" type="password" autocomplete="current-password" placeholder="至少 8 位" />
+
+        <button id="auth-submit" class="primary" type="button">登录</button>
+        <p id="auth-error" class="error" role="alert"></p>
+      </div>
+
+      <div id="account-pane" class="hidden">
+        <div class="account-card">
+          <div class="account-avatar" id="account-pane-avatar">?</div>
+          <div>
+            <div id="account-pane-name" class="account-name">—</div>
+            <div id="account-email" class="muted small">—</div>
+          </div>
+        </div>
+        <p class="muted small">设备都绑定在这个账号下。换台设备登录，就能看到同一份设备列表。</p>
+        <button id="account-logout" class="ghost danger" type="button">退出登录</button>
+      </div>
+    </div>
+  </div>
+
+  <audio id="audio" autoplay></audio>
+
+  <script src="vendor/livekit-client.umd.js?v=0.2.0"></script>
+  <script src="api.js?v=0.2.0"></script>
+  <script src="app.js?v=0.2.0"></script>
+</body>
+</html>

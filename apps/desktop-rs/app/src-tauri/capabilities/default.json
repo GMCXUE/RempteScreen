@@ -1,0 +1,13 @@
+{
+  "identifier": "default",
+  "description": "主窗口默认权限",
+  "windows": [
+    "main",
+    "viewer"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-close"
+  ]
+}

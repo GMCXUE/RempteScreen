@@ -1,0 +1,44 @@
+# Caddy 反向代理配置：一个域名同时承载 API 与 LiveKit 信令，自动申请 TLS 证书。
+#
+# 路由刻意做成白名单：只有 /v1/* 与 /rtc* 可达，其余一律 404。
+# 特别是 LiveKit 的 /twirp/* 管理接口**不对外暴露** —— 它需要管理员令牌，
+# 但没有任何理由让它出现在公网上。需要诊断时走 SSH 隧道访问 127.0.0.1:7880。
+
+{$DOMAIN} {
+	encode gzip
+
+	# 设备目录服务
+	@api path /v1/*
+	handle @api {
+		reverse_proxy device-service:8787
+	}
+
+	# 接收端页面：手机浏览器直接打开即可观看，不需要安装任何东西。
+	# 它只是一个查看器，真正的鉴权靠设备目录服务下发的令牌。
+	@viewer path /viewer /viewer/*
+	handle @viewer {
+		root * /srv/viewer
+		uri strip_prefix /viewer
+		file_server
+		# 界面文件不加浏览器缓存：改版后用户刷新即可拿到新代码，
+		# 否则会出现「HTML 是新的、JS 是旧的」这类最难排查的状态
+		header Cache-Control "no-cache"
+	}
+
+	# LiveKit 信令 WebSocket。
+	# LiveKit 客户端会把连接地址拼上 /rtc，所以只需要放通这个前缀。
+	@livekit path /rtc /rtc/*
+	handle @livekit {
+		reverse_proxy livekit:7880
+	}
+
+	# 其余路径不对外提供，直接拒绝，避免暴露管理面
+	handle {
+		respond "RemoteScreen" 404
+	}
+
+	log {
+		output stderr
+		format console
+	}
+}
