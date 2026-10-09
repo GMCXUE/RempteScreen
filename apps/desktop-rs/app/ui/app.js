@@ -579,7 +579,32 @@ async function refreshDevices() {
       refreshDevices();
     });
 
-    actions.append(watchBtn, renameBtn);
+    const unbindBtn = document.createElement("button");
+    unbindBtn.className = "ghost danger";
+    unbindBtn.textContent = "解绑";
+    unbindBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const isLocal = ownDeviceId && device.deviceId === ownDeviceId;
+      const confirmed = await askDialog({
+        title: `解绑「${device.name || "未命名设备"}」`,
+        message: isLocal
+          ? "这是本机：解绑后将停止投送，本机凭据一并清除，下次启动会重新注册成一台新设备（设备代码会变）。"
+          : "解绑后该设备将从你的账号中移除，需要在那台设备上重新登录才能恢复。",
+        confirmText: "解绑",
+        danger: true,
+      });
+      if (!confirmed) return;
+      try {
+        await invoke("unbind_device", { deviceId: device.deviceId });
+      } catch (problem) {
+        await askDialog({ title: "解绑失败", message: String(problem), confirmText: "知道了", hideCancel: true });
+        return;
+      }
+      refreshDevices();
+      refresh();
+    });
+
+    actions.append(watchBtn, renameBtn, unbindBtn);
     item.append(main, actions);
     list.appendChild(item);
   }

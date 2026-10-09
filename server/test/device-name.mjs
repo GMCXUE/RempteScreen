@@ -124,6 +124,26 @@ try {
     })
   ).body;
   check('新设备仍采用上报的名字', fresh.deviceName === '新电脑', fresh.deviceName);
+
+  // 账号主人解绑（用于清理离线/已卸载的旧设备）
+  const detached = await api('DELETE', `/v1/devices/${fresh.deviceId}`, { token: account.token });
+  check('账号主人可解绑设备', detached.status === 200 && detached.body.removed === true, `by=${detached.body.by}`);
+
+  list = ((await api('GET', '/v1/devices', { token: account.token })).body.devices ?? []);
+  check('解绑后列表里不再有该设备', !list.some((item) => item.deviceId === fresh.deviceId));
+
+  // 别人的设备不能被解绑
+  const other = (
+    await api('POST', '/v1/auth/register', {
+      body: { email: 'other@example.com', password: 'other-secret-1', name: '别人' },
+    })
+  ).body;
+  const foreign = await api('DELETE', `/v1/devices/${deviceId}`, { token: other.token });
+  check('不能解绑别人的设备', foreign.status === 404, `HTTP ${foreign.status}`);
+
+  // 无任何凭据时也不能解绑
+  const anonymous = await api('DELETE', `/v1/devices/${deviceId}`);
+  check('无凭据不能解绑', anonymous.status === 401, `HTTP ${anonymous.status}`);
 } finally {
   child.kill('SIGTERM');
   await new Promise((resolve) => setTimeout(resolve, 400));

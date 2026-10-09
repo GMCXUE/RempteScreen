@@ -138,6 +138,19 @@ export async function unregister(deviceId, sessionToken) {
   return { removed: true };
 }
 
+/**
+ * 账号侧解绑设备：设备离线（甚至已卸载）时，设备自己无法解绑，
+ * 需要账号主人能把它从名下移除。
+ */
+export async function detachDevice(deviceId, userId) {
+  const record = await findDevice(deviceId);
+  if (!record) return { error: 'not_found' };
+  if (record.user_id !== userId) return { error: 'not_found' }; // 不暴露他人设备是否存在
+
+  await getPool().query('DELETE FROM devices WHERE device_id = $1', [deviceId]);
+  return { removed: true, record };
+}
+
 /** 刷新连接密码，旧密码立即失效。 */
 export async function refreshPassword(deviceId, sessionToken) {
   const result = await requireOwnership(deviceId, sessionToken);

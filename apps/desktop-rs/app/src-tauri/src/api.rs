@@ -167,6 +167,22 @@ pub fn rename_device(token: &str, device_id: &str, name: &str) -> Result<(), Str
     .map(|_| ())
 }
 
+/// 账号侧解绑设备（设备离线/已卸载时也能清理）。
+pub fn unbind_device(token: &str, device_id: &str) -> Result<(), String> {
+    let url = format!("{SERVER_URL}/v1/devices/{device_id}");
+    let response = ureq::delete(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .set("Authorization", &format!("Bearer {token}"))
+        .call()
+        .map_err(|error| format!("{error}"))?;
+    let text = response.into_string().map_err(|error| error.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    if let Some(error) = parsed.get("error") {
+        return Err(error["message"].as_str().unwrap_or("解绑失败").to_string());
+    }
+    Ok(())
+}
+
 /// 补齐账号展示信息（本地凭据里缺失时用，同时验证令牌是否仍然有效）。
 pub fn fetch_me(token: &str) -> Result<(String, String), String> {
     let result = get_json("/v1/me", token)?;

@@ -231,6 +231,47 @@ fn rename_device(device_id: String, name: String, state: tauri::State<AppState>)
     Ok(())
 }
 
+/// 解绑设备。若解绑的是本机，则同时停掉投送与观看并清空本机凭据
+///（下次启动会被当作新设备重新注册，拿到新的设备代码）。
+#[tauri::command]
+fn unbind_device(device_id: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let token = state
+        .creds
+        .lock()
+        .unwrap()
+        .account_token
+        .clone()
+        .ok_or("请先登录")?;
+    api::unbind_device(&token, &device_id)?;
+
+    let is_local = state
+        .registration
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|registration| registration.device_id == device_id)
+        .unwrap_or(false);
+
+    if is_local {
+        if let Some(stop) = state.heartbeat_stop.lock().unwrap().take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(session) = state.session.lock().unwrap().take() {
+            session.stop();
+        }
+        if let Some(session) = state.watch.lock().unwrap().take() {
+            session.stop();
+        }
+        *state.registration.lock().unwrap() = None;
+        *state.frames.lock().unwrap() = None;
+        let mut creds = state.creds.lock().unwrap();
+        creds.device_id = None;
+        creds.device_session_token = None;
+        api::save_creds(&creds);
+    }
+    Ok(())
+}
+
 // MARK: - 观看历史
 
 #[tauri::command]
@@ -944,6 +985,7 @@ fn main() {
             logout,
             list_devices,
             rename_device,
+            unbind_device,
             get_history,
             clear_history,
             forget_device

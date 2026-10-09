@@ -310,12 +310,27 @@ export async function decideConnectRequest({ body, params }) {
   return ok({ approved: true });
 }
 
-/** DELETE /v1/devices/:deviceId —— 设备主动解绑。 */
-export async function unregisterDevice({ body, params }) {
+/**
+ * DELETE /v1/devices/:deviceId
+ *
+ * 两条路径：
+ *   设备自己解绑 —— 带设备 sessionToken
+ *   账号主人解绑 —— 带账号令牌（用于清理离线/已卸载的旧设备，设备自己没法解绑）
+ */
+export async function unregisterDevice({ body, params, request }) {
+  const user = await currentUser(request);
+
+  if (user) {
+    const owned = await store.detachDevice(params.deviceId, user.id);
+    if (owned.removed) return ok({ removed: true, by: 'owner' });
+    // 带了账号令牌却删不掉：要么不存在，要么不属于他 —— 一律 404，不泄漏设备是否存在
+    return fail(404, 'device_unknown', '设备不存在或不属于你');
+  }
+
   const result = await store.unregister(params.deviceId, body?.sessionToken);
   if (result.error === 'device_unknown') return fail(404, 'device_unknown', '设备不存在或已解绑');
   if (result.error === 'unauthorized') return fail(401, 'unauthorized', '设备凭据无效');
-  return ok({ removed: true });
+  return ok({ removed: true, by: 'device' });
 }
 
 /** POST /v1/devices/:deviceId/password —— 刷新连接密码，旧密码立即失效。 */
