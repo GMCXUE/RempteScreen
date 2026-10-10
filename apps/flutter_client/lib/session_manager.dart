@@ -458,17 +458,35 @@ class SessionManager extends ChangeNotifier {
     );
     _publishRoom = room;
 
+    List<LocalTrack> tracks = [];
     try {
       await room.connect(reg.livekitUrl, reg.publishToken);
-      // Publish both tracks returned by native display capture. Android requests
-      // RECORD_AUDIO and MediaProjection permission for internal playback audio.
-      await room.localParticipant!.setScreenShareEnabled(
-        true,
-        captureScreenAudio: true,
-        screenShareCaptureOptions: shareSettings.toCaptureOptions(),
+      // Create audio/video together so they share one MediaProjection grant.
+      tracks = await LocalVideoTrack.createScreenShareTracksWithAudio(
+        shareSettings.toCaptureOptions(),
       );
+      for (final track in tracks) {
+        if (track is LocalAudioTrack) {
+          // Screen audio is music/media, not a voice call. Configure this before
+          // publish starts the native audio engine so voice suppression stays off.
+          track.currentOptions = const AudioCaptureOptions(
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            voiceIsolation: false,
+            typingNoiseDetection: false,
+          );
+          await room.localParticipant!.publishAudioTrack(track);
+        } else if (track is LocalVideoTrack) {
+          await room.localParticipant!.publishVideoTrack(track);
+        }
+      }
     } catch (_) {
       _publishRoom = null;
+      // Also release tracks that were created but not published when setup failed.
+      for (final track in tracks) {
+        await track.stop();
+      }
       await room.disconnect();
       await room.dispose();
       notifyListeners();
@@ -482,6 +500,7 @@ class SessionManager extends ChangeNotifier {
     final room = _publishRoom;
     _publishRoom = null;
     await room?.disconnect();
+    await room?.dispose();
     notifyListeners();
   }
 

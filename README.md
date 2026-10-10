@@ -86,12 +86,32 @@ npx @tauri-apps/cli build     # 产出 .app 与 DMG
 
 首次开启投送需在「系统设置 → 隐私与安全性 → 屏幕录制」授权本应用。
 
+macOS 构建会自动编译并打包 `macos-audio-capture` 辅助程序。分发时请复制完整的
+`.app`，不要只复制 Rust 可执行文件，否则缺少系统音频采集器。
+
 ### 4. 移动端
 
 ```bash
 cd apps/flutter_client
 flutter build apk --debug --target-platform android-arm64
 ```
+
+### 投屏声音
+
+- **Mac 发布**：ScreenCaptureKit 采集系统声音，辅助程序输出 48 kHz 单声道 Int16 PCM，
+  Rust 按每帧 480 个采样发布 `screen_share_audio` 音轨；不使用麦克风或虚拟声卡。
+- **Android 发布**：Android 10+ 的 AudioPlaybackCapture 与视频共用一次 MediaProjection
+  授权，通过 WebRTC 外部 PCM 回调发送内部声音。需授予系统要求的录音权限，
+  实际采集对象为应用播放声音，不会回退到麦克风。
+- **Mac 观看**：观看会话持有 `PlatformAudio`，启用扬声器播放；音轨订阅成功本身并不代表已经播放。
+- Android 只能捕获允许录制的媒体/游戏等声音；禁止播放捕获的应用与受保护内容可能仍然静音。
+  参见 [Android 官方说明](https://developer.android.com/media/platform/av-capture)。
+
+诊断时检查发送端的音频帧数和峰值，以及接收端的非零 PCM；不能只看「音频轨已发布」。
+Mac 日志位于 `~/.remotescreen-rs.log`，Android 日志标签为 `PlaybackAudioCapture`。
+Rust 的 `cargo test` 验证 PCM 格式；连接本地 LiveKit 开发服务后可运行
+`RS_AUDIO_TEST_URL=ws://127.0.0.1:17880 cargo test audio_roundtrip -- --ignored --nocapture`
+验证 440 Hz 测试音的完整发布/订阅链路（开发服务使用 `devkey` / `secret`）。
 
 ## 环境依赖
 

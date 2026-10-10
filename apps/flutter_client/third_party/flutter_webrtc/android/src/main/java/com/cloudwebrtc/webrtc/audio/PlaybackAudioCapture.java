@@ -11,6 +11,7 @@ import android.util.Log;
 import androidx.annotation.RequiresApi;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.concurrent.locks.LockSupport;
 import org.webrtc.audio.JavaAudioDeviceModule;
 
 /** Supplies internal playback PCM to WebRTC without opening its microphone recorder. */
@@ -18,7 +19,8 @@ public final class PlaybackAudioCapture implements JavaAudioDeviceModule.AudioBu
     public static final int SAMPLE_RATE = 48000;
     private static final String TAG = "PlaybackAudioCapture";
     private AudioRecord recorder;
-    private boolean screenAudio;
+    private volatile boolean screenAudio;
+    private long nextFrameNs;
     private boolean readErrorReported;
     private int frames;
     private int peak;
@@ -61,6 +63,7 @@ public final class PlaybackAudioCapture implements JavaAudioDeviceModule.AudioBu
     }
 
     public synchronized void stop() {
+        screenAudio = true;
         if (recorder != null) {
             try { recorder.stop(); } catch (IllegalStateException ignored) { }
             recorder.release();
@@ -72,25 +75,34 @@ public final class PlaybackAudioCapture implements JavaAudioDeviceModule.AudioBu
     }
 
     @Override
-    public synchronized long onBuffer(ByteBuffer buffer, int format, int channels,
+    public long onBuffer(ByteBuffer buffer, int format, int channels,
                                       int sampleRate, int bytesRead, long timestampNs) {
         if (!screenAudio) return timestampNs;
-        for (int i = 0; i < buffer.capacity(); i++) buffer.put(i, (byte) 0);
-        if (recorder == null || format != AudioFormat.ENCODING_PCM_16BIT
-                || channels != 1 || sampleRate != SAMPLE_RATE) return timestampNs;
-        buffer.clear();
-        int count = recorder.read(buffer, buffer.capacity(), AudioRecord.READ_NON_BLOCKING);
-        if (count < 0 && !readErrorReported) {
-            Log.e(TAG, "Internal audio read failed: " + count);
-            readErrorReported = true;
+        // With setAudioRecordEnabled(false), WebRTC no longer has a blocking mic
+        // read to pace its loop. Supply exactly one buffer per audio frame interval.
+        long now = System.nanoTime();
+        long frameNs = buffer.capacity() * 1_000_000_000L / (2L * channels * sampleRate);
+        if (nextFrameNs < now - frameNs) nextFrameNs = now;
+        while ((now = System.nanoTime()) < nextFrameNs) LockSupport.parkNanos(nextFrameNs - now);
+        nextFrameNs += frameNs;
+        synchronized (this) {
+            for (int i = 0; i < buffer.capacity(); i++) buffer.put(i, (byte) 0);
+            if (recorder == null || format != AudioFormat.ENCODING_PCM_16BIT
+                    || channels != 1 || sampleRate != SAMPLE_RATE) return timestampNs;
+            buffer.clear();
+            int count = recorder.read(buffer, buffer.capacity(), AudioRecord.READ_NON_BLOCKING);
+            if (count < 0 && !readErrorReported) {
+                Log.e(TAG, "Internal audio read failed: " + count);
+                readErrorReported = true;
+            }
+            buffer.order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i + 1 < count; i += 2) peak = Math.max(peak, Math.abs((int) buffer.getShort(i)));
+            if (++frames % 500 == 0) {
+                Log.i(TAG, "Internal audio: " + frames + " frames, peak=" + peak);
+                peak = 0;
+            }
+            buffer.rewind();
+            return System.nanoTime();
         }
-        buffer.order(ByteOrder.LITTLE_ENDIAN);
-        for (int i = 0; i + 1 < count; i += 2) peak = Math.max(peak, Math.abs((int) buffer.getShort(i)));
-        if (++frames % 500 == 0) {
-            Log.i(TAG, "Internal audio: " + frames + " frames, peak=" + peak);
-            peak = 0;
-        }
-        buffer.rewind();
-        return System.nanoTime();
     }
 }

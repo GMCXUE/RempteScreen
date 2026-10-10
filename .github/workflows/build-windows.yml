@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # VS 2026（windows-latest）的 MSVC 14.51 无法编译 webrtc-sys 的 C++ 文件，
+    # 用 VS 2022 镜像（webrtc 官方支持的编译器版本）
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
