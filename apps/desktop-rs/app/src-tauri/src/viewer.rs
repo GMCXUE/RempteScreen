@@ -3,6 +3,7 @@
 // 前端通过自定义协议 frame://localhost/latest 每帧拉取最新 JPEG 绘制到 canvas。
 // 这样避免把整帧原始像素（1080p RGBA 约 8MB）经 IPC 传给 WebView —— 那会直接压垮通道。
 use futures_util::StreamExt;
+#[cfg(target_os = "macos")]
 use mozjpeg::{ColorSpace, Compress};
 use livekit::prelude::*;
 use livekit::webrtc::prelude::VideoBuffer;
@@ -241,23 +242,8 @@ async fn run_watch(
             stride_v as usize,
         );
 
-        // libjpeg-turbo（mozjpeg）编码：比纯软件编码器快 2~3 倍，这是帧率的关键
         let encode_start = Instant::now();
-        let mut compress = Compress::new(ColorSpace::JCS_RGB);
-        // mozjpeg 默认开 trellis 等慢速优化（实测编码 78ms/帧），
-        // 切到 FASTEST 档位后降到几毫秒 —— 实时投屏优先帧率
-        compress.set_fastest_defaults();
-        compress.set_size(out_width, out_height);
-        compress.set_quality(75.0);
-        let mut started = compress
-            .start_compress(Vec::new())
-            .map_err(|error| format!("JPEG 初始化失败: {error}"))?;
-        started
-            .write_scanlines(&rgb)
-            .map_err(|error| format!("JPEG 编码失败: {error}"))?;
-        jpeg = started
-            .finish()
-            .map_err(|error| format!("JPEG 收尾失败: {error}"))?;
+        jpeg = encode_jpeg(&rgb, out_width, out_height);
         let encode_ms = encode_start.elapsed().as_secs_f32() * 1000.0;
         let convert_ms = convert_start.elapsed().as_secs_f32() * 1000.0 - encode_ms;
         *frames.lock().unwrap() = Some(jpeg.clone());
@@ -286,4 +272,34 @@ async fn run_watch(
     let _ = room.close().await;
     println!("[viewer] 会话已结束");
     Ok(())
+}
+
+
+/// 把 RGB 帧编码为 JPEG。
+/// macOS 用 mozjpeg（libjpeg-turbo，快 2~3 倍，帧率关键）；
+/// 其他平台（Windows 交叉编译）用纯 Rust 的 jpeg-encoder（无 C 依赖）。
+#[cfg(target_os = "macos")]
+fn encode_jpeg(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut compress = Compress::new(ColorSpace::JCS_RGB);
+    // mozjpeg 默认开 trellis 等慢速优化（实测编码 78ms/帧），
+    // 切到 FASTEST 档位后降到几毫秒 —— 实时投屏优先帧率
+    compress.set_fastest_defaults();
+    compress.set_size(width, height);
+    compress.set_quality(75.0);
+    let mut started = compress
+        .start_compress(Vec::new())
+        .expect("JPEG 初始化失败");
+    started.write_scanlines(rgb).expect("JPEG 编码失败");
+    started.finish().expect("JPEG 收尾失败")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn encode_jpeg(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    use jpeg_encoder::{ColorType, Encoder};
+    let mut jpeg = Vec::new();
+    let encoder = Encoder::new(&mut jpeg, 75);
+    encoder
+        .encode(rgb, width as u16, height as u16, ColorType::Rgb)
+        .expect("JPEG 编码失败");
+    jpeg
 }

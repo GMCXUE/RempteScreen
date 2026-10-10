@@ -20,5 +20,8 @@ sha2 = "0.10"
 base64 = "0.22"
 dirs = "5"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
-mozjpeg = "0.10"
+jpeg-encoder = "0.6"
 futures-util = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+mozjpeg = "0.10.13"
