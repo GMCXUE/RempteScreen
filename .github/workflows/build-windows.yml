@@ -62,7 +62,7 @@ jobs:
             Copy-Item "apps/desktop-rs/app/src-tauri/target/release/bundle/nsis/RemoteScreen_0.1.0_x64-setup.exe" "dist/"
           }
           if (Test-Path "apps/desktop-rs/app/build-log.txt") { Copy-Item "apps/desktop-rs/app/build-log.txt" dist/ }
-          git add dist 2>$null
+          git add -f dist 2>$null
           git commit -m "windows build ($env:GITHUB_RUN_ID)" 2>$null
           git push origin HEAD:dist
         env:
