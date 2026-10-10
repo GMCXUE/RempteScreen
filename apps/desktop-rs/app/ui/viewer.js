@@ -102,25 +102,38 @@ document.addEventListener("mousemove", (event) => {
 setInterval(updateControls, 400);
 updateControls();
 
-$("audio-btn").addEventListener("click", async () => {
-  audioOn = !audioOn;
-  let available = true;
+// 音量滑块：实时设置播放音量（0-100）
+let lastVolume = Number($("volume").value) || 100;
+
+async function applyVolume(value) {
   try {
-    available = await invoke("set_audio_enabled", { enabled: audioOn });
+    await invoke("set_volume", { volume: value });
+    const muted = value === 0;
+    $("audio-btn").classList.toggle("on", !muted);
+    $("audio-btn").classList.toggle("muted", muted);
+    $("audio-label").textContent = muted ? "静音" : "声音";
+    audioOn = !muted;
   } catch {
-    available = false;
+    // 调用失败不改变状态
   }
-  $("audio-btn").classList.toggle("on", audioOn && available);
-  $("audio-label").textContent = available ? (audioOn ? "声音" : "静音") : "无声音";
-  if (!available) {
-    $("audio-btn").classList.add("muted");
+}
+
+$("audio-btn").addEventListener("click", async () => {
+  // 静音开关：静音时记住之前的音量，取消静音时恢复
+  if (audioOn) {
+    lastVolume = Number($("volume").value) || 100;
+    $("volume").value = 0;
+    await applyVolume(0);
+  } else {
+    const restore = lastVolume > 0 ? lastVolume : 100;
+    $("volume").value = restore;
+    await applyVolume(restore);
   }
 });
 
-$("volume").addEventListener("input", () => {
-  // 音频播放能力待投送端支持后接入，这里先保留界面与状态
-  const label = Number($("volume").value) === 0 ? "静音" : "声音";
-  $("audio-label").textContent = label;
+$("volume").addEventListener("input", async () => {
+  const value = Number($("volume").value);
+  await applyVolume(value);
 });
 
 $("fit-btn").addEventListener("click", () => {

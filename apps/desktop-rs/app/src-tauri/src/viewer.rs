@@ -51,6 +51,7 @@ pub fn start_watch(
     frames: FrameStore,
     stats: Arc<Mutex<WatchStats>>,
     audio: AudioTrackStore,
+    volume: crate::audio_playout::Volume,
 ) -> Result<WatchSession, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
@@ -60,7 +61,7 @@ pub fn start_watch(
 
     tauri::async_runtime::spawn(async move {
         if let Err(error) =
-            run_watch(&url, &token, &device_name, stop_clone, &frames, &stats, &audio).await
+            run_watch(&url, &token, &device_name, stop_clone, &frames, &stats, &audio, volume).await
         {
             eprintln!("[viewer] 会话异常结束: {error}");
             log_to_file(&format!("观看会话异常结束: {error}"));
@@ -130,17 +131,18 @@ async fn run_watch(
     frames: &FrameStore,
     stats: &Arc<Mutex<WatchStats>>,
     audio: &AudioTrackStore,
+    volume: crate::audio_playout::Volume,
 ) -> Result<(), String> {
-    // Receiving a track alone does not enable hardware playout in the Rust SDK.
-    // Keep this handle alive until the watching session ends; no microphone is opened.
-    let _playout = PlatformAudio::new()
-        .map_err(|error| format!("初始化扬声器播放失败: {error}"))?;
+    // 音频改由自管播放（audio_playout）：NativeAudioStream 拉帧 → cpal 输出，
+    // 音量可控（ADM 扬声器无法调音量），输出走系统默认设备（系统音量也生效）。
     let (room, mut events) = Room::connect(url, token, RoomOptions::default())
         .await
         .map_err(|error| format!("连接失败: {error}"))?;
 
     // 等订阅到对方的视频轨：对方同意后可能还要过系统级的屏幕录制授权弹窗，
     // 所以给足 60 秒，避免"人都同意了，画面却被超时挡掉"。
+    // 自管音频播放句柄：保活即播放，离开作用域即停止
+    let mut playout: Option<crate::audio_playout::PlayoutHandle> = None;
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut video_track = None;
     while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
@@ -151,7 +153,11 @@ async fn run_watch(
                     break;
                 }
                 RemoteTrack::Audio(track) => {
-                    // 对方推了音频：记下句柄，界面上的「声音」开关控制它
+                    // 对方推了音频：记下句柄并启动自管播放（音量由 UI 滑块控制）
+                    match crate::audio_playout::start(&track, volume.clone()) {
+                        Ok(p) => playout = Some(p),
+                        Err(error) => log_to_file(&format!("启动音频播放失败: {error}")),
+                    }
                     *audio.lock().unwrap() = Some(track);
                 }
                 _ => {}
@@ -177,6 +183,10 @@ async fn run_watch(
         while !audio_stop.load(Ordering::Relaxed) {
             match tokio::time::timeout(Duration::from_millis(500), events.recv()).await {
                 Ok(Some(RoomEvent::TrackSubscribed { track: RemoteTrack::Audio(track), .. })) => {
+                    match crate::audio_playout::start(&track, volume.clone()) {
+                        Ok(p) => playout = Some(p),
+                        Err(error) => log_to_file(&format!("启动音频播放失败: {error}")),
+                    }
                     *audio_sink.lock().unwrap() = Some(track);
                 }
                 Ok(Some(_)) => {}

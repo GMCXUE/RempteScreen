@@ -4,6 +4,7 @@
 // 前端只是个壳，通过 invoke 调命令、轮询状态渲染界面。
 mod api;
 mod publisher;
+mod audio_playout;
 mod viewer;
 #[cfg(target_os = "macos")]
 mod system_audio;
@@ -27,6 +28,7 @@ struct AppState {
     frames: viewer::FrameStore,
     watch_stats: Arc<Mutex<viewer::WatchStats>>,
     audio: viewer::AudioTrackStore,
+    volume: audio_playout::Volume,
     /// 正在等待对方同意的连接请求（界面据此显示「等待同意」）
     pending_request: Arc<Mutex<Option<PendingRequest>>>,
     /// 别人发给我们这台设备的观看请求（待同意）
@@ -553,6 +555,7 @@ fn start_watch(
         state.frames.clone(),
         state.watch_stats.clone(),
         state.audio.clone(),
+        state.volume.clone(),
     )?;
     *state.watch.lock().unwrap() = Some(session);
     Ok(ticket.device_name)
@@ -633,6 +636,7 @@ fn request_approval(
                         state.frames.clone(),
                         state.watch_stats.clone(),
                         state.audio.clone(),
+                        state.volume.clone(),
                     ) {
                         Ok(session) => {
                             *state.watch.lock().unwrap() = Some(session);
@@ -757,6 +761,15 @@ fn set_audio_enabled(enabled: bool, state: tauri::State<AppState>) -> Result<boo
 }
 
 #[tauri::command]
+fn set_volume(volume: u8, state: tauri::State<AppState>) -> Result<bool, String> {
+    let volume = volume.min(100);
+    state
+        .volume
+        .store(volume, std::sync::atomic::Ordering::Relaxed);
+    Ok(true)
+}
+
+#[tauri::command]
 fn has_audio(state: tauri::State<AppState>) -> bool {
     state.audio.lock().unwrap().is_some()
 }
@@ -851,6 +864,7 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
             frames.clone(),
             stats.clone(),
             audio.clone(),
+            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
         )
         .unwrap();
 
@@ -1067,6 +1081,7 @@ fn run_state_check() {
         frames: Arc::new(Mutex::new(None)),
         watch_stats: Arc::new(Mutex::new(viewer::WatchStats::default())),
         audio: Arc::new(Mutex::new(None)),
+        volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
         pending_request: Arc::new(Mutex::new(Some(PendingRequest {
             request_id: "self-check".into(),
             device_name: "自检设备".into(),
@@ -1137,6 +1152,7 @@ fn main() {
             frames,
             watch_stats: Arc::new(Mutex::new(viewer::WatchStats::default())),
             audio: Arc::new(Mutex::new(None)),
+        volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
             pending_request: Arc::new(Mutex::new(None)),
             incoming_requests: Arc::new(Mutex::new(Vec::new())),
         })
@@ -1224,6 +1240,7 @@ fn main() {
                                 state.frames.clone(),
                                 state.watch_stats.clone(),
                                 state.audio.clone(),
+                                state.volume.clone(),
                             ) {
                                 viewer::log_to_file("[autowatch] 观看会话已启动");
                                 *state.watch.lock().unwrap() = Some(session);
@@ -1276,6 +1293,7 @@ fn main() {
             ui_log,
             set_viewer_fullscreen,
             set_audio_enabled,
+        set_volume,
             has_audio,
             logout,
             list_devices,

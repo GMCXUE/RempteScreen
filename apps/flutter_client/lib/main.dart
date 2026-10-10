@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:livekit_client/livekit_client.dart';
 import 'api.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
@@ -12,8 +13,18 @@ final ApiService api = ApiService(baseUrl: kServerUrl);
 /// 应用级会话管理器：投送与观看连接都由它持有，与页面生命周期无关。
 final SessionManager sessionManager = SessionManager(api: api);
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 音频会话用「媒体播放」预设：观看投屏时音量键调节的是**媒体音量**（系统音量），
+  // 而不是通话音量；播放也走媒体流。必须在 WebRTC 初始化前设置。
+  try {
+    await LiveKitClient.initialize(
+      initialAudioSessionOptions: const AudioSessionOptions.mediaPlayback(),
+    );
+  } catch (_) {
+    // 初始化失败不阻塞启动（回退到默认通信模式）
+  }
 
   // 红屏（Flutter 默认的错误界面）在真机上既看不懂也帮不上忙，
   // 换成可读的错误卡片，并把完整堆栈打到 logcat（adb logcat -s flutter）。
