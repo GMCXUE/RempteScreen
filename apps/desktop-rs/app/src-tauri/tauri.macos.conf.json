@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/macos-audio-capture"]
+  }
+}

@@ -344,6 +344,9 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
       }
     }
 
+    // Playback capture supplies external PCM; getDisplayMedia disables the microphone first.
+    audioDeviceModuleBuilder.setInputSampleRate(48000).setUseStereoInput(false)
+        .setAudioBufferCallback(getUserMediaImpl.playbackAudioCapture);
     audioDeviceModuleBuilder.setSamplesReadyCallback(recordSamplesReadyCallbackAdapter);
     audioDeviceModuleBuilder.setPlaybackSamplesReadyCallback(playbackSamplesReadyCallbackAdapter);
 

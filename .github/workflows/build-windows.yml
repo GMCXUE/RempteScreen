@@ -64,6 +64,6 @@ jobs:
           if (Test-Path "apps/desktop-rs/app/build-log.txt") { Copy-Item "apps/desktop-rs/app/build-log.txt" dist/ }
           git add -f dist 2>$null
           git commit -m "windows build ($env:GITHUB_RUN_ID)" 2>$null
-          git push origin HEAD:dist
+          git push --force origin HEAD:dist
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -73,14 +73,7 @@ pub fn start_watch(
 }
 
 pub fn log_to_file(message: &str) {
-    if let Some(home) = dirs::home_dir() {
-        let path = home.join(".remotescreen-rs.log");
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|t| t.as_secs())
-            .unwrap_or(0);
-        let _ = std::fs::write(path, format!("[{stamp}] {message}\n"));
-    }
+    crate::publisher::log_to_file(message);
 }
 
 /// I420 → RGB（BT.601），按 stride 取样，`step` 为降采样步长。
@@ -138,6 +131,10 @@ async fn run_watch(
     stats: &Arc<Mutex<WatchStats>>,
     audio: &AudioTrackStore,
 ) -> Result<(), String> {
+    // Receiving a track alone does not enable hardware playout in the Rust SDK.
+    // Keep this handle alive until the watching session ends; no microphone is opened.
+    let _playout = PlatformAudio::new()
+        .map_err(|error| format!("初始化扬声器播放失败: {error}"))?;
     let (room, mut events) = Room::connect(url, token, RoomOptions::default())
         .await
         .map_err(|error| format!("连接失败: {error}"))?;

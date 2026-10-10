@@ -15,6 +15,7 @@ apps/desktop/out/
 # ---------- 桌面端（Tauri / Rust）----------
 apps/desktop-rs/app/src-tauri/target/
 apps/desktop-rs/app/src-tauri/gen/
+apps/desktop-rs/app/src-tauri/binaries/
 apps/desktop-rs/spikes/*/target/
 apps/desktop-rs/spikes/*/.cargo/
 *.dmg

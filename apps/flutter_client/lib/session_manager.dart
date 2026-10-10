@@ -458,13 +458,22 @@ class SessionManager extends ChangeNotifier {
     );
     _publishRoom = room;
 
-    await room.connect(reg.livekitUrl, reg.publishToken);
-    // Android 上这行会触发系统的 MediaProjection 授权弹窗；
-    // 采集参数来自画质设置（原生补丁版 flutter_webrtc 会遵守分辨率与帧率约束）
-    await room.localParticipant!.setScreenShareEnabled(
-      true,
-      screenShareCaptureOptions: shareSettings.toCaptureOptions(),
-    );
+    try {
+      await room.connect(reg.livekitUrl, reg.publishToken);
+      // Publish both tracks returned by native display capture. Android requests
+      // RECORD_AUDIO and MediaProjection permission for internal playback audio.
+      await room.localParticipant!.setScreenShareEnabled(
+        true,
+        captureScreenAudio: true,
+        screenShareCaptureOptions: shareSettings.toCaptureOptions(),
+      );
+    } catch (_) {
+      _publishRoom = null;
+      await room.disconnect();
+      await room.dispose();
+      notifyListeners();
+      rethrow;
+    }
 
     notifyListeners();
   }

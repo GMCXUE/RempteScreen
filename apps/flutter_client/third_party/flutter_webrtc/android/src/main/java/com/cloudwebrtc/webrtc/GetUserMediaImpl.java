@@ -37,6 +37,7 @@ import androidx.annotation.RequiresApi;
 import com.cloudwebrtc.webrtc.audio.AudioSwitchManager;
 import com.cloudwebrtc.webrtc.audio.AudioUtils;
 import com.cloudwebrtc.webrtc.audio.LocalAudioTrack;
+import com.cloudwebrtc.webrtc.audio.PlaybackAudioCapture;
 import com.cloudwebrtc.webrtc.record.AudioChannel;
 import com.cloudwebrtc.webrtc.record.AudioSamplesInterceptor;
 import com.cloudwebrtc.webrtc.record.MediaRecorderImpl;
@@ -115,6 +116,7 @@ public class GetUserMediaImpl {
     final AudioSamplesInterceptor inputSamplesInterceptor = new AudioSamplesInterceptor();
     private OutputAudioSamplesInterceptor outputSamplesInterceptor = null;
     JavaAudioDeviceModule audioDeviceModule;
+    final PlaybackAudioCapture playbackAudioCapture = new PlaybackAudioCapture();
     private final SparseArray<MediaRecorderImpl> mediaRecorders = new SparseArray<>();
     private AudioDeviceInfo preferredInput = null;
     private boolean isTorchOn;
@@ -508,6 +510,26 @@ public class GetUserMediaImpl {
 
     void getDisplayMedia(
             final ConstraintsMap constraints, final Result result, final MediaStream mediaStream) {
+        final boolean captureAudio = constraints != null && constraints.hasKey("audio")
+                && (constraints.getType("audio") == ObjectType.Map
+                    || (constraints.getType("audio") == ObjectType.Boolean && constraints.getBoolean("audio")));
+        if (captureAudio) {
+            if (VERSION.SDK_INT < VERSION_CODES.Q) {
+                resultError("getDisplayMedia", "系统音频投送需要 Android 10 或更高版本", result);
+                return;
+            }
+            ArrayList<String> permissions = new ArrayList<>();
+            permissions.add(PERMISSION_AUDIO);
+            requestPermissions(permissions,
+                    args -> requestDisplayMedia(constraints, result, mediaStream, true),
+                    args -> resultError("getDisplayMedia", "系统音频投送需要录音权限（不会采集麦克风）", result));
+        } else {
+            requestDisplayMedia(constraints, result, mediaStream, false);
+        }
+    }
+
+    private void requestDisplayMedia(final ConstraintsMap constraints, final Result result,
+                                    final MediaStream mediaStream, final boolean captureAudio) {
         // 解析采集约束：livekit 传 video:{width, height, frameRate}。
         // 值可能是 int 也可能是 double，统一按 Number 处理。
         int reqHeight = 0;
@@ -534,11 +556,11 @@ public class GetUserMediaImpl {
                                 resultError("screenRequestPermissions", "User didn't give permission to capture the screen.", result);
                                 return;
                             }
-                            startServiceThenCapture(result, mediaStream, mediaProjectionData, finalReqHeight, finalReqFps);
+                            startServiceThenCapture(result, mediaStream, mediaProjectionData, finalReqHeight, finalReqFps, captureAudio);
                         }
                     });
         } else {
-            startServiceThenCapture(result, mediaStream, mediaProjectionData, finalReqHeight, finalReqFps);
+            startServiceThenCapture(result, mediaStream, mediaProjectionData, finalReqHeight, finalReqFps, captureAudio);
         }
     }
 
@@ -549,13 +571,13 @@ public class GetUserMediaImpl {
      */
     private void startServiceThenCapture(
             final Result result, final MediaStream mediaStream, final Intent data,
-            final int reqHeight, final int reqFps) {
+            final int reqHeight, final int reqFps, final boolean captureAudio) {
         Context context = stateProvider.getApplicationContext();
         boolean serviceStarted = ScreenProjectionService.start(context,
                 new ScreenProjectionService.Listener() {
                     @Override
                     public void onServiceReady() {
-                        getDisplayMedia(result, mediaStream, data, reqHeight, reqFps);
+                        getDisplayMedia(result, mediaStream, data, reqHeight, reqFps, captureAudio);
                     }
 
                     @Override
@@ -566,12 +588,12 @@ public class GetUserMediaImpl {
                 });
         if (!serviceStarted) {
             // API 29 以下没有该要求，直接走原流程
-            getDisplayMedia(result, mediaStream, data, reqHeight, reqFps);
+            getDisplayMedia(result, mediaStream, data, reqHeight, reqFps, captureAudio);
         }
     }
 
     private void getDisplayMedia(final Result result, final MediaStream mediaStream,
-            final Intent mediaProjectionData, final int reqHeight, final int reqFps) {
+            final Intent mediaProjectionData, final int reqHeight, final int reqFps, final boolean captureAudio) {
         /* Create ScreenCapture */
         VideoTrack displayTrack = null;
         VideoCapturer videoCapturer = null;
@@ -582,6 +604,7 @@ public class GetUserMediaImpl {
                             @Override
                             public void onStop() {
                                 super.onStop();
+                                playbackAudioCapture.stop();
                                 // 用户从系统侧吊销了投屏授权，前台服务随之停止
                                 ScreenProjectionService.stop(
                                         stateProvider.getApplicationContext());
@@ -628,17 +651,61 @@ public class GetUserMediaImpl {
         info.isScreenCapture = true;
         info.capturer = videoCapturer;
 
-        videoCapturer.startCapture(info.width, info.height, info.fps);
+        try {
+            videoCapturer.startCapture(info.width, info.height, info.fps);
+            if (captureAudio) {
+                // The callback supplies playback PCM using the video's projection.
+                audioDeviceModule.setAudioRecordEnabled(false);
+                playbackAudioCapture.start(((OrientationAwareScreenCapturer) videoCapturer).getMediaProjection());
+            }
+        } catch (RuntimeException error) {
+            playbackAudioCapture.stop();
+            try { videoCapturer.stopCapture(); } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            videoCapturer.dispose();
+            surfaceTextureHelper.dispose();
+            videoSource.dispose();
+            ScreenProjectionService.stop(applicationContext);
+            resultError("getDisplayMedia", "启动屏幕/系统音频采集失败: " + error.getMessage(), result);
+            return;
+        }
         Log.d(TAG, "OrientationAwareScreenCapturer.startCapture: " + info.width + "x" + info.height + "@" + info.fps);
 
         String trackId = stateProvider.getNextTrackUUID();
         mVideoCapturers.put(trackId, info);
+        mSurfaceTextureHelpers.put(trackId, surfaceTextureHelper);
 
         displayTrack = pcFactory.createVideoTrack(trackId, videoSource);
 
         ConstraintsArray audioTracks = new ConstraintsArray();
         ConstraintsArray videoTracks = new ConstraintsArray();
         ConstraintsMap successResult = new ConstraintsMap();
+        if (captureAudio) {
+            MediaConstraints audioConstraints = new MediaConstraints();
+            audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googEchoCancellation", "false"));
+            audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googAutoGainControl", "false"));
+            audioConstraints.mandatory.add(new MediaConstraints.KeyValuePair("googNoiseSuppression", "false"));
+            AudioSource audioSource = pcFactory.createAudioSource(audioConstraints);
+            AudioTrack audioTrack = pcFactory.createAudioTrack(stateProvider.getNextTrackUUID(), audioSource);
+            mediaStream.addTrack(audioTrack);
+            stateProvider.putLocalTrack(audioTrack.id(), new LocalAudioTrack(audioTrack) {
+                @Override public void dispose() {
+                    playbackAudioCapture.stop();
+                    super.dispose();
+                    audioSource.dispose();
+                }
+            });
+            ConstraintsMap audioInfo = new ConstraintsMap();
+            audioInfo.putBoolean("enabled", true);
+            audioInfo.putString("id", audioTrack.id());
+            audioInfo.putString("kind", "audio");
+            audioInfo.putString("label", "system-audio");
+            audioInfo.putString("readyState", audioTrack.state().toString());
+            audioInfo.putBoolean("remote", false);
+            audioTracks.pushMap(audioInfo);
+        }
+
 
         if (displayTrack  != null) {
             String id = displayTrack.id();
@@ -1048,6 +1115,7 @@ public class GetUserMediaImpl {
                     + " to primary capturer (was " + id + ")");
         } else {
             // No shared tracks - stop and dispose the capturer normally.
+            if (info.isScreenCapture) playbackAudioCapture.stop();
             try {
                 info.capturer.stopCapture();
                 if (info.cameraEventsHandler != null) {

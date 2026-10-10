@@ -1,7 +1,7 @@
 // macOS 系统音频采集器（RemoteScreen 专用子进程）。
 //
-// 用 ScreenCaptureKit 抓取**系统音频**（不占麦克风），以交织 Int16 PCM 输出到 stdout：
-//   · 采样率 48000Hz · 双声道 · 交给父进程（Rust）喂给 LiveKit 的音频轨
+// 用 ScreenCaptureKit 抓取**系统音频**（不占麦克风），以单声道 Int16 PCM 输出到 stdout：
+//   · 采样率 48000Hz · 单声道 · 交给父进程（Rust）喂给 LiveKit 的音频轨
 // 为什么用子进程：SCStream 的音频回调代码用 Swift 写最省事，且子进程由应用拉起时
 // 会继承应用的「屏幕录制」授权（TCC 归属到父应用），无需单独授权。
 //
@@ -57,7 +57,9 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
             flags: 0,
             blockBufferOut: &blockBuffer
         )
-        guard status == noErr, let blockBuffer = blockBuffer else { return }
+        guard status == noErr, blockBuffer != nil else { return }
+        // Keep CMBlockBuffer alive until conversion finishes; mData points into it.
+        defer { withExtendedLifetime(blockBuffer) {} }
 
         // UnsafeMutableAudioBufferListPointer 正确处理可变长度的 mBuffers 数组
         let buffers = UnsafeMutableAudioBufferListPointer(list.assumingMemoryBound(to: AudioBufferList.self))
@@ -69,7 +71,7 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
         guard frameCount > 0, let left = left, let right = right else { return }
 
         // Float32 非交错双声道 → Int16 单声道（左右平均）。
-        // 单声道与 LiveKit Rust SDK 文档示例一致（48k/1ch），立体声路径实测有问题。
+        // 与 Rust 发布源统一为 48 kHz / 1 声道，480 个采样组成 10 ms 帧。
         // 注意：必须用 Data(count:)（真实长度）而不是 Data(capacity:)（只分配、长度为 0），
         // 否则写入的数据不算在 Data 里，stdout 永远是 0 字节。
         var pcm = Data(count: frameCount * 2)
@@ -83,35 +85,6 @@ final class AudioTap: NSObject, SCStreamDelegate, SCStreamOutput, @unchecked Sen
             }
         }
         stdoutHandle.write(pcm)
-    }
-}
-
-let semaphore = DispatchSemaphore(value: 0)
-
-// --request-mic 模式：仅请求麦克风授权后退出（应用启动时调用，提前把权限拿到手）
-if CommandLine.arguments.contains("--request-mic") {
-    let status = AVCaptureDevice.authorizationStatus(for: .audio)
-    FileHandle.standardError.write("mic 当前状态: \(status.rawValue)\n".data(using: .utf8)!)
-    if status == .notDetermined {
-        let sem = DispatchSemaphore(value: 0)
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-            FileHandle.standardError.write("mic 授权弹窗结果: \(granted)\n".data(using: .utf8)!)
-            sem.signal()
-        }
-        sem.wait()
-    }
-    exit(0)
-}
-
-// 先报告（并在需要时请求）麦克风权限：webrtc 的音频数据泵由麦克风设备时钟驱动，
-// 没有麦克风授权时泵不转，推送的系统音频帧永远发不出去（表现为观看端只有静音）。
-import AVFoundation
-let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-FileHandle.standardError.write("mic 授权状态: \(micStatus.rawValue)（3=已授权，0=未询问，2=已拒绝）\n".data(using: .utf8)!)
-if micStatus != .authorized {
-    AVCaptureDevice.requestAccess(for: .audio) { granted in
-        FileHandle.standardError.write("mic 授权结果: \(granted)\n".data(using: .utf8)!)
-        if !granted { exit(2) }
     }
 }
 
@@ -159,5 +132,4 @@ Task {
     }
 }
 
-semaphore.wait()
 dispatchMain()

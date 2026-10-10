@@ -5,6 +5,8 @@
 mod api;
 mod publisher;
 mod viewer;
+#[cfg(target_os = "macos")]
+mod system_audio;
 
 use tauri::{Emitter, Manager};
 use std::time::Duration;
@@ -62,28 +64,6 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
     *state.heartbeat_stop.lock().unwrap() = Some(stop.clone());
     *state.registration.lock().unwrap() = Some(registration.clone());
 
-    // 启动时请求麦克风权限（弹窗归属应用）：webrtc 音频数据泵由麦克风设备驱动，
-    // 没有授权时泵不转，音频帧发不出去。提前拿到授权，投送时就不会卡权限。
-    {
-        if let Some(helper) = find_audio_capture_helper() {
-            std::thread::spawn(move || {
-                if let Ok(output) = std::process::Command::new(helper)
-                    .arg("--request-mic")
-                    .stderr(std::process::Stdio::piped())
-                    .output()
-                {
-                    let text = String::from_utf8_lossy(&output.stderr);
-                    for line in text.lines() {
-                        crate::publisher::log_to_file(&format!("[mic] {line}"));
-                    }
-                }
-            });
-        }
-    }
-
-    // 用 SSE 长连接取代轮询：服务端一有变化立刻推（实测 ~10ms），
-    // 连接每 10 分钟由服务端轮换一次，这里循环重连即可。
-    // 心跳也由服务端在流内处理（每 15 秒刷新在线状态），客户端不再需要定时上报。
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<AppState>();
@@ -876,13 +856,13 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
 
         // 接收端音频振幅测量：有 NativeAudioStream 拉到的帧才有数据，
         // 以此区分「轨订阅了但没数据」和「数据真的在流动」
-        let mut audio_meter: Option<(i32, u32)> = None; // (峰值, 帧数)
+        let audio_meter = Arc::new(Mutex::new(None::<(i32, u32)>)); // (峰值, 帧数)
         for second in 1..=seconds {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let snapshot = stats.lock().unwrap().clone();
             let jpeg_kb = frames.lock().unwrap().as_ref().map(|f| f.len() / 1024).unwrap_or(0);
             let audio_info = match audio.lock().unwrap().as_ref() {
-                Some(track) => match audio_meter {
+                Some(_) => match *audio_meter.lock().unwrap() {
                     Some((peak, frames)) => {
                         if peak > 3000 {
                             format!("已收到✅ 有声音（峰值 {peak}，{frames} 帧）")
@@ -905,15 +885,16 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
             );
 
             // 音频轨出现后，挂一个 NativeAudioStream 测量接收到的振幅
-            if audio_meter.is_none() {
+            if audio_meter.lock().unwrap().is_none() {
                 if let Some(track) = audio.lock().unwrap().as_ref() {
-                    let mut stream =
+                    let stream =
                         livekit::webrtc::audio_stream::native::NativeAudioStream::new(
                             track.rtc_track(),
                             48_000,
                             1,
                         );
-                    audio_meter = Some((0, 0));
+                    *audio_meter.lock().unwrap() = Some((0, 0));
+                    let audio_meter = audio_meter.clone();
                     tokio::spawn(async move {
                         use tokio_stream::StreamExt;
                         let mut stream = stream;
@@ -924,7 +905,7 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
                                 .map(|s| (*s as i32).abs())
                                 .max()
                                 .unwrap_or(0);
-                            if let Some((ref mut max, ref mut frames)) = audio_meter {
+                            if let Some((ref mut max, ref mut frames)) = *audio_meter.lock().unwrap() {
                                 if peak > *max {
                                     *max = peak;
                                 }
@@ -946,9 +927,9 @@ fn find_audio_capture_helper() -> Option<std::path::PathBuf> {
         .and_then(|path| path.parent().map(|p| p.to_path_buf()));
     [
         exe_dir.as_ref().map(|d| d.join("macos-audio-capture")),
-        std::env::var("CARGO_MANIFEST_DIR").ok().map(|dir| {
-            std::path::PathBuf::from(dir).join("../../tools/macos-audio-capture/macos-audio-capture")
-        }),
+        // Cargo-built executables use the freshly compiled helper, never a stale tools binary.
+        Some(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("binaries").join(format!("macos-audio-capture-{}", env!("RS_BUILD_TARGET")))),
     ]
     .into_iter()
     .flatten()

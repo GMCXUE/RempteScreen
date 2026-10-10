@@ -252,4 +252,8 @@ public class OrientationAwareScreenCapturer implements VideoCapturer, VideoSink 
     public long getNumCapturedFrames() {
         return numCapturedFrames;
     }
+
+    public MediaProjection getMediaProjection() {
+        return mediaProjection;
+    }
 }
