@@ -560,8 +560,6 @@ class SessionManager extends ChangeNotifier {
     // Android 默认走「通信模式」，远端音频路由到**听筒**——音量小到像没有声音。
     // 观看投屏必须走扬声器。
     try {
-      await Hardware.instance.setSpeakerphoneOn(true);
-      // setPreferSpeakerOutput 已废弃，新 API 走 AudioManager
       await AudioManager.instance.setSpeakerOutputPreferred(true);
     } catch (_) {
       // 路由设置失败不影响连接
