@@ -554,8 +554,15 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 .social-bubble.mine { align-self: flex-end; background: #eaf1ff; border-color: #e5edfb; }
 .social-bubble small { display: block; font-size: 10px; color: #98a2b3; margin-top: 5px; text-align: right; }
 .social-compose { display: flex; gap: 10px; align-items: flex-end; padding: 14px 18px; border-top: 1px solid var(--line); background: white; }
-.social-compose textarea { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 12px; font: inherit; background: #f7f9fc; resize: vertical; }
-.social-compose textarea:focus { outline: 2px solid #dce8ff; }
+.chat-composer-input { flex:1;min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:#f7f9fc; }
+.chat-composer-input:focus-within {border-color:#8fb5ff;box-shadow:0 0 0 2px #eaf1ff;}
+.social-compose textarea {display:block;width:100%;min-width:0;min-height:54px;border:0;border-radius:0;padding:10px 12px;font:inherit;background:transparent;resize:none;}
+.social-compose textarea:focus {outline:none;}
+.chat-draft-images {display:flex;gap:10px;padding:10px 12px 0;overflow-x:auto;max-width:100%;}
+.chat-draft-image {position:relative;flex:0 0 76px;height:76px;border:1px solid #e4e9f2;border-radius:9px;background:#eef2f7;}
+.chat-draft-image img {width:100%;height:100%;object-fit:contain;border-radius:8px;}
+.chat-draft-image button {position:absolute;right:3px;top:3px;width:21px;height:21px;padding:0;border:0;border-radius:50%;background:#253047d9;color:white;font-size:16px;line-height:21px;}
+.chat-compose-error {margin:0;padding:0 12px 8px;color:#d92d20;font-size:12px;white-space:normal;}
 #social-actions { position: relative; }
 .social-menu summary { list-style: none; padding: 4px 8px; color: #8390a5; cursor: pointer; }
 .social-menu summary::-webkit-details-marker { display: none; }

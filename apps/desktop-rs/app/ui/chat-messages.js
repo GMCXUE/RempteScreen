@@ -4,7 +4,7 @@
  const imageSource=value=>typeof value==='string'&&/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)?value:'';
  const canRecall=(message,accountId,now=Date.now())=>message.senderId===accountId&&['text','image'].includes(message.kind||'text')&&now-Number(message.createdAt)<=120000;
  class ChatMessages {
-  constructor(options){Object.assign(this,options);this.menu=null;this.dialog=null;this.dialogMessage=null;this.clockOffset=0;this.picking=false;this.copyingImage=false;this.recalled=new Set();document.addEventListener('pointerdown',e=>{if(this.menu&&!this.menu.contains(e.target))this.closeMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape')this.closeMenu();});}
+  constructor(options){Object.assign(this,options);this.menu=null;this.dialog=null;this.dialogMessage=null;this.clockOffset=0;this.picking=false;this.draftImages=[];this.copyingImage=false;this.recalled=new Set();document.addEventListener('pointerdown',e=>{if(this.menu&&!this.menu.contains(e.target))this.closeMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape')this.closeMenu();});}
   valid(context){const current=this.context();return current.accountId===context.accountId&&current.peerId===context.peerId&&current.generation===context.generation;}
   closeMenu(){this.menu?.remove();this.menu=null;this.menuMessage=null;}
   close(){this.closeMenu();const dialog=this.dialog;this.dialog=null;this.dialogMessage=null;dialog?.close();dialog?.remove();}
@@ -53,33 +53,30 @@
    try{const result=await this.api('message-image',{peerId:context.peerId,messageId:message.id});if(!this.valid(context)||this.dialog!==dialog)return;image.src=imageSource(result.image);status.remove();copy.disabled=false;}
    catch(error){if(this.dialog===dialog)status.textContent=String(error);}
   }
-  async pasteImage(event,onSent){
+  removeDraftImage(id){this.draftImages=this.draftImages.filter(image=>image.id!==id);this.onDraftChanged?.();}
+  clearDraft(){this.draftImages=[];this.onDraftChanged?.();}
+  async pasteImage(event){
    const items=Array.from(event.clipboardData?.items||[]),file=items.find(item=>item.kind==='file'&&item.type.startsWith('image/'))?.getAsFile();
    if(file){event.preventDefault();return this.prepareImage(async()=>{
     if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw '请选择 JPG、PNG 或 WebP 图片';
     if(file.size>8*1024*1024)throw '图片过大，请选择 8 MB 以内的图片';
     return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject('无法读取剪贴板图片，请重新复制');reader.readAsDataURL(file);});
-   },onSent);}
+   });}
    // Leave ordinary text paste (including the caret and selected text) to the WebView.
    if(event.clipboardData?.getData('text/plain'))return;
-   return this.prepareImage(()=>this.invoke('read_chat_image'),onSent);
+   return this.prepareImage(()=>this.invoke('read_chat_image'));
   }
-  async chooseImage(onSent){return this.prepareImage(()=>this.invoke('pick_chat_image'),onSent);}
-  async prepareImage(read,onSent){
-   if(this.picking)return;const context=this.context();if(!context.peerId)return;this.picking=true;
+  async chooseImage(){return this.prepareImage(()=>this.invoke('pick_chat_image'));}
+  async prepareImage(read){
+   if(this.picking||this.canCompose?.()===false)return;const context=this.context();if(!context.peerId)return;
+   if(this.draftImages.length>=9)throw '最多添加 9 张图片';
+   this.picking=true;this.onDraftChanged?.();
    try{
     const image=await read();if(!image||!this.valid(context))return;
     if(!imageSource(image))throw '请选择 JPG、PNG 或 WebP 图片';
-    const dialog=this.createDialog('发送图片'),photo=node('img');photo.alt='待发送图片';photo.src=imageSource(image);dialog.append(photo);
-    const status=node('p','','chat-image-error');dialog.append(status);const send=node('button','发送','primary');send.type='button';dialog.append(send);const clientId=crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('');let busy=false;
-    dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
-    send.onclick=async()=>{
-     if(busy||!this.valid(context))return;busy=true;send.disabled=true;dialog.querySelector('.chat-image-heading button').disabled=true;status.textContent='';send.textContent='发送中…';
-     try{const data=await this.api('send-image',{peerId:context.peerId,image,clientId});if(this.dialog!==dialog||!this.valid(context))return;dialog.close();await onSent(data.message);}
-     catch(error){if(this.dialog===dialog&&this.valid(context))status.textContent=String(error);}
-     finally{busy=false;send.disabled=false;send.textContent='发送';dialog.querySelector('.chat-image-heading button').disabled=false;}
-    };
-   }catch(error){if(this.valid(context))throw error;}finally{this.picking=false;}
+    const id=crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('');
+    this.draftImages.push({image,id});this.onDraftChanged?.();this.focusDraft?.();
+   }catch(error){if(this.valid(context))throw error;}finally{this.picking=false;this.onDraftChanged?.();}
   }
  }
  window.ChatMessages=ChatMessages;

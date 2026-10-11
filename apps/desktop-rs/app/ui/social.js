@@ -9,7 +9,19 @@
   const button=(text,action,cls='ghost')=>{const b=node('button',text,cls);b.type='button';b.disabled=mutating;b.onclick=()=>Promise.resolve(action()).catch(error);return b;};
   const name=friend=>friend.remark||friend.name;
   const chatUi=new window.ChatMessages({api,invoke:(command,args)=>window.__TAURI__.core.invoke(command,args),notice:text=>window.showAppToast(text,1200),error,
-    context:()=>({accountId:state?.me.id,peerId:peer?.id,generation})});
+    context:()=>({accountId:state?.me.id,peerId:peer?.id,generation}),canCompose:()=>!mutating,
+    onDraftChanged:()=>renderComposer(),focusDraft:()=>el('social-draft').focus({preventScroll:true})});
+  function composeError(text=''){el('social-compose-error').textContent=text;el('social-compose-error').classList.toggle('hidden',!text);}
+  function renderComposer(){
+    const busy=mutating||chatUi.picking,root=el('social-draft-images');root.replaceChildren();root.classList.toggle('hidden',!chatUi.draftImages.length);
+    for(const [index,draft] of chatUi.draftImages.entries()){
+      const item=node('div','','chat-draft-image');item.setAttribute('role','listitem');item.dataset.draftId=draft.id;
+      const photo=node('img');photo.src=draft.image;photo.alt=`待发送图片 ${index+1}`;
+      const remove=node('button','×');remove.type='button';remove.setAttribute('aria-label',`移除图片 ${index+1}`);remove.disabled=busy;
+      remove.onclick=()=>{chatUi.removeDraftImage(draft.id);composeError();el('social-draft').focus({preventScroll:true});};item.append(photo,remove);root.append(item);
+    }
+    el('social-image').disabled=busy||!peer;el('social-send').disabled=busy||!peer||(!el('social-draft').value.trim()&&!chatUi.draftImages.length);el('social-send').textContent=mutating?'发送中…':'发送';el('social-draft').readOnly=mutating;
+  }
   function renderMessages(){chatUi.invalidate(messages);el('social-messages').replaceChildren(...messages.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();})));}
   async function change(operation,body) {
     if(mutating)return;mutating=true;
@@ -17,7 +29,7 @@
     finally{mutating=false;renderContacts();renderActions();}
   }
   function resetChat() {
-    ++generation;peer=null;messages=[];retry=null;readSeq=null;syncCursor=null;hasMore=false;chatUi.close();
+    ++generation;peer=null;messages=[];retry=null;readSeq=null;syncCursor=null;hasMore=false;chatUi.close();chatUi.clearDraft();composeError();
     const empty=node('div','','social-empty');empty.append(node('span','···','social-empty-symbol'),node('strong','选择好友，开始聊天'),node('span','在好友列表选择联系人，即可打开会话'));el('social-messages').replaceChildren(empty);el('social-actions').replaceChildren();
     el('social-chat-title').textContent='聊天';el('social-compose').classList.add('hidden');el('social-older').classList.add('hidden');el('social-draft').value='';
   }
@@ -104,9 +116,10 @@
     }));
   }
   async function select(friend) {
+    if(mutating)return;
     if(peer?.id===friend.id)return;
-    if(el('social-draft').value.trim() && !(await askDialog({title:'切换会话？',message:'当前未发送的草稿将被清空。'})))return;
-    resetChat();peer=friend;syncNotificationContext();renderChatTitle(friend);el('social-compose').classList.remove('hidden');renderContacts();renderActions();await load();
+    if((el('social-draft').value.trim()||chatUi.draftImages.length) && !(await askDialog({title:'切换会话？',message:'当前未发送的草稿将被清空。'})))return;
+    resetChat();peer=friend;syncNotificationContext();renderChatTitle(friend);el('social-compose').classList.remove('hidden');renderComposer();renderContacts();renderActions();await load();
   }
   async function load(older=false) {
     if(loading || !peer || document.hidden || el('page-messages').classList.contains('hidden'))return;
@@ -167,32 +180,37 @@
   el('social-tab-messages').onclick=()=>{friendsTab=false;renderContacts();};
   el('social-tab-friends').onclick=()=>{friendsTab=true;renderContacts();};
   el('social-older').onclick=()=>load(true);
-  el('social-image').onclick=()=>chatUi.chooseImage(async()=>{await load();await refresh();}).catch(error);
+  el('social-image').onclick=()=>chatUi.chooseImage().catch(error);
+  el('social-draft').addEventListener('input',()=>{composeError();el('social-send').disabled=mutating||chatUi.picking||!peer||(!el('social-draft').value.trim()&&!chatUi.draftImages.length);});
   let pasteFallback=null;
-  const imageSent=async()=>{await load();await refresh();};
   el('social-draft').addEventListener('keydown',event=>{
     if(event.key.toLowerCase()!=='v'||!(event.metaKey||event.ctrlKey)||event.altKey||event.shiftKey||event.repeat)return;
     clearTimeout(pasteFallback);
     // Some WebViews do not emit paste when the clipboard contains only native pixels.
-    pasteFallback=setTimeout(()=>{if(document.activeElement===el('social-draft'))chatUi.prepareImage(()=>window.__TAURI__.core.invoke('read_chat_image'),imageSent).catch(error);},60);
+    pasteFallback=setTimeout(()=>{if(document.activeElement===el('social-draft'))chatUi.prepareImage(()=>window.__TAURI__.core.invoke('read_chat_image')).catch(error);},60);
   });
   el('social-draft').addEventListener('paste',event=>{
     clearTimeout(pasteFallback);
-    chatUi.pasteImage(event,imageSent).catch(error);
+    chatUi.pasteImage(event).catch(error);
   });
   el('social-compose').onsubmit=async event=>{
-    event.preventDefault();if(!peer || mutating)return;
-    const text=el('social-draft').value.trim();if(!text)return;
+    event.preventDefault();if(!peer || mutating || chatUi.picking)return;
+    const text=el('social-draft').value.trim(),images=[...chatUi.draftImages];if(!text&&!images.length)return;
     const current=peer,version=generation;
-    if(!retry || retry.text!==text || retry.peer!==current.id)retry={text,peer:current.id,id:crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('')};
-    mutating=true;el('social-send').disabled=true;
+    if(text&&(!retry || retry.text!==text || retry.peer!==current.id))retry={text,peer:current.id,id:crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('')};
+    const addSent=data=>{if(data.message&&!messages.some(m=>m.id===data.message.id)){messages.push(data.message);renderMessages();el('social-messages').scrollTop=el('social-messages').scrollHeight;}};
+    mutating=true;composeError();renderComposer();
     try {
-      await api('send',{peerId:current.id,text,clientId:retry.id});
-      if(version!==generation)return;
-      if(el('social-draft').value.trim()===text)el('social-draft').value='';retry=null;
+      for(const image of images){
+        const data=await api('send-image',{peerId:current.id,image:image.image,clientId:image.id});if(version!==generation)return;
+        chatUi.removeDraftImage(image.id);addSent(data);
+      }
+      if(text){const data=await api('send',{peerId:current.id,text,clientId:retry.id});if(version!==generation)return;
+        if(el('social-draft').value.trim()===text)el('social-draft').value='';retry=null;addSent(data);
+      }
       el('social-error').textContent='';await load();await refresh();
-    }catch(e){if(version===generation)error(e);}
-    finally{mutating=false;el('social-send').disabled=false;}
+    }catch(e){if(version===generation)composeError(String(e));}
+    finally{mutating=false;renderComposer();}
   };
   window.addEventListener('account-avatar-changed',()=>{refresh().then(()=>{if(state&&peer&&messages.length)renderMessages();return load();});});
   window.addEventListener('account-profile-changed',refresh);
