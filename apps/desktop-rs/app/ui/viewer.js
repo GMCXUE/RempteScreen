@@ -10,7 +10,6 @@ let pending = false;
 let frameGeneration = 0;
 let abortFrame = null;
 let fitMode = "contain"; // contain | stretch | pixel
-let pinned = false;      // 沉浸模式里锁定控制条
 let audioOn = true;
 let callError = "";
 let remoteCameraOn = false;
@@ -94,8 +93,6 @@ cameraTick();
 
 // ---------- 状态轮询 ----------
 
-let lastFsState = false;
-
 async function refresh() {
   let state;
   try {
@@ -103,6 +100,11 @@ async function refresh() {
   } catch {
     return;
   }
+
+  const live = state.watching && state.frames > 0 && !state.error;
+  controls.setAvailable(live);
+  document.body.classList.toggle("waiting", !live);
+  $("viewing-status").textContent = state.error ? "连接异常" : live ? "正在观看" : "等待画面";
 
   if (state.error) {
     $("status").textContent = state.error;
@@ -144,29 +146,29 @@ async function refresh() {
 
 // ---------- 控制条 ----------
 
-// 控制条显隐：默认显示，3 秒无操作自动隐藏；鼠标移到底部或沉浸模式下悬停浮现
-let lastMove = Date.now();
-let nearBottom = false;
-let booted = false;
-
-function updateControls() {
-  const fresh = Date.now() - lastMove < 3000;
-  const show = nearBottom || (!pinned && (fresh || !booted));
-  document.body.classList.toggle("hover", show);
-}
-
-document.addEventListener("mousemove", (event) => {
-  booted = true;
-  lastMove = Date.now();
-  nearBottom = event.clientY > window.innerHeight - 140;
-  updateControls();
+const controls = new ViewerControls({
+  root: document.body, stage: $("stage"), toolbar: $("controls"),
 });
-setInterval(updateControls, 400);
-updateControls();
+$("stage").addEventListener("click", () => controls.toggle());
+$("show-controls").addEventListener("click", () => controls.show());
+$("controls").addEventListener("pointerdown", () => controls.schedule());
+$("controls").addEventListener("focusin", () => controls.show());
+document.addEventListener("mousemove", (event) => {
+  if (!event.target.closest(".compact-controls")) controls.interact();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Tab") controls.show();
+  if (event.key === "Escape") {
+    if (!$("close-modal").classList.contains("hidden")) $("close-cancel").click();
+    else if (fullscreen) $("full-btn").click();
+    else controls.show();
+  }
+});
 
 async function toggleCall(kind) {
   if ($("mic-btn").disabled || $("camera-btn").disabled) return;
   callError = "";
+  controls.setBusy(true);
   $("mic-btn").disabled = $("camera-btn").disabled = true;
   $("meta").textContent = "正在处理通话设备，请留意系统权限提示…";
   try {
@@ -177,6 +179,7 @@ async function toggleCall(kind) {
     callError = String(error);
   } finally {
     $("mic-btn").disabled = $("camera-btn").disabled = false;
+    controls.setBusy(false);
     await refresh();
   }
 }
@@ -197,7 +200,7 @@ async function applyVolume(value) {
     const muted = value === 0;
     $("audio-btn").classList.toggle("on", !muted);
     $("audio-btn").classList.toggle("muted", muted);
-    $("audio-label").textContent = muted ? "静音" : "声音";
+    $("audio-label").textContent = muted ? "投屏静音" : "投屏声音";
     audioOn = !muted;
   } catch {
     // 调用失败不改变状态
@@ -232,32 +235,35 @@ $("fit-btn").addEventListener("click", () => {
 });
 
 let fullscreen = false;
-$("full-btn").addEventListener("click", async () => {
-  fullscreen = !fullscreen;
+async function toggleFullscreen() {
+  if ($("full-btn").disabled) return;
+  const next = !fullscreen;
+  $("full-btn").disabled = $("compact-full-btn").disabled = true;
   try {
-    await invoke("set_viewer_fullscreen", { fullscreen });
+    await invoke("set_viewer_fullscreen", { fullscreen: next });
+    fullscreen = next;
+    for (const id of ["full-btn", "compact-full-btn"]) {
+      $(id).classList.toggle("on", fullscreen);
+      $(id).title = fullscreen ? "退出全屏" : "全屏";
+      $(id).setAttribute("aria-label", $(id).title);
+    }
+    controls.show();
   } catch (error) {
-    console.error(error);
-  }
-  $("full-btn").classList.toggle("on", fullscreen);
-});
-
-$("hide-btn").addEventListener("click", () => {
-  pinned = !pinned;
-  document.body.classList.toggle("pinned", pinned);
-  $("hide-btn").classList.toggle("on", pinned);
-  $("hide-btn").textContent = pinned ? "沉浸中" : "沉浸";
-  lastMove = 0;
-  updateControls();
-});
-
-$("stop-btn").addEventListener("click", async () => {
-  try {
-    await invoke("stop_watch");
+    callError = "无法切换全屏，请重试";
+    $("meta").textContent = callError;
+    controls.show();
   } finally {
-    stopFrames();
-    await invoke("close_viewer_window");
+    $("full-btn").disabled = $("compact-full-btn").disabled = false;
   }
+}
+$("full-btn").addEventListener("click", toggleFullscreen);
+$("compact-full-btn").addEventListener("click", toggleFullscreen);
+$("hide-btn").addEventListener("click", () => controls.hide());
+
+$("stop-btn").addEventListener("click", () => {
+  controls.setBusy(true);
+  $("close-device").textContent = $("device").textContent;
+  $("close-modal").classList.remove("hidden");
 });
 
 // ---------- 点窗口关闭按钮（×）时的二次确认 ----------
@@ -271,6 +277,7 @@ event.listen("viewer:close-requested", () => {
   // 正在观看时，关闭窗口等于断开连接 —— 先确认
   const name = $("device").textContent || "远程设备";
   $("close-device").textContent = name;
+  controls.setBusy(true);
   $("close-modal").classList.remove("hidden");
   // 标题带上状态：窗口被别的程序挡住时也能一眼看出是在等确认
   document.title = "确认关闭 — RemoteScreen 观看";
@@ -278,6 +285,7 @@ event.listen("viewer:close-requested", () => {
 
 $("close-cancel").addEventListener("click", () => {
   $("close-modal").classList.add("hidden");
+  controls.setBusy(false);
   invoke("ui_log", { message: "用户取消了关闭" }).catch(() => {});
 });
 
@@ -294,12 +302,19 @@ $("close-confirm").addEventListener("click", async () => {
 });
 
 // 双击画面切换全屏
-canvas.addEventListener("dblclick", () => $("full-btn").click());
+canvas.addEventListener("dblclick", () => { controls.show(); $("full-btn").click(); });
 
 refresh();
 setInterval(refresh, 1000);
 
 $("call-speaker-btn").addEventListener("click", async () => {
-  const state = await invoke("call_state", { scope: "watch" });
-  await invoke("call_set_speaker", { enabled: !state.speaker });
+  try {
+    const state = await invoke("call_state", { scope: "watch" });
+    await invoke("call_set_speaker", { enabled: !state.speaker });
+    await refresh();
+  } catch (error) {
+    callError = `通话操作失败：${error}`;
+    $("meta").textContent = callError;
+    controls.show();
+  }
 });

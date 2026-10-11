@@ -548,6 +548,7 @@ pub fn start(app: tauri::AppHandle) {
                     let key = format!("{user}:{peer}");
                     if !f["blocked"].as_bool().unwrap_or(false)
                         && f["lastIncomingKind"] != "call"
+                        && f["lastIncomingKind"] != "recalled"
                         && !settings.muted_peers.contains(peer)
                         && should_alert(
                             *seen.get(&key).unwrap_or(&0),

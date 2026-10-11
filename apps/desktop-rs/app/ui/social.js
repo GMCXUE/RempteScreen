@@ -3,18 +3,21 @@
   const el=id=>document.getElementById(id);
   const api=(operation,body={})=>window.__TAURI__.core.invoke('social_api',{operation,body});
   let state=null,peer=null,messages=[],hasMore=false,polling=false,loading=false,mutating=false,generation=0;
-  let retry=null,readSeq=null,accountGeneration=0,friendsTab=false;
+  let retry=null,readSeq=null,accountGeneration=0,friendsTab=false,syncCursor=null;
   const node=(tag,text='',cls='')=>{const e=document.createElement(tag);e.textContent=text;e.className=cls;return e;};
   const error=e=>{el('social-error').textContent=String(e);};
   const button=(text,action,cls='ghost')=>{const b=node('button',text,cls);b.type='button';b.disabled=mutating;b.onclick=()=>Promise.resolve(action()).catch(error);return b;};
   const name=friend=>friend.remark||friend.name;
+  const chatUi=new window.ChatMessages({api,invoke:(command,args)=>window.__TAURI__.core.invoke(command,args),notice:text=>window.showAppToast(text),error,
+    context:()=>({accountId:state?.me.id,peerId:peer?.id,generation})});
+  function renderMessages(){chatUi.invalidate(messages);el('social-messages').replaceChildren(...messages.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();})));}
   async function change(operation,body) {
     if(mutating)return;mutating=true;
     try{await api(operation,body);await refresh();el('social-error').textContent='';}
     finally{mutating=false;renderContacts();renderActions();}
   }
   function resetChat() {
-    ++generation;peer=null;messages=[];retry=null;readSeq=null;hasMore=false;
+    ++generation;peer=null;messages=[];retry=null;readSeq=null;syncCursor=null;hasMore=false;chatUi.close();
     const empty=node('div','','social-empty');empty.append(node('span','···','social-empty-symbol'),node('strong','选择好友，开始聊天'),node('span','在好友列表选择联系人，即可打开会话'));el('social-messages').replaceChildren(empty);el('social-actions').replaceChildren();
     el('social-chat-title').textContent='聊天';el('social-compose').classList.add('hidden');el('social-older').classList.add('hidden');el('social-draft').value='';
   }
@@ -109,15 +112,18 @@
     if(loading || !peer || document.hidden || el('page-messages').classList.contains('hidden'))return;
     loading=true;const current=peer,version=generation;
     try {
-      const data=await api('messages',{peerId:current.id,...(messages.length?(older?{before:messages[0].seq}:{after:messages.at(-1).seq}):{})});
+      const data=await api('messages',{peerId:current.id,...(syncCursor!==null?{syncCursor,loadedFrom:messages[0]?.seq}:{}),...(messages.length?(older?{before:messages[0].seq}:{after:messages.at(-1).seq}):{})});
       if(version!==generation || peer?.id!==current.id)return;
       const container=el('social-messages'),atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<80;
       const oldHeight=container.scrollHeight,oldTop=container.scrollTop,initial=messages.length===0;
-      const map=new Map(messages.map(m=>[m.id,m]));for(const m of data.messages)map.set(m.id,m);
+      const map=new Map(messages.map(m=>[m.id,m]));let changed=false;
+      for(const m of [...data.messages,...(data.updates||[])]){const old=map.get(m.id);if(!old&&!(data.messages||[]).some(row=>row.id===m.id))continue;if(old?.kind==='recalled'&&m.kind!=='recalled')continue;if(!old||old.kind!==m.kind||old.text!==m.text||old.recalledAt!==m.recalledAt){map.set(m.id,m);changed=true;}}
+      if(data.syncCursor!==undefined)syncCursor=data.syncCursor;
+      if(data.serverNow)chatUi.clockOffset=Number(data.serverNow)-Date.now();
       messages=[...map.values()].sort((a,b)=>BigInt(a.seq)<BigInt(b.seq)?-1:BigInt(a.seq)>BigInt(b.seq)?1:0);
       if(older||initial)hasMore=data.hasMore;
-      container.replaceChildren(...messages.map(m=>{const bubble=node('div','','social-bubble'+(m.senderId===state.me.id?' mine':''));if(m.kind==='call'){bubble.classList.add('call-record');bubble.append(node('span',m.call?.kind==='video'?'▣ 视频通话':'◖ 语音通话','call-record-type'));}bubble.append(node('span',m.text),node('small',new Date(Number(m.createdAt)).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})));const mine=m.senderId===state.me.id,row=node('div','','social-message-row'+(mine?' mine':'')),avatar=node('span','','chat-avatar');window.accountAvatars?.render(avatar,mine?state.me:peer);row.append(avatar,bubble);return row;}));
-      if(!messages.length){const empty=node('div','','social-empty');empty.append(node('strong','还没有消息'),node('span','发送一条消息，开始聊天'));container.append(empty);}
+      if(changed)renderMessages();
+      if(!messages.length){container.replaceChildren();const empty=node('div','','social-empty');empty.append(node('strong','还没有消息'),node('span','发送一条消息，开始聊天'));container.append(empty);}
       if(older)container.scrollTop=oldTop+container.scrollHeight-oldHeight;else if(atBottom)container.scrollTop=container.scrollHeight;
       el('social-older').classList.toggle('hidden',!hasMore);
       const last=data.messages.at(-1);
@@ -161,6 +167,7 @@
   el('social-tab-messages').onclick=()=>{friendsTab=false;renderContacts();};
   el('social-tab-friends').onclick=()=>{friendsTab=true;renderContacts();};
   el('social-older').onclick=()=>load(true);
+  el('social-image').onclick=()=>chatUi.chooseImage(async()=>{await load();await refresh();}).catch(error);
   el('social-compose').onsubmit=async event=>{
     event.preventDefault();if(!peer || mutating)return;
     const text=el('social-draft').value.trim();if(!text)return;
@@ -175,7 +182,7 @@
     }catch(e){if(version===generation)error(e);}
     finally{mutating=false;el('social-send').disabled=false;}
   };
-  window.addEventListener('account-avatar-changed',()=>{refresh().then(()=>load());});
+  window.addEventListener('account-avatar-changed',()=>{refresh().then(()=>{if(state&&peer&&messages.length)renderMessages();return load();});});
   window.addEventListener('account-profile-changed',refresh);
   window.addEventListener('social-account-changed',()=>{
     ++accountGeneration;state=null;resetChat();el('social-account').textContent='';

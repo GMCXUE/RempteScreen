@@ -242,6 +242,10 @@ async fn pick_avatar_image() -> Result<Option<String>, String> {
     }).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
+async fn pick_chat_image() -> Result<Option<String>, String> {
+    pick_avatar_image().await
+}
+#[tauri::command]
 async fn social_api(operation: String, body: Option<serde_json::Value>, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let token = state.creds.lock().unwrap().account_token.clone().ok_or("请先登录")?;
     let saved_token=token.clone();let saved_operation=operation.clone();
@@ -1696,6 +1700,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(notifications::NotificationContext::default())
         .manage(AppState {
             audio_gate: tokio::sync::Mutex::new(()),
@@ -1897,6 +1902,7 @@ fn main() {
             friend_call_status,
             social_api,
             pick_avatar_image,
+            pick_chat_image,
             get_state,
             login,
             register_device,

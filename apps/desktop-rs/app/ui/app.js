@@ -400,6 +400,9 @@ async function refreshWatch() {
   lastWatching = active;
 }
 
+$("watch-id").addEventListener("input", () => {
+  $("watch-id").value = $("watch-id").value.replace(/\D/g, "").slice(0, 9);
+});
 $("watch-btn").addEventListener("click", async () => {
   $("watch-error").textContent = "";
   $("watch-btn").disabled = true;

@@ -111,7 +111,7 @@
             <p id="social-error" class="error" role="status"></p>
             <button id="social-older" class="ghost hidden">加载更早的消息</button>
             <div id="social-messages" class="social-messages" aria-label="聊天记录"><div class="social-empty"><span class="social-empty-symbol" aria-hidden="true">···</span><strong>选择好友，开始聊天</strong><span>在好友列表选择联系人，即可打开会话</span></div></div>
-            <form id="social-compose" class="social-compose hidden"><textarea id="social-draft" maxlength="2000" rows="2" placeholder="发送消息" aria-label="发送消息"></textarea><button id="social-send" class="primary" type="submit">发送</button></form>
+            <form id="social-compose" class="social-compose hidden"><button id="social-image" class="social-image-button" type="button" title="发送图片" aria-label="发送图片"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m4 18 5-5 4 3 4-6 4 8"/></svg></button><textarea id="social-draft" maxlength="2000" rows="2" placeholder="发送消息" aria-label="发送消息"></textarea><button id="social-send" class="primary" type="submit">发送</button></form>
           </div>
         </div>
       </section>
@@ -191,16 +191,16 @@
         <h1 class="page-title">观看设备</h1>
 
         <div id="watch-form-card" class="card">
-          <div class="card-title">连接远程设备</div>
-          <div class="muted small">
-            自己名下的设备直接连接（免确认）；别人的设备需要对方在设备上同意；<br />
-            知道对方的连接密码时也可以填密码直接连接，无需等待确认。
+          <div class="connection-heading">
+            <span class="connection-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 10a9 9 0 0 1 9 9M3 14a5 5 0 0 1 5 5"/><circle cx="3" cy="19" r="1"/></svg></span>
+            <div><div class="card-title">连接设备</div><div class="muted small">输入设备代码，开始观看</div></div>
           </div>
           <div class="watch-form">
-            <input id="watch-id" placeholder="设备代码（9 位数字）" maxlength="9" />
-            <input id="watch-pw" placeholder="连接密码" />
-            <button id="watch-btn" class="primary">连接</button>
+            <label><span>设备代码</span><input id="watch-id" placeholder="9 位数字" inputmode="numeric" maxlength="32" autocomplete="off" /></label>
+            <label><span>连接密码（可选）</span><input id="watch-pw" placeholder="连接密码（可选）" maxlength="64" autocomplete="off" /></label>
+            <button id="watch-btn" class="primary">连接设备 <span aria-hidden="true">→</span></button>
           </div>
+          <p class="connection-note">自己的设备免密，其他设备可请求同意</p>
           <div id="watch-pending" class="pending hidden">
             <div class="pending-text">
               <span class="pending-dot"></span>
@@ -343,6 +343,7 @@
   <script src="avatars.js"></script>
   <script src="profile.js"></script>
   <script src="app.js"></script>
+  <script src="chat-messages.js"></script>
   <script src="social.js"></script>
   <script src="friend-calls.js"></script>
 </body>
