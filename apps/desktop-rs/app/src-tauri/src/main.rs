@@ -1,3 +1,5 @@
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 // RemoteScreen Rust 桌面端 —— Tauri 2 应用入口。
 //
 // 架构：Rust 侧持有全部业务（服务端 API、心跳、原生采集推流），

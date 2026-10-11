@@ -9,6 +9,8 @@ GitHub Actions 运行 `38019214587`（提交 `58b0959`）在 `webrtc-sys` 编译
 
 - SDK 解压到 `C:\lk`，通过 LiveKit 官方支持的 `LK_CUSTOM_WEBRTC` 指向短路径，校验完整 ZIP 的 SHA256、锁定 SDK 标签和必需文件。
 - Cargo 构建目录改为 `C:\rs-target`；锁定 Tauri CLI 2.12.1，保留 Rust `Cargo.lock`，明确使用 Windows MSVC x64 目标。
+- 原生 CI 运行 `38117915549` 编译通过后，在链接阶段发现静态 WebRTC `/MT` 与默认 `/MD` 的运行库冲突（LNK2038/LNK2005）。根据 LiveKit 官方 Cargo 配置，为 Windows MSVC x64 增加 `+crt-static`，统一原生桥接与 Rust 的运行库。
+- Windows 发布版使用 GUI 子系统，启动时不额外打开命令行窗口；构建缓存保留在独立工作目录以缩短后续验证。
 - Windows 目标检查另外发现 `scap 0.0.8` 与解析出的 `windows-capture 1.5` 构造器接口不兼容，锁定兼容的 `windows-capture 1.4.2`。
 - 新增 `tauri.windows.conf.json`，生成当前用户安装的 NSIS `*-setup.exe`，支持中文和英文，缺少 WebView2 时安装引导程序。
 - 原生 CI 首次验证发现 npm 的 PowerShell 启动脚本吞掉 `--` 分隔符，改为直接通过 Node 运行 Tauri CLI，确保 `--locked` 传给 Cargo。
