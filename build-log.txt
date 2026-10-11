@@ -1,7 +1,1 @@
-error: unexpected argument '--locked' found
-
-  tip: to pass '--locked' as a value, use '-- --locked'
-
-Usage: node C:\npm\prefix\node_modules\@tauri-apps\cli\tauri.js build <--runner <RUNNER>|--debug|--target <TARGET>|--features [<FEATURES>...]|--bundles [<BUNDLES>...]|--no-bundle|--config <CONFIG>|ARGS|--ci|--skip-stapling|--ignore-version-mismatches|--no-sign|--no-binary-patching>
-
-For more information, try '--help'.
+Build step did not start; see prepare-log.txt and build-status.json.
