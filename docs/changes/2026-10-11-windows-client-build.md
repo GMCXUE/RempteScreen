@@ -11,6 +11,7 @@ GitHub Actions 运行 `38019214587`（提交 `58b0959`）在 `webrtc-sys` 编译
 - Cargo 构建目录改为 `C:\rs-target`；锁定 Tauri CLI 2.12.1，保留 Rust `Cargo.lock`，明确使用 Windows MSVC x64 目标。
 - Windows 目标检查另外发现 `scap 0.0.8` 与解析出的 `windows-capture 1.5` 构造器接口不兼容，锁定兼容的 `windows-capture 1.4.2`。
 - 新增 `tauri.windows.conf.json`，生成当前用户安装的 NSIS `*-setup.exe`，支持中文和英文，缺少 WebView2 时安装引导程序。
+- 原生 CI 首次验证发现 npm 的 PowerShell 启动脚本吞掉 `--` 分隔符，改为直接通过 Node 运行 Tauri CLI，确保 `--locked` 传给 Cargo。
 - 构建命令保留真实退出码；成功必须存在安装包；安装包与日志上传到 Actions Artifacts。
 - 移除旧工作流向 `dist` 分支强制推送整个源代码的行为。诊断日志在 `build-logs/windows` 独立分支正常追加提交，不覆盖源码历史。
 - Windows 使用 Graphics Capture 的 BGRA 帧，队列容量为 1，控制采集帧率，支持 720p/1080p 缩放，帧等待最长 300ms，可在静态屏幕下停止会话。
@@ -36,3 +37,12 @@ Windows 进程排除回环需要系统 build 20348 及以上；旧系统退回�
 - 验证分支拟为 `codex/windows-client`，包含当前 `apps/desktop-rs/app/` 完整源码、两个 Mac 采集辅助程序源码、本次 Windows 构建脚本和此说明；当前桌面端已有功能仍有未提交文件，需要纳入才能构建最新客户端。
 - 不上传账号数据、登录凭据、服务器数据库、安卓构建目录、已安装应用或本机日志。不得覆盖 `main`、旧 `dist` 或用户已有提交。
 - 用户已明确批准以上源码上传范围，将推送到独立验证分支并运行 CI；尚未生成 Windows 安装包。
+
+## Windows 安装与检查
+
+1. 打开验证分支的成功 Actions 运行，在 Artifacts 下载 `RemoteScreen-Windows-x64` 并解压。
+2. 在 Windows 电脑运行 `RemoteScreen_*_x64-setup.exe`；本测试版本尚未做商业代码签名。
+3. 安装后登录现有账号，检查消息、文件传输、双向投屏、麦克风与摄像头。安卓端无需更换协议。
+4. 摄像头或麦克风无法启动时，在 Windows「设置 → 隐私和安全性」检查相应设备访问权限，同时确认没有被其他应用占用。
+
+构建验证运行：https://github.com/GMCXUE/RempteScreen/actions/runs/38117493413 。本机未执行 Windows 硬件测试。

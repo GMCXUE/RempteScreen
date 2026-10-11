@@ -49,7 +49,10 @@ jobs:
         shell: pwsh
         working-directory: apps/desktop-rs/app
         run: |
-          tauri build --target x86_64-pc-windows-msvc --bundles nsis -- --locked 2>&1 | Tee-Object -FilePath "${{ github.workspace }}/build-log.txt"
+          # Invoke the native Node executable: the npm PowerShell shim consumes `--`.
+          $cli = Join-Path (npm root --global) '@tauri-apps/cli/tauri.js'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node $cli build --target x86_64-pc-windows-msvc --bundles nsis -- --locked 2>&1 | Tee-Object -FilePath "${{ github.workspace }}/build-log.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify installer output
         shell: pwsh
