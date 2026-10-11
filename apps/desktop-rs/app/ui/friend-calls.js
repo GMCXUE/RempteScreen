@@ -85,13 +85,13 @@
  setInterval(sync,2000);setTimeout(sync,800);
  setInterval(async()=>{
   if(!current||current.status!=='active'||cameraFetch)return;cameraFetch=true;const id=current.id,generation=version;
-  // WKWebView can display custom-protocol images directly, but fetch across
-  // tauri:// and friendcamera:// is subject to cross-origin checks.
+  // Tauri maps custom protocols to WebView2 localhost origins on Windows.
+  // Keep image loading for the same cross-platform frame transport.
   const image=el('friend-call-video'),frame=new Image();
   const valid=()=>current?.id===id&&current.status==='active'&&generation===version;
   const timeout=setTimeout(()=>{frame.onload=frame.onerror=null;cameraFetch=false;},3000);
   frame.onload=()=>{clearTimeout(timeout);if(valid()){image.src=frame.src;image.classList.remove('hidden');}cameraFetch=false;};
   frame.onerror=()=>{clearTimeout(timeout);if(valid())image.classList.add('hidden');cameraFetch=false;};
-  frame.src=`friendcamera://localhost/latest?t=${Date.now()}`;
+  frame.src=`${window.__TAURI__.core.convertFileSrc('latest', 'friendcamera')}?t=${Date.now()}`;
  },120);
 })();

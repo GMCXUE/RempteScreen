@@ -7,7 +7,7 @@ setInterval(() => {
   const frame = new Image();
   frame.onload = () => { video.src = frame.src; video.hidden = false; shell.classList.add('connected'); busy = false; };
   frame.onerror = () => { video.hidden = true; shell.classList.remove('connected'); busy = false; };
-  frame.src = `callcamera://localhost/latest?t=${performance.now()}`;
+  frame.src = `${window.__TAURI__.core.convertFileSrc('latest', 'callcamera')}?t=${performance.now()}`;
 }, 100);
 
 let folded = false;

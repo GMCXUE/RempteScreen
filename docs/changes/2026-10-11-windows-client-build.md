@@ -20,6 +20,7 @@ GitHub Actions 运行 `38019214587`（提交 `58b0959`）在 `webrtc-sys` 编译
 - Windows 摄像头使用 Media Foundation；JPEG 摄像头帧使用现有 Rust 解码器，避免重复引入原生 libjpeg；麦克风继续使用现有 CPAL。
 - Windows 系统声音使用 WASAPI，发布为 ScreenshareAudio，和通话麦克风分开。支持时排除 RemoteScreen 自身进程的播放，避免将通话声音再次投送。
 - Windows 来电铃声使用系统音频资源，并隐藏播放进程控制台；通知设置按钮打开 Windows 通知设置。
+- 观看、摄像头和好友通话图片通过 Tauri `convertFileSrc` 生成自定义协议地址，兼容 Windows WebView2 的 localhost 映射与 Mac 原有协议。
 - Windows 设备登记使用 `windows` 平台标识，与移动端现有设备显示兼容。
 
 ## 双端与平台差异

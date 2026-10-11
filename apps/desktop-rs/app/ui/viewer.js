@@ -52,7 +52,7 @@ function startFrames() {
         finish();
       };
       image.onerror = finish;
-      image.src = `frame://localhost/latest?t=${performance.now()}`;
+      image.src = `${window.__TAURI__.core.convertFileSrc('latest', 'frame')}?t=${performance.now()}`;
     }
     frameLoop = requestAnimationFrame(tick);
   };
@@ -84,7 +84,7 @@ function cameraTick() {
       view.classList.add("hidden");
       cameraPending = false;
     };
-    next.src = `camera://localhost/latest?t=${performance.now()}`;
+    next.src = `${window.__TAURI__.core.convertFileSrc('latest', 'camera')}?t=${performance.now()}`;
   } else if (!remoteCameraOn) {
     view.classList.add("hidden");
   }
