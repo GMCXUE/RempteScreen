@@ -20,7 +20,8 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
@@ -36,7 +37,8 @@
       "icons/icon.png"
     ],
     "macOS": {
-      "signingIdentity": "RemoteScreen Dev"
+      "signingIdentity": "RemoteScreen Dev",
+      "entitlements": "Entitlements.plist"
     }
   }
 }

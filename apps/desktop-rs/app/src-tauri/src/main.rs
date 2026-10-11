@@ -3,10 +3,27 @@
 // 架构：Rust 侧持有全部业务（服务端 API、心跳、原生采集推流），
 // 前端只是个壳，通过 invoke 调命令、轮询状态渲染界面。
 mod api;
+mod call;
+mod friend_call;
+mod notifications;
+mod notification_policy;
+mod microphone;
+#[cfg(target_os = "macos")]
+mod capture_permissions;
 mod publisher;
+mod screen_frame;
 mod audio_playout;
+mod file_transfer;
+mod file_session;
 mod viewer;
 #[cfg(target_os = "macos")]
+mod system_audio;
+#[cfg(target_os = "windows")]
+mod windows_camera;
+#[cfg(target_os = "windows")]
+mod windows_screen;
+#[cfg(target_os = "windows")]
+#[path = "windows_audio.rs"]
 mod system_audio;
 
 use tauri::{Emitter, Manager};
@@ -18,17 +35,28 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct AppState {
+    audio_gate: tokio::sync::Mutex<()>,
+    friend: Mutex<Option<friend_call::FriendSession>>,
     creds: Mutex<api::Credentials>,
     registration: Mutex<Option<api::Registration>>,
     heartbeat_stop: Mutex<Option<Arc<AtomicBool>>>,
     session: Mutex<Option<publisher::PublishSession>>,
     last_error: Arc<Mutex<Option<String>>>,
     watch: Mutex<Option<viewer::WatchSession>>,
+    file_session: Mutex<Option<file_session::FileSession>>,
+    file_host: Mutex<Option<file_session::FileSession>>,
+    file_error: Arc<Mutex<Option<String>>>,
+    /// 远端连接用途：watch / transfer。文件传输连接不显示为观看会话。
+    watch_mode: Mutex<String>,
     watch_error: Arc<Mutex<Option<String>>>,
     frames: viewer::FrameStore,
+    watch_camera_frames: viewer::FrameStore,
+    publish_camera_frames: viewer::FrameStore,
     watch_stats: Arc<Mutex<viewer::WatchStats>>,
     audio: viewer::AudioTrackStore,
     volume: audio_playout::Volume,
+    voice_volume: audio_playout::Volume,
+    ft_recv: Arc<Mutex<file_transfer::RecvMgr>>,
     /// 正在等待对方同意的连接请求（界面据此显示「等待同意」）
     pending_request: Arc<Mutex<Option<PendingRequest>>>,
     /// 别人发给我们这台设备的观看请求（待同意）
@@ -40,6 +68,7 @@ struct PendingRequest {
     device_name: String,
     expires_at: i64,
     stop: Arc<AtomicBool>,
+    files_only: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -65,6 +94,12 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
     let stop = Arc::new(AtomicBool::new(false));
     *state.heartbeat_stop.lock().unwrap() = Some(stop.clone());
     *state.registration.lock().unwrap() = Some(registration.clone());
+    state.file_host.lock().unwrap().take();
+    if !registration.file_token.is_empty() {
+        *state.file_host.lock().unwrap() = Some(file_session::start(
+            registration.livekit_url.clone(), registration.file_token.clone(),
+            registration.device_name.clone(), None, state.ft_recv.clone(), app.clone()));
+    }
 
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -96,7 +131,7 @@ fn spawn_heartbeat(app: &tauri::AppHandle, registration: api::Registration) {
                                 let app_for_main = handle.clone();
                                 let _ = handle.run_on_main_thread(move || {
                                     let main_state = app_for_main.state::<AppState>();
-                                    match start_publish(main_state.clone()) {
+                                    match start_publish(app_for_main.clone(), main_state.clone()) {
                                         Ok(()) => viewer::log_to_file(
                                             "[viewer-connected] 观看者连入，已自动开启投送",
                                         ),
@@ -190,6 +225,37 @@ fn login(email: String, password: String, state: tauri::State<AppState>) -> Resu
     Ok(name)
 }
 
+#[tauri::command]
+async fn pick_avatar_image() -> Result<Option<String>, String> {
+    use base64::Engine;
+    let Some(file) = rfd::AsyncFileDialog::new().add_filter("图片", &["png", "jpg", "jpeg", "webp"]).pick_file().await else { return Ok(None); };
+    let path=file.path().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        if std::fs::metadata(&path).map_err(|_|"无法读取图片")?.len()>8*1024*1024 { return Err("图片过大，请选择 8 MB 以内的图片".into()); }
+        let bytes=std::fs::read(&path).map_err(|_|"无法读取图片")?;
+        let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
+        let mime=match ext.as_str(){"png"=>"png","jpg"|"jpeg"=>"jpeg","webp"=>"webp",_=>return Err("请选择 JPG、PNG 或 WebP 图片".into())};
+        Ok(Some(format!("data:image/{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))))
+    }).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn social_api(operation: String, body: Option<serde_json::Value>, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let token = state.creds.lock().unwrap().account_token.clone().ok_or("请先登录")?;
+    let saved_token=token.clone();let saved_operation=operation.clone();
+    let value=tauri::async_runtime::spawn_blocking(move || api::social(&operation, &token, body.unwrap_or_else(|| serde_json::json!({}))))
+        .await.map_err(|error| error.to_string())??;
+    if saved_operation=="state" || saved_operation=="account-profile" {
+        let user=if saved_operation=="state" { &value["me"] } else { &value["user"] };
+        if let Some(name)=user["name"].as_str() {
+            let mut creds=state.creds.lock().unwrap();
+            if creds.account_token.as_deref()==Some(saved_token.as_str()) && creds.account_name.as_deref()!=Some(name) {
+                creds.account_name=Some(name.to_owned());api::save_creds(&creds);
+            }
+        }
+    }
+    Ok(value)
+}
+
 /// 退出登录：停掉心跳、投送与观看，清空账号与设备凭据（画质设置保留）。
 #[tauri::command]
 fn logout(state: tauri::State<AppState>) -> Result<(), String> {
@@ -202,8 +268,17 @@ fn logout(state: tauri::State<AppState>) -> Result<(), String> {
     if let Some(session) = state.watch.lock().unwrap().take() {
         session.stop();
     }
+    state.file_session.lock().unwrap().take();
+    state.file_host.lock().unwrap().take();
+    if let Some(pending) = state.pending_request.lock().unwrap().take() {
+        pending.stop.store(true, Ordering::Relaxed);
+        let _ = api::cancel_connect_request(&pending.request_id);
+    }
+    state.friend.lock().unwrap().take();
     *state.registration.lock().unwrap() = None;
     *state.frames.lock().unwrap() = None;
+    *state.watch_camera_frames.lock().unwrap() = None;
+    *state.publish_camera_frames.lock().unwrap() = None;
     *state.last_error.lock().unwrap() = None;
     {
         let mut creds = state.creds.lock().unwrap();
@@ -261,10 +336,12 @@ fn decide_incoming_request(
 
     // 同意观看后自动开启投送（等价于用户手动打开「允许远程观看本设备」），
     // 否则对方连上了却看不到画面。
-    if approve {
+    let files_only = state.incoming_requests.lock().unwrap().iter()
+        .any(|request| request.request_id == request_id && request.purpose == "files");
+    if approve && !files_only {
         let publishing = state.session.lock().unwrap().is_some();
         if !publishing {
-            if let Err(error) = start_publish(state.clone()) {
+            if let Err(error) = start_publish(app.clone(), state.clone()) {
                 viewer::log_to_file(&format!("[approve] 自动开启投送失败: {error}"));
             } else {
                 viewer::log_to_file("[approve] 已同意观看请求并自动开启投送");
@@ -344,8 +421,16 @@ fn unbind_device(device_id: String, state: tauri::State<AppState>) -> Result<(),
         if let Some(session) = state.watch.lock().unwrap().take() {
             session.stop();
         }
-        *state.registration.lock().unwrap() = None;
+        state.file_session.lock().unwrap().take();
+    state.file_host.lock().unwrap().take();
+    if let Some(pending) = state.pending_request.lock().unwrap().take() {
+        pending.stop.store(true, Ordering::Relaxed);
+        let _ = api::cancel_connect_request(&pending.request_id);
+    }
+    *state.registration.lock().unwrap() = None;
         *state.frames.lock().unwrap() = None;
+        *state.watch_camera_frames.lock().unwrap() = None;
+        *state.publish_camera_frames.lock().unwrap() = None;
         let mut creds = state.creds.lock().unwrap();
         creds.device_id = None;
         creds.device_session_token = None;
@@ -389,7 +474,10 @@ fn register_device(app: tauri::AppHandle, state: tauri::State<AppState>) -> Resu
 }
 
 #[tauri::command]
-fn start_publish(state: tauri::State<AppState>) -> Result<(), String> {
+fn start_publish(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
     let registration = state
         .registration
         .lock()
@@ -411,6 +499,10 @@ fn start_publish(state: tauri::State<AppState>) -> Result<(), String> {
         state.last_error.clone(),
         share_height,
         share_fps,
+        Some(app.clone()),
+        state.ft_recv.clone(),
+        state.publish_camera_frames.clone(),
+        state.voice_volume.clone(),
     ) {
         Ok(session) => session,
         Err(error) => return Err(error),
@@ -425,6 +517,7 @@ fn stop_publish(state: tauri::State<AppState>) -> Result<(), String> {
     if let Some(session) = state.session.lock().unwrap().take() {
         session.stop();
     }
+    *state.publish_camera_frames.lock().unwrap() = None;
     Ok(())
 }
 
@@ -466,7 +559,12 @@ fn set_device_password(password: String, state: tauri::State<AppState>) -> Resul
 
 /// 保存画质设置；正在投送时自动以新画质重启会话。
 #[tauri::command]
-fn set_quality(height: u32, fps: u32, state: tauri::State<AppState>) -> Result<(), String> {
+fn set_quality(
+    app: tauri::AppHandle,
+    height: u32,
+    fps: u32,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
     {
         let mut creds = state.creds.lock().unwrap();
         creds.share_height = height;
@@ -484,7 +582,7 @@ fn set_quality(height: u32, fps: u32, state: tauri::State<AppState>) -> Result<(
         }
     };
     if was_publishing {
-        start_publish(state)?;
+        start_publish(app.clone(), state)?;
     }
     Ok(())
 }
@@ -501,14 +599,47 @@ fn start_watch(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<String, String> {
-    {
-        let mut watch = state.watch.lock().unwrap();
-        if let Some(session) = watch.take() {
-            session.stop();
-        }
+    start_remote_session(
+        device_id,
+        password,
+        "RemoteScreen 桌面端",
+        true,
+        &app,
+        &state,
+    )
+}
+
+/// 建立仅用于文件传输的远端连接，不打开观看窗口。
+#[tauri::command]
+fn start_file_transfer(
+    device_id: String,
+    password: String,
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<String, String> {
+    start_remote_session(
+        device_id,
+        password,
+        "RemoteScreen 桌面端 · 文件传输",
+        false,
+        &app,
+        &state,
+    )
+}
+
+fn start_remote_session(
+    device_id: String,
+    password: String,
+    viewer_name: &str,
+    open_viewer_on_approval: bool,
+    app: &tauri::AppHandle,
+    state: &tauri::State<AppState>,
+) -> Result<String, String> {
+    let purpose = if open_viewer_on_approval { "screen" } else { "files" };
+    if !open_viewer_on_approval && state.registration.lock().unwrap().as_ref()
+        .map(|reg| reg.file_token.is_empty()).unwrap_or(true) {
+        return Err("服务端尚未支持独立文件传输，请先更新服务端并重新登录".into());
     }
-    *state.watch_error.lock().unwrap() = None;
-    *state.frames.lock().unwrap() = None;
 
     let account_token = state.creds.lock().unwrap().account_token.clone();
 
@@ -531,12 +662,38 @@ fn start_watch(
         .map(|token| api::device_is_mine(token, &device_id))
         .unwrap_or(false);
     if !mine && password.is_empty() {
-        let outcome =
-            api::create_connect_request(account_token.as_deref(), &device_id, "RemoteScreen 桌面端")?;
-        return request_approval(&app, &state, outcome);
+        let outcome = api::create_connect_request_for(
+            account_token.as_deref(),
+            &device_id,
+            viewer_name,
+            purpose,
+        )?;
+        if !outcome.owned {
+            return request_approval(app, state, outcome, open_viewer_on_approval);
+        }
     }
 
-    let ticket = api::connect(&device_id, &password, account_token.as_deref(), "RemoteScreen 桌面端")?;
+    let ticket = api::connect_for(
+        &device_id,
+        &password,
+        account_token.as_deref(),
+        viewer_name,
+        purpose,
+    )?;
+    if let Some(pending) = state.pending_request.lock().unwrap().take() {
+        pending.stop.store(true, Ordering::Relaxed);
+        let _ = api::cancel_connect_request(&pending.request_id);
+    }
+    if !open_viewer_on_approval {
+        *state.file_error.lock().unwrap() = None;
+        *state.file_session.lock().unwrap() = Some(file_session::start(
+            ticket.livekit_url, ticket.token, ticket.device_name.clone(),
+            Some(format!("file-host-{}", ticket.device_id)), state.ft_recv.clone(), app.clone()));
+        return Ok(ticket.device_name);
+    }
+    if let Some(previous) = state.watch.lock().unwrap().take() { previous.stop(); }
+    *state.watch_error.lock().unwrap() = None;
+    *state.watch_mode.lock().unwrap() = "watch".into();
     // 连接成功才写入历史（点击重连时就能看到设备名）
     let own = state
         .creds
@@ -556,6 +713,10 @@ fn start_watch(
         state.watch_stats.clone(),
         state.audio.clone(),
         state.volume.clone(),
+        state.voice_volume.clone(),
+        Some(app.clone()),
+        state.ft_recv.clone(),
+        state.watch_camera_frames.clone(),
     )?;
     *state.watch.lock().unwrap() = Some(session);
     Ok(ticket.device_name)
@@ -566,12 +727,15 @@ fn request_approval(
     app: &tauri::AppHandle,
     state: &tauri::State<AppState>,
     outcome: api::RequestOutcome,
+    open_viewer_on_approval: bool,
 ) -> Result<String, String> {
     // 同一时间只保留一个待批准请求
     if let Some(previous) = state.pending_request.lock().unwrap().take() {
         previous.stop.store(true, Ordering::Relaxed);
     }
 
+    let error_sink = if open_viewer_on_approval { state.watch_error.clone() } else { state.file_error.clone() };
+    *error_sink.lock().unwrap() = None;
     let stop = Arc::new(AtomicBool::new(false));
     let expires_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -588,10 +752,12 @@ fn request_approval(
         device_name: device_name.clone(),
         expires_at,
         stop: stop.clone(),
+        files_only: !open_viewer_on_approval,
     });
 
     let handle = app.clone();
     let request_id = outcome.request_id.clone();
+    let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
         loop {
@@ -600,18 +766,33 @@ fn request_approval(
             }
 
             // 长轮询：服务端挂住 20 秒，对方一决策就立刻返回
-            match api::poll_connect_request_long(&request_id, 20) {
+            let outcome = api::poll_connect_request_long(&request_id, 20);
+            if stop.load(Ordering::Relaxed) { break; }
+            match outcome {
                 Ok(api::PollOutcome::Pending) => continue,
                 Ok(api::PollOutcome::Denied) => {
-                    *state.watch_error.lock().unwrap() = Some("对方拒绝了这次观看请求".into());
+                    *error_sink.lock().unwrap() = Some("对方拒绝了这次观看请求".into());
                     break;
                 }
                 Ok(api::PollOutcome::Expired) => {
-                    *state.watch_error.lock().unwrap() =
+                    *error_sink.lock().unwrap() =
                         Some("观看请求已超时（对方未在 60 秒内确认）".into());
                     break;
                 }
                 Ok(api::PollOutcome::Approved(grant)) => {
+                    if !open_viewer_on_approval {
+                        if !grant.room_name.starts_with("files-") {
+                            *error_sink.lock().unwrap() = Some("服务端未返回独立文件连接".into());
+                            break;
+                        }
+                        *state.file_session.lock().unwrap() = Some(file_session::start(
+                            grant.livekit_url, grant.token, grant.device_name,
+                            Some(format!("file-host-{}", grant.room_name.trim_start_matches("files-"))),
+                            state.ft_recv.clone(), app.clone()));
+                        break;
+                    }
+                    if let Some(previous) = state.watch.lock().unwrap().take() { previous.stop(); }
+                    *state.watch_mode.lock().unwrap() = "watch".into();
                     // 记录历史（自有与否以账号归属为准）。
                     // 注意：先把令牌取出来再发网络请求 —— 绝不能持锁做 I/O，
                     // 否则界面轮询（get_state）会被同一个锁堵住，表现就是「应用卡死」。
@@ -622,6 +803,7 @@ fn request_approval(
                             api::device_is_mine(token, grant.room_name.trim_start_matches("device-"))
                         })
                         .unwrap_or(false);
+                    if stop.load(Ordering::Relaxed) { break; }
                     api::record_watch(
                         grant.room_name.trim_start_matches("device-"),
                         &grant.device_name,
@@ -637,24 +819,35 @@ fn request_approval(
                         state.watch_stats.clone(),
                         state.audio.clone(),
                         state.volume.clone(),
+        state.voice_volume.clone(),
+                        Some(app.clone()),
+                        state.ft_recv.clone(),
+                        state.watch_camera_frames.clone(),
                     ) {
                         Ok(session) => {
                             *state.watch.lock().unwrap() = Some(session);
-                            let _ = open_viewer_window(handle.clone());
+                            if open_viewer_on_approval {
+                                if let Err(error) = ensure_viewer_window(handle.clone()) {
+                                    viewer::log_to_file(&format!("[viewer-window] {error}"));
+                                }
+                            }
                         }
                         Err(error) => {
-                            *state.watch_error.lock().unwrap() = Some(error);
+                            *error_sink.lock().unwrap() = Some(error);
                         }
                     }
                     break;
                 }
                 Err(error) => {
-                    *state.watch_error.lock().unwrap() = Some(format!("请求状态查询失败：{error}"));
+                    *error_sink.lock().unwrap() = Some(format!("请求状态查询失败：{error}"));
                     break;
                 }
             }
         }
-        *state.pending_request.lock().unwrap() = None;
+        let mut pending = state.pending_request.lock().unwrap();
+        if pending.as_ref().is_some_and(|p| p.request_id == request_id) {
+            *pending = None;
+        }
     });
 
     Ok(format!("已向「{device_name}」发送观看请求，等待对方同意…"))
@@ -678,18 +871,31 @@ fn stop_watch(state: tauri::State<AppState>) -> Result<(), String> {
         session.stop();
     }
     *state.frames.lock().unwrap() = None;
+    *state.watch_camera_frames.lock().unwrap() = None;
     *state.audio.lock().unwrap() = None;
     // 立即复位统计与错误，界面据此收起「正在观看」卡片
     *state.watch_stats.lock().unwrap() = viewer::WatchStats::default();
     *state.watch_error.lock().unwrap() = None;
+    state.watch_mode.lock().unwrap().clear();
     Ok(())
 }
 
 /// 打开（或聚焦）独立的观看窗口 —— 画面与控制条都在这个窗口里。
 #[tauri::command]
-fn open_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
+    tokio::time::timeout(Duration::from_secs(12),
+        tauri::async_runtime::spawn_blocking(move || ensure_viewer_window(app)))
+        .await.map_err(|_| "打开观看窗口超时，请重试".to_string())?
+        .map_err(|error| format!("打开观看窗口失败：{error}"))?
+}
+
+fn ensure_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
+    viewer::log_to_file("[viewer-window] 请求打开观看窗口");
     if let Some(window) = app.get_webview_window("viewer") {
-        let _ = window.set_focus();
+        window.show().map_err(|error| format!("显示观看窗口失败：{error}"))?;
+        window.unminimize().map_err(|error| format!("恢复观看窗口失败：{error}"))?;
+        window.set_focus().map_err(|error| format!("聚焦观看窗口失败：{error}"))?;
+        viewer::log_to_file("[viewer-window] 已恢复观看窗口");
         return Ok(());
     }
     let window =
@@ -700,6 +906,7 @@ fn open_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
             .build()
             .map_err(|error| format!("打开观看窗口失败: {error}"))?;
 
+    viewer::log_to_file("[viewer-window] 已创建观看窗口");
     // 点窗口关闭按钮（×）时：正在观看就先拦下来，让界面确认「关闭会断开连接」。
     let handle = app.clone();
     window.on_window_event(move |event| {
@@ -716,6 +923,49 @@ fn open_viewer_window(app: tauri::AppHandle) -> Result<(), String> {
         }
     });
     Ok(())
+}
+
+/// 投屏方接收的视频独立置顶，不依赖主窗口是否在前台。
+#[tauri::command]
+fn open_call_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("call-video") {
+        return window.show().map_err(|error| error.to_string());
+    }
+    let builder = tauri::WebviewWindowBuilder::new(
+        &app, "call-video", tauri::WebviewUrl::App("call-video.html".into()),
+    ).title("对方视频 · RemoteScreen")
+        .inner_size(180.0, 135.0).min_inner_size(56.0, 56.0)
+        .transparent(true).resizable(false)
+        .decorations(false).shadow(true)
+        .always_on_top(true).skip_taskbar(true).visible_on_all_workspaces(true)
+        .content_protected(true);
+    let builder = match app.primary_monitor() {
+        Ok(Some(monitor)) => {
+            let scale = monitor.scale_factor();
+            builder.position(
+                monitor.position().x as f64 / scale + monitor.size().width as f64 / scale - 204.0,
+                monitor.position().y as f64 / scale + 48.0,
+            )
+        }
+        _ => builder,
+    };
+    builder.build().map_err(|error| format!("打开视频悬浮窗失败：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn fold_call_window(app: tauri::AppHandle, folded: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("call-video") {
+        let (width, height) = if folded { (56.0, 56.0) } else { (180.0, 135.0) };
+        window.set_size(tauri::LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn close_call_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("call-video") {
+        let _ = window.destroy();
+    }
 }
 
 /// 界面侧写入诊断日志（观看窗口的交互状态记录在 ~/.remotescreen-rs.log，
@@ -770,6 +1020,236 @@ fn set_volume(volume: u8, state: tauri::State<AppState>) -> Result<bool, String>
 }
 
 #[tauri::command]
+async fn friend_call_start(url:String, token:String, peer_identity:String, video:bool, state:tauri::State<'_,AppState>)->Result<(),String>{
+    let gate=state.audio_gate.lock().await;
+    // Reserve ownership before any microphone await so screen controls cannot compete.
+    if state.creds.lock().unwrap().account_token.is_none(){return Err("请先登录".into());}
+    let reserved={let mut slot=state.friend.lock().unwrap();if slot.is_some(){return Err("你正在通话，请先结束当前通话".into());}
+        let session=friend_call::FriendSession::start(url,token,peer_identity,video,Arc::new(Mutex::new(None)),Vec::new());
+        let reserved=session.stop.clone();*slot=Some(session);reserved};
+    for scope in ["publish","watch"] {
+        if let Ok((local,media))=call_parts(&state,scope) {
+            let enabled=media.lock().unwrap().microphone_enabled();
+            if enabled {
+                if let Err(error)=call::set_microphone(&local,&media,false).await {
+                    drop(gate);let _=friend_call_stop(Some(true),state.clone()).await;return Err(error);
+                }
+                let saved={let mut slot=state.friend.lock().unwrap();
+                    if let Some(s)=slot.as_mut().filter(|s|Arc::ptr_eq(&s.stop,&reserved)) {s.paused.push((local.clone(),media.clone()));true}else{false}};
+                if !saved {let _=call::set_microphone(&local,&media,true).await;return Err("通话已结束".into());}
+            }
+        }
+    }
+    let slot=state.friend.lock().unwrap();
+    if let Some(s)=slot.as_ref().filter(|s|Arc::ptr_eq(&s.stop,&reserved)){s.ready.store(true,Ordering::Relaxed);}
+    else {return Err("通话已结束".into());}
+    Ok(())
+}
+#[tauri::command]
+async fn friend_call_stop(restore:Option<bool>,state:tauri::State<'_,AppState>)->Result<(),String>{
+    let _gate=state.audio_gate.lock().await;
+    let session=state.friend.lock().unwrap().take();
+    if let Some(mut session)=session {
+        session.stop.store(true,Ordering::Relaxed);session.media.lock().unwrap().close();
+        let paused=std::mem::take(&mut session.paused);drop(session);
+        if restore.unwrap_or(true){for (local,media) in paused {let _=call::set_microphone(&local,&media,true).await;}}
+    }
+    Ok(())
+}
+#[tauri::command]
+fn friend_call_status(speaker:Option<bool>,state:tauri::State<AppState>)->serde_json::Value{
+    let slot=state.friend.lock().unwrap();
+    if let Some(s)=slot.as_ref(){
+        *s.heartbeat.lock().unwrap()=std::time::Instant::now();
+        if let Some(enabled)=speaker{s.volume.store(if enabled{100}else{0},Ordering::Relaxed);}
+        serde_json::json!({"status":s.status.lock().unwrap().clone(),"error":s.error.lock().unwrap().clone()})
+    }else{serde_json::json!({"status":"idle","error":""})}
+}
+
+#[derive(Serialize)]
+struct CallStateDto {
+    microphone: bool,
+    camera: bool,
+    remote_camera: bool,
+    speaker: bool,
+}
+
+fn call_parts(
+    state: &AppState,
+    scope: &str,
+) -> Result<(livekit::prelude::LocalParticipant, Arc<Mutex<call::CallMedia>>), String> {
+    if scope == "friend" {
+        let guard=state.friend.lock().unwrap();let session=guard.as_ref().ok_or("当前没有好友通话")?;
+        let local=session.local.lock().unwrap().clone().ok_or("通话会话尚未连接")?;
+        return Ok((local,session.media.clone()));
+    }
+    if scope == "publish" {
+        let session = state.session.lock().unwrap();
+        let session = session.as_ref().ok_or("当前没有投送会话")?;
+        let local = session
+            .local
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("投送会话尚未连接")?;
+        Ok((local, session.call.clone()))
+    } else {
+        let session = state.watch.lock().unwrap();
+        let session = session.as_ref().ok_or("当前没有观看会话")?;
+        let local = session
+            .local
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("观看会话尚未连接")?;
+        Ok((local, session.call.clone()))
+    }
+}
+
+#[tauri::command]
+fn call_state(scope: String, state: tauri::State<AppState>) -> CallStateDto {
+    let media = if scope == "friend" {
+        state.friend.lock().unwrap().as_ref().map(|value|value.media.clone())
+    } else if scope == "publish" {
+        state.session.lock().unwrap().as_ref().map(|value| value.call.clone())
+    } else {
+        state.watch.lock().unwrap().as_ref().map(|value| value.call.clone())
+    };
+    let (microphone, camera) = media
+        .map(|media| {
+            let media = media.lock().unwrap();
+            (media.microphone_enabled(), media.camera_enabled())
+        })
+        .unwrap_or((false, false));
+    CallStateDto {
+        speaker: if scope == "friend" {state.friend.lock().unwrap().as_ref().is_some_and(|s|s.volume.load(Ordering::Relaxed)>0)} else {state.voice_volume.load(Ordering::Relaxed) > 0},
+        microphone,
+        camera,
+        remote_camera: if scope == "friend" {state.friend.lock().unwrap().as_ref().is_some_and(|s|s.frames.lock().unwrap().is_some())} else if scope == "publish" {
+            state.publish_camera_frames.lock().unwrap().is_some()
+        } else {
+            state.watch_camera_frames.lock().unwrap().is_some()
+        },
+    }
+}
+
+#[tauri::command]
+fn call_set_speaker(enabled: bool, state: tauri::State<AppState>) {
+    state.voice_volume.store(if enabled { 100 } else { 0 }, Ordering::Relaxed);
+}
+
+#[tauri::command]
+async fn call_set_microphone(
+    scope: String,
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let _gate=state.audio_gate.lock().await;
+    if enabled && scope != "friend" && state.friend.lock().unwrap().is_some() {return Err("好友通话进行中，请先结束通话再使用投屏麦克风".into());}
+    let (local, media) = call_parts(&state, &scope)?;
+    call::set_microphone(&local, &media, enabled).await?;
+    if scope=="friend" {if let Some(s)=state.friend.lock().unwrap().as_ref(){s.error.lock().unwrap().clear();}}
+    Ok(())
+}
+
+#[tauri::command]
+async fn call_set_camera(
+    scope: String,
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let (local, media) = call_parts(&state, &scope)?;
+    call::set_camera(&local, &media, enabled).await?;
+    if scope=="friend" {if let Some(s)=state.friend.lock().unwrap().as_ref(){s.error.lock().unwrap().clear();}}
+    Ok(())
+}
+
+#[tauri::command]
+/// 独立文件会话：选择文件 → 定向数据通道 → 接收与保存回执。
+async fn ft_send_file(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
+    // 文件会话与观看会话分别持有，结束投屏不会中断传输。
+    let (local, remote) = {
+        let connection = state.file_session.lock().unwrap();
+        match connection.as_ref() {
+            Some(session) => (session.local.clone(), session.remote.clone()),
+            None => return Ok(false),
+        }
+    };
+    let local = {
+        let local_guard = local.lock().unwrap();
+        let Some(local) = local_guard.as_ref() else {
+            return Err("文件会话尚未建立".into());
+        };
+        local.clone()
+    }; // 锁在此结束（MutexGuard 不能跨 await）
+    let remote = {
+        let remote_guard = remote.lock().unwrap();
+        let Some(remote) = remote_guard.as_ref() else {
+            return Err("对方尚未连接，暂时不能发送文件".into());
+        };
+        remote.clone()
+    };
+
+    let Some(handle) = rfd::AsyncFileDialog::new()
+        .set_title("选择要发送的文件")
+        .pick_file()
+        .await
+    else {
+        return Ok(false); // 用户取消
+    };
+    let path = handle.path().to_path_buf();
+    let transfer_manager = state.ft_recv.clone();
+
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = crate::file_transfer::send_file(
+            &local,
+            &remote,
+            path,
+            Some(app.clone()),
+            transfer_manager,
+        )
+        .await
+        {
+            crate::publisher::log_to_file(&format!("[文件传输] 发送失败: {error}"));
+        }
+    });
+    Ok(true)
+}
+
+#[tauri::command]
+/// 接收进度列表（主窗口轮询展示）
+fn ft_recv_list(state: tauri::State<AppState>) -> Vec<file_transfer::FtProgress> {
+    let mgr = state.ft_recv.lock().unwrap();
+    mgr.list_progress()
+}
+
+#[tauri::command]
+fn reveal_received_file(path: String) -> Result<(), String> {
+    let file = std::path::PathBuf::from(path).canonicalize()
+        .map_err(|_| "文件不存在或已被移动".to_string())?;
+    let root = dirs::download_dir().ok_or("无法找到下载目录")?
+        .join("RemoteScreen-Files").canonicalize()
+        .map_err(|_| "无法找到接收文件目录".to_string())?;
+    if !file.is_file() || !file.starts_with(root) {
+        return Err("无法打开该文件所在目录".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg("-R").arg(&file).status();
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{}", file.display())).status();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let result = std::process::Command::new("xdg-open").arg(file.parent().unwrap()).status();
+    match result {
+        Ok(status) if status.success() => Ok(()),
+        _ => Err("无法打开文件所在目录".to_string()),
+    }
+}
+
+#[tauri::command]
 fn has_audio(state: tauri::State<AppState>) -> bool {
     state.audio.lock().unwrap().is_some()
 }
@@ -777,6 +1257,7 @@ fn has_audio(state: tauri::State<AppState>) -> bool {
 #[derive(Serialize)]
 struct WatchStateDto {
     watching: bool,
+    mode: String,
     width: u32,
     height: u32,
     fps: u32,
@@ -801,23 +1282,25 @@ fn watch_snapshot(state: &AppState) -> WatchStateDto {
     let stats = state.watch_stats.lock().unwrap().clone();
     let error = state.watch_error.lock().unwrap().clone().unwrap_or_default();
     let has_audio = state.audio.lock().unwrap().is_some();
+    let mode = state.watch_mode.lock().unwrap().clone();
 
     let (pending_device, pending_seconds) = {
         let pending = state.pending_request.lock().unwrap();
         match pending.as_ref() {
-            Some(pending) => {
+            Some(pending) if !pending.files_only => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|t| t.as_secs() as i64)
                     .unwrap_or(0);
                 (pending.device_name.clone(), (pending.expires_at - now).max(0))
             }
-            None => (String::new(), 0),
+            _ => (String::new(), 0),
         }
     };
 
     WatchStateDto {
         watching: stats.active,
+        mode,
         width: stats.width,
         height: stats.height,
         fps: stats.fps,
@@ -835,6 +1318,33 @@ fn watch_snapshot(state: &AppState) -> WatchStateDto {
 #[tauri::command]
 fn get_watch_state(state: tauri::State<AppState>) -> WatchStateDto {
     watch_snapshot(&state)
+}
+
+#[tauri::command]
+fn get_file_state(state: tauri::State<AppState>) -> serde_json::Value {
+    let error = state.file_error.lock().unwrap().clone().unwrap_or_default();
+    let status = state.file_session.lock().unwrap().as_ref()
+        .map(|session| session.status.lock().unwrap().clone()).unwrap_or_default();
+    let pending = state.pending_request.lock().unwrap();
+    let pending = pending.as_ref().filter(|p| p.files_only);
+    serde_json::json!({"watching":status.watching,"device_name":status.device_name,
+        "error":if status.error.is_empty() { error } else { status.error },"mode":"transfer",
+        "pending_device":pending.map(|p| p.device_name.clone()).unwrap_or_default(),
+        "pending_seconds":pending.map(|p| {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .map(|t| t.as_secs() as i64).unwrap_or(0);
+            (p.expires_at - now).max(0)
+        }).unwrap_or(0)})
+}
+#[tauri::command]
+fn stop_file_transfer(state: tauri::State<AppState>) {
+    state.ft_recv.lock().unwrap().cancel_sends();
+    state.file_session.lock().unwrap().take();
+}
+
+#[tauri::command]
+fn ft_cancel_send(state: tauri::State<AppState>) {
+    state.ft_recv.lock().unwrap().cancel_sends();
 }
 
 /// 无界面自检：连接设备、订阅画面并打印统计（用于命令行验证观看链路）。
@@ -865,6 +1375,10 @@ fn run_watch_test(device_id: &str, password: &str, seconds: u64) {
             stats.clone(),
             audio.clone(),
             std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            None, // watch-test 无 AppHandle：文件传输进度不推 UI，只落日志
+            std::sync::Arc::new(std::sync::Mutex::new(crate::file_transfer::RecvMgr::new())),
+            std::sync::Arc::new(std::sync::Mutex::new(None)),
         )
         .unwrap();
 
@@ -950,6 +1464,24 @@ fn find_audio_capture_helper() -> Option<std::path::PathBuf> {
     .find(|path| path.exists())
 }
 
+#[cfg(target_os = "macos")]
+fn find_camera_capture_helper() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    [
+        exe_dir.as_ref().map(|dir| dir.join("macos-camera-capture")),
+        Some(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries")
+                .join(format!("macos-camera-capture-{}", env!("RS_BUILD_TARGET"))),
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|path| path.exists())
+}
+
 /// 无界面自检：启动投送（屏幕 + 系统音频）N 秒后自动结束，验证音频轨发布。
 /// 用法：remotescreen-desktop --publish-test <秒数>
 fn run_publish_test(seconds: u64) {
@@ -979,6 +1511,10 @@ fn run_publish_test(seconds: u64) {
         Arc::new(Mutex::new(None)),
         1080,
         30,
+        None,
+        Arc::new(Mutex::new(crate::file_transfer::RecvMgr::new())),
+        Arc::new(Mutex::new(None)),
+        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
     ) {
         Ok(session) => session,
         Err(error) => {
@@ -1077,12 +1613,23 @@ fn run_state_check() {
         session: Mutex::new(None),
         last_error: Arc::new(Mutex::new(None)),
         watch: Mutex::new(None),
+        watch_mode: Mutex::new(String::new()),
+            file_session: Mutex::new(None),
+            file_host: Mutex::new(None),
+            file_error: Arc::new(Mutex::new(None)),
         watch_error: Arc::new(Mutex::new(None)),
         frames: Arc::new(Mutex::new(None)),
+        audio_gate: tokio::sync::Mutex::new(()),
+        friend: Mutex::new(None),
+        watch_camera_frames: Arc::new(Mutex::new(None)),
+        publish_camera_frames: Arc::new(Mutex::new(None)),
         watch_stats: Arc::new(Mutex::new(viewer::WatchStats::default())),
         audio: Arc::new(Mutex::new(None)),
         volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            voice_volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+        ft_recv: Arc::new(Mutex::new(file_transfer::RecvMgr::new())),
         pending_request: Arc::new(Mutex::new(Some(PendingRequest {
+            files_only: false,
             request_id: "self-check".into(),
             device_name: "自检设备".into(),
             expires_at: 4_000_000_000,
@@ -1139,24 +1686,41 @@ fn main() {
     let initial_creds = api::load_creds();
     let frames_for_protocol = Arc::new(Mutex::new(None::<Vec<u8>>));
     let frames = frames_for_protocol.clone();
+    let watch_camera_frames_for_protocol = Arc::new(Mutex::new(None::<Vec<u8>>));
+    let watch_camera_frames = watch_camera_frames_for_protocol.clone();
+    let publish_camera_frames_for_protocol = Arc::new(Mutex::new(None::<Vec<u8>>));
+    let publish_camera_frames = publish_camera_frames_for_protocol.clone();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .manage(notifications::NotificationContext::default())
         .manage(AppState {
+            audio_gate: tokio::sync::Mutex::new(()),
+            friend: Mutex::new(None),
             creds: Mutex::new(initial_creds.clone()),
             registration: Mutex::new(None),
             heartbeat_stop: Mutex::new(None),
             session: Mutex::new(None),
             last_error: Arc::new(Mutex::new(None)),
             watch: Mutex::new(None),
+            watch_mode: Mutex::new(String::new()),
+            file_session: Mutex::new(None),
+            file_host: Mutex::new(None),
+            file_error: Arc::new(Mutex::new(None)),
             watch_error: Arc::new(Mutex::new(None)),
             frames,
+            watch_camera_frames,
+            publish_camera_frames,
             watch_stats: Arc::new(Mutex::new(viewer::WatchStats::default())),
             audio: Arc::new(Mutex::new(None)),
-        volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            voice_volume: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(100)),
+            ft_recv: Arc::new(Mutex::new(file_transfer::RecvMgr::new())),
             pending_request: Arc::new(Mutex::new(None)),
             incoming_requests: Arc::new(Mutex::new(Vec::new())),
         })
         .setup(move |app| {
+            notifications::start(app.handle().clone());
             // 启动自检流程：先补齐账号信息（顺带校验令牌），再注册设备并恢复心跳。
             // 注意：所有凭据读写都走 state 里的那一份，避免旧快照把新写入覆盖掉。
             let handle = app.handle().clone();
@@ -1241,11 +1805,17 @@ fn main() {
                                 state.watch_stats.clone(),
                                 state.audio.clone(),
                                 state.volume.clone(),
+        state.voice_volume.clone(),
+                                Some(handle.clone()),
+                                state.ft_recv.clone(),
+                                state.watch_camera_frames.clone(),
                             ) {
                                 viewer::log_to_file("[autowatch] 观看会话已启动");
                                 *state.watch.lock().unwrap() = Some(session);
                                 // 自检时一并打开独立观看窗口
-                                let _ = open_viewer_window(handle.clone());
+                                if let Err(error) = ensure_viewer_window(handle.clone()) {
+                                    viewer::log_to_file(&format!("[viewer-window] {error}"));
+                                }
                             }
                         }
                         Err(error) => {
@@ -1273,7 +1843,57 @@ fn main() {
             };
             responder.respond(response);
         })
+        .register_asynchronous_uri_scheme_protocol("camera", move |_ctx, _request, responder| {
+            let body = watch_camera_frames_for_protocol.lock().unwrap().clone();
+            let response = match body {
+                Some(bytes) => tauri::http::Response::builder()
+                    .header("Content-Type", "image/jpeg")
+                    .header("Cache-Control", "no-store")
+                    .body(bytes)
+                    .unwrap(),
+                None => tauri::http::Response::builder()
+                    .status(204)
+                    .body(Vec::new())
+                    .unwrap(),
+            };
+            responder.respond(response);
+        })
+        .register_asynchronous_uri_scheme_protocol("callcamera", move |_ctx, _request, responder| {
+            let body = publish_camera_frames_for_protocol.lock().unwrap().clone();
+            let response = match body {
+                Some(bytes) => tauri::http::Response::builder()
+                    .header("Content-Type", "image/jpeg")
+                    .header("Cache-Control", "no-store")
+                    .body(bytes)
+                    .unwrap(),
+                None => tauri::http::Response::builder()
+                    .status(204)
+                    .body(Vec::new())
+                    .unwrap(),
+            };
+            responder.respond(response);
+        })
+        .register_asynchronous_uri_scheme_protocol("friendcamera", move |ctx, _request, responder| {
+            let state=ctx.app_handle().state::<AppState>();
+            let frame=state.friend.lock().unwrap().as_ref().and_then(|s|s.frames.lock().unwrap().clone());
+            responder.respond(tauri::http::Response::builder().status(if frame.is_some(){200}else{204})
+                .header("Content-Type", "image/jpeg").header("Cache-Control", "no-store")
+                .body(frame.unwrap_or_default()).unwrap());
+        })
         .invoke_handler(tauri::generate_handler![
+            notifications::set_notification_context,
+            notifications::set_call_notification_context,
+            notifications::prepare_call_notification_answer,
+            notifications::notification_settings,
+            notifications::notification_diagnostics,
+            notifications::open_notification_settings,
+            notifications::test_notification,
+            notifications::stop_notification_ring,
+            friend_call_start,
+            friend_call_stop,
+            friend_call_status,
+            social_api,
+            pick_avatar_image,
             get_state,
             login,
             register_device,
@@ -1283,17 +1903,30 @@ fn main() {
             refresh_password,
             set_device_password,
             start_watch,
+            start_file_transfer,
+            get_file_state,
+            stop_file_transfer,
             cancel_watch_request,
             stop_watch,
             get_incoming_requests,
             decide_incoming_request,
             get_watch_state,
             open_viewer_window,
+            open_call_window,
+            fold_call_window,
             close_viewer_window,
             ui_log,
             set_viewer_fullscreen,
             set_audio_enabled,
-        set_volume,
+            set_volume,
+            call_state,
+            call_set_microphone,
+            call_set_speaker,
+            call_set_camera,
+            ft_send_file,
+            ft_cancel_send,
+            ft_recv_list,
+            reveal_received_file,
             has_audio,
             logout,
             list_devices,

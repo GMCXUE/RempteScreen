@@ -7,29 +7,51 @@ const context = canvas.getContext("2d");
 
 let frameLoop = null;
 let pending = false;
+let frameGeneration = 0;
+let abortFrame = null;
 let fitMode = "contain"; // contain | stretch | pixel
 let pinned = false;      // 沉浸模式里锁定控制条
 let audioOn = true;
+let callError = "";
+let remoteCameraOn = false;
+let cameraPending = false;
+let lastCameraFetch = 0;
 
 // ---------- 画面 ----------
 
 function startFrames() {
   if (frameLoop) return;
+  const generation = ++frameGeneration;
   const tick = () => {
-    if (!frameLoop) return;
+    if (!frameLoop || generation !== frameGeneration) return;
     if (!pending) {
       pending = true;
       const image = new Image();
+      const finish = () => {
+        clearTimeout(deadline);
+        image.onload = image.onerror = null;
+        if (generation === frameGeneration) { pending = false; abortFrame = null; }
+      };
+      const deadline = setTimeout(() => {
+        finish();
+        image.src = "";
+        if (generation === frameGeneration) {
+          $("status").textContent = "画面加载超时，正在重试…";
+          $("status").classList.remove("hidden");
+        }
+      }, 3000);
+      abortFrame = () => { finish(); image.src = ""; };
       image.onload = () => {
+        if (generation !== frameGeneration) { finish(); return; }
         if (canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
           canvas.width = image.naturalWidth;
           canvas.height = image.naturalHeight;
         }
         context.drawImage(image, 0, 0);
         $("status").classList.add("hidden");
-        pending = false;
+        finish();
       };
-      image.onerror = () => { pending = false; };
+      image.onerror = finish;
       image.src = `frame://localhost/latest?t=${performance.now()}`;
     }
     frameLoop = requestAnimationFrame(tick);
@@ -38,9 +60,37 @@ function startFrames() {
 }
 
 function stopFrames() {
+  if (abortFrame) abortFrame();
+  ++frameGeneration;
+  pending = false;
   if (frameLoop) cancelAnimationFrame(frameLoop);
   frameLoop = null;
+  context.clearRect(0, 0, canvas.width, canvas.height);
 }
+
+function cameraTick() {
+  const view = $("camera-view");
+  const now = performance.now();
+  if (remoteCameraOn && !cameraPending && now - lastCameraFetch >= 50) {
+    lastCameraFetch = now;
+    cameraPending = true;
+    const next = new Image();
+    next.onload = () => {
+      view.src = next.src;
+      view.classList.remove("hidden");
+      cameraPending = false;
+    };
+    next.onerror = () => {
+      view.classList.add("hidden");
+      cameraPending = false;
+    };
+    next.src = `camera://localhost/latest?t=${performance.now()}`;
+  } else if (!remoteCameraOn) {
+    view.classList.add("hidden");
+  }
+  requestAnimationFrame(cameraTick);
+}
+cameraTick();
 
 // ---------- 状态轮询 ----------
 
@@ -70,14 +120,26 @@ async function refresh() {
 
   startFrames();
   $("device").textContent = state.device_name || "远程设备";
-  $("meta").textContent = state.width
+  $("meta").textContent = callError || ($("mic-btn").disabled
+    ? "正在处理通话设备，请留意系统权限提示…" : state.width
     ? `${state.width}×${state.height} · ${state.fps} fps`
-    : "连接中…";
+    : "连接中…");
 
   // 没有音频轨时把声音按钮置灰
   const audioButton = $("audio-btn");
   audioButton.classList.toggle("muted", !state.has_audio);
   audioButton.title = state.has_audio ? "声音开关" : "对方未发送声音";
+
+  try {
+    const call = await invoke("call_state", { scope: "watch" });
+    remoteCameraOn = call.remote_camera;
+    $("call-speaker-btn").classList.toggle("on", call.speaker);
+    $("call-speaker-btn").textContent = call.speaker ? "通话声音" : "通话静音";
+    $("mic-btn").classList.toggle("on", call.microphone);
+    $("mic-btn").textContent = call.microphone ? "麦克风" : "麦克风关";
+    $("camera-btn").classList.toggle("on", call.camera);
+    $("camera-btn").textContent = call.camera ? "摄像头" : "摄像头关";
+  } catch {}
 }
 
 // ---------- 控制条 ----------
@@ -101,6 +163,30 @@ document.addEventListener("mousemove", (event) => {
 });
 setInterval(updateControls, 400);
 updateControls();
+
+async function toggleCall(kind) {
+  if ($("mic-btn").disabled || $("camera-btn").disabled) return;
+  callError = "";
+  $("mic-btn").disabled = $("camera-btn").disabled = true;
+  $("meta").textContent = "正在处理通话设备，请留意系统权限提示…";
+  try {
+    const state = await invoke("call_state", { scope: "watch" });
+    const command = kind === "microphone" ? "call_set_microphone" : "call_set_camera";
+    await invoke(command, { scope: "watch", enabled: !state[kind] });
+  } catch (error) {
+    callError = String(error);
+  } finally {
+    $("mic-btn").disabled = $("camera-btn").disabled = false;
+    await refresh();
+  }
+}
+
+$("mic-btn").addEventListener("click", async () => {
+  try { await toggleCall("microphone"); } catch (error) { $("meta").textContent = String(error); }
+});
+$("camera-btn").addEventListener("click", async () => {
+  try { await toggleCall("camera"); } catch (error) { $("meta").textContent = String(error); }
+});
 
 // 音量滑块：实时设置播放音量（0-100）
 let lastVolume = Number($("volume").value) || 100;
@@ -212,3 +298,8 @@ canvas.addEventListener("dblclick", () => $("full-btn").click());
 
 refresh();
 setInterval(refresh, 1000);
+
+$("call-speaker-btn").addEventListener("click", async () => {
+  const state = await invoke("call_state", { scope: "watch" });
+  await invoke("call_set_speaker", { enabled: !state.speaker });
+});

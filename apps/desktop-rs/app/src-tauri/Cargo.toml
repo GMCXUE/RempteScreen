@@ -7,7 +7,8 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = "1"
@@ -23,7 +24,14 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 jpeg-encoder = "0.6"
 cpal = "0.15"
 rtrb = "0.3"
+rfd = "0.15"
 futures-util = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mozjpeg = "0.10.13"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+nokhwa = { version = "0.10.11", default-features = false, features = ["input-msmf"] }
+wasapi = "0.25.0"
+# scap 0.0.8 uses the 1.4 Settings constructor; 1.5 changed that API incompatibly.
+windows-capture = "=1.4.2"

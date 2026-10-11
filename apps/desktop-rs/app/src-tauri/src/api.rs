@@ -74,6 +74,7 @@ pub struct Registration {
     pub session_token: String,
     pub livekit_url: String,
     pub publish_token: String,
+    pub file_token: String,
 }
 
 fn post(path: &str, token: Option<&str>, body: &serde_json::Value) -> Result<serde_json::Value, String> {
@@ -218,7 +219,7 @@ pub fn register_device(creds: &Credentials) -> Result<Registration, String> {
         .as_deref()
         .ok_or("尚未登录")?;
     let body = json!({
-        "platform": "macos-rs",
+        "platform": if cfg!(target_os = "macos") { "macos-rs" } else { std::env::consts::OS },
         "deviceName": "RemoteScreen (Rust)",
         "deviceId": creds.device_id,
         "sessionToken": creds.device_session_token,
@@ -235,6 +236,7 @@ pub fn register_device(creds: &Credentials) -> Result<Registration, String> {
         session_token: result["sessionToken"].as_str().unwrap_or("").to_string(),
         livekit_url: result["livekitUrl"].as_str().unwrap_or("").to_string(),
         publish_token: result["token"].as_str().unwrap_or("").to_string(),
+        file_token: result["fileToken"].as_str().unwrap_or("").to_string(),
     })
 }
 
@@ -254,11 +256,19 @@ pub fn connect(
     account_token: Option<&str>,
     viewer_name: &str,
 ) -> Result<ViewerTicket, String> {
-    let mut body = json!({ "deviceId": device_id, "viewerName": viewer_name });
+    connect_for(device_id, password, account_token, viewer_name, "screen")
+}
+
+pub fn connect_for(device_id: &str, password: &str, account_token: Option<&str>,
+    viewer_name: &str, purpose: &str) -> Result<ViewerTicket, String> {
+    let mut body = json!({ "deviceId": device_id, "viewerName": viewer_name, "purpose": purpose });
     if !password.is_empty() {
         body["password"] = json!(password);
     }
     let result = post("/v1/connect", account_token, &body)?;
+    if purpose == "files" && result["roomName"].as_str() != Some(&format!("files-{device_id}")) {
+        return Err("服务端未返回独立文件连接，请更新服务端".into());
+    }
     Ok(ViewerTicket {
         livekit_url: result["livekitUrl"].as_str().unwrap_or("").to_string(),
         token: result["token"].as_str().unwrap_or("").to_string(),
@@ -292,6 +302,8 @@ pub fn refresh_password(device_id: &str, session_token: &str) -> Result<String, 
 /// 设备侧的观看请求（服务端随心跳下发）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IncomingRequest {
+    #[serde(default)]
+    pub purpose: String,
     #[serde(rename = "requestId")]
     pub request_id: String,
     #[serde(rename = "viewerName", default)]
@@ -537,10 +549,14 @@ pub fn create_connect_request(
     device_id: &str,
     viewer_name: &str,
 ) -> Result<RequestOutcome, String> {
+    create_connect_request_for(token, device_id, viewer_name, "screen")
+}
+pub fn create_connect_request_for(token: Option<&str>, device_id: &str,
+    viewer_name: &str, purpose: &str) -> Result<RequestOutcome, String> {
     let result = post(
         "/v1/connect-requests",
         token,
-        &json!({ "deviceId": device_id, "viewerName": viewer_name }),
+        &json!({ "deviceId": device_id, "viewerName": viewer_name, "purpose": purpose }),
     )?;
     Ok(RequestOutcome {
         owned: result["owned"].as_bool().unwrap_or(false),
@@ -579,4 +595,25 @@ fn poll_connect_request_inner(request_id: &str, wait_sec: Option<u64>) -> Result
         "expired" => PollOutcome::Expired,
         _ => PollOutcome::Pending,
     })
+}
+
+/// Authenticated account-level social operations; credentials never enter the webview.
+pub fn social(operation: &str, token: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    if !["account-profile", "avatar-image", "avatar", "state", "search", "request", "decision", "profile", "messages", "send", "read", "call-start", "call-state", "call-decision", "call-end"].contains(&operation) {
+        return Err("不支持的好友操作".into());
+    }
+    let request = ureq::request(if operation == "state" { "GET" } else { "POST" }, &format!("{SERVER_URL}/v1/social/{operation}"))
+        .timeout(std::time::Duration::from_secs(if operation=="avatar-image" {3} else {15}))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Content-Type", "application/json");
+    let result = if operation == "state" { request.call() } else { request.send_string(&body.to_string()) };
+    let response = match result {
+        Ok(response) => response,
+        Err(ureq::Error::Status(_, response)) => {
+            let data: serde_json::Value = response.into_json().unwrap_or_default();
+            return Err(data["error"]["message"].as_str().unwrap_or("好友请求失败").to_string());
+        }
+        Err(_) => return Err("连不上服务器，请检查网络或服务器地址".into()),
+    };
+    response.into_json().map_err(|_| "好友请求响应格式不正确".into())
 }

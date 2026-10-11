@@ -7,6 +7,16 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- 文件接收提示（收到对方发来的文件时浮现） -->
+  <div id="ft-toast" class="ft-toast hidden"></div>
+
+  <aside id="friend-call-bar" class="friend-call-bar hidden" aria-label="好友通话">
+    <div class="friend-call-top"><div id="friend-call-avatar" class="friend-call-avatar"></div><div class="friend-call-heading"><strong id="friend-call-name"></strong><span id="friend-call-status" role="status"></span></div><button id="friend-call-fold" type="button" aria-label="收起通话" title="收起通话">⌄</button></div>
+    <img id="friend-call-video" class="hidden" alt="好友视频" />
+    <div id="friend-call-controls" class="friend-call-controls hidden"><button id="friend-call-mic" type="button">麦克风关</button><button id="friend-call-camera" type="button">摄像头关</button><button id="friend-call-speaker" type="button">声音开</button></div>
+    <div class="friend-call-decisions"><button id="friend-call-answer" type="button">接通</button><button id="friend-call-hangup" type="button">挂断</button></div>
+  </aside>
+
   <!-- 登录：整窗居中卡片 -->
   <section id="login-view" class="login-wrap hidden">
     <div class="login-card">
@@ -15,7 +25,7 @@
         <span class="login-title">RemoteScreen</span>
       </div>
       <p class="muted small">登录账号后，本机可被远程观看，也能观看你名下的其他设备</p>
-      <input id="email" type="email" placeholder="邮箱" autocomplete="username" />
+      <input id="email" type="text" placeholder="账号 ID 或邮箱" autocomplete="username" />
       <input id="password" type="password" placeholder="密码" autocomplete="current-password" />
       <button id="login-btn" class="primary">登录</button>
       <p id="login-error" class="error"></p>
@@ -31,6 +41,10 @@
         <span>RemoteScreen</span>
       </div>
       <nav>
+        <button class="nav-item" data-page="messages">
+          <svg viewBox="0 0 16 16" class="ico"><path d="M2 2.5h12v9H7l-4 3v-3H2z"/></svg>
+          消息 <span id="social-unread" class="social-count hidden"></span>
+        </button>
         <button class="nav-item active" data-page="cast">
           <svg viewBox="0 0 16 16" class="ico"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><path d="M5.5 14h5"/></svg>
           投送本机
@@ -38,6 +52,10 @@
         <button class="nav-item" data-page="watch">
           <svg viewBox="0 0 16 16" class="ico"><path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.8"/></svg>
           观看设备
+        </button>
+        <button class="nav-item" data-page="transfer">
+          <svg viewBox="0 0 16 16" class="ico"><path d="M8 1.8v8.4M4.8 7.2L8 10.4l3.2-3.2"/><path d="M2.2 12.6h11.6"/></svg>
+          文件传输
         </button>
         <button class="nav-item" data-page="devices">
           <svg viewBox="0 0 16 16" class="ico"><rect x="1.5" y="3" width="13" height="8" rx="1.5"/><path d="M5 13.5h6"/><circle cx="11.5" cy="6.5" r="1.2"/></svg>
@@ -55,6 +73,18 @@
     </aside>
 
     <main class="content">
+        <div id="incoming-request" class="pending hidden">
+          <div class="pending-text">
+            <span class="pending-dot"></span>
+            「<span id="incoming-viewer">某设备</span>」<span id="incoming-action">请求观看本机屏幕</span>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button id="incoming-deny" class="ghost">拒绝</button>
+            <button id="incoming-approve" class="ghost" style="color:#17784a; border-color:#c8e6d4;">同意</button>
+          </div>
+        </div>
+
+
       <header class="topbar">
         <div class="user-chip" id="user-chip">
           <div id="account-avatar" class="avatar">—</div>
@@ -66,11 +96,26 @@
             <div class="menu-name" id="menu-name">—</div>
             <div class="menu-email" id="menu-email">—</div>
           </div>
+          <button id="edit-profile" class="menu-item">个人资料</button>
+          <button id="choose-avatar" class="menu-item">更换头像</button>
           <button id="logout-btn" class="menu-item danger">退出登录</button>
         </div>
       </header>
 
       <!-- 投送 -->
+      <section id="page-messages" class="page wide hidden">
+        <div class="social-layout card">
+          <div class="social-contacts"><div class="social-contact-header"><h1>消息</h1><button id="social-add" type="button" aria-label="添加好友" title="添加好友">+</button></div><div class="social-tabs"><button id="social-tab-messages" class="selected" type="button">消息</button><button id="social-tab-friends" type="button">好友</button></div><div id="social-contacts"></div><details class="social-identity"><summary>我的账号</summary><p id="social-account" class="muted small"></p><button id="social-edit-profile" type="button" class="ghost">个人资料</button><button id="social-choose-avatar" type="button" class="ghost">更换头像</button><button id="social-alert-settings" type="button" class="ghost">消息与来电提醒</button><button id="social-copy-account" type="button" class="ghost">复制账号 ID</button></details></div>
+          <div class="social-chat">
+            <div class="card-row"><strong id="social-chat-title">聊天</strong><div id="social-actions"></div></div>
+            <p id="social-error" class="error" role="status"></p>
+            <button id="social-older" class="ghost hidden">加载更早的消息</button>
+            <div id="social-messages" class="social-messages" aria-label="聊天记录"><div class="social-empty"><span class="social-empty-symbol" aria-hidden="true">···</span><strong>选择好友，开始聊天</strong><span>在好友列表选择联系人，即可打开会话</span></div></div>
+            <form id="social-compose" class="social-compose hidden"><textarea id="social-draft" maxlength="2000" rows="2" placeholder="发送消息" aria-label="发送消息"></textarea><button id="social-send" class="primary" type="submit">发送</button></form>
+          </div>
+        </div>
+      </section>
+
       <section id="page-cast" class="page">
         <h1 class="page-title">投送本机</h1>
 
@@ -85,6 +130,20 @@
               <input id="publish-toggle" type="checkbox" />
               <span class="slider"></span>
             </label>
+          </div>
+        </div>
+
+        <div id="publish-call-card" class="card hidden">
+          <div class="card-row">
+            <div>
+              <div class="card-title">投屏语音</div>
+              <div class="muted small">麦克风与投屏声音分开控制</div>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button id="publish-mic-btn" class="ghost">打开麦克风</button>
+              <button id="publish-camera-btn" class="ghost hidden">打开摄像头</button>
+              <button id="publish-floating-btn" class="ghost hidden">视频悬浮窗</button>
+            </div>
           </div>
         </div>
 
@@ -122,17 +181,6 @@
             <button class="chip" data-fps="60">60 帧</button>
           </div>
           <div class="card-hint">按屏幕长边等比缩放；切换后立即以新画质重启投送</div>
-        </div>
-
-        <div id="incoming-request" class="pending hidden">
-          <div class="pending-text">
-            <span class="pending-dot"></span>
-            「<span id="incoming-viewer">某设备</span>」请求观看本机屏幕
-          </div>
-          <div style="display:flex; gap:6px;">
-            <button id="incoming-deny" class="ghost">拒绝</button>
-            <button id="incoming-approve" class="ghost" style="color:#17784a; border-color:#c8e6d4;">同意</button>
-          </div>
         </div>
 
         <p id="cast-error" class="error"></p>
@@ -188,6 +236,57 @@
         </div>
       </section>
 
+      <!-- 文件传输 -->
+      <section id="page-transfer" class="page wide hidden">
+        <h1 class="page-title">文件传输</h1>
+
+        <div id="transfer-form-card" class="card">
+          <div class="card-title">连接远程设备</div>
+          <div class="muted small">建立独立传输连接，不会打开或遮挡屏幕观看窗口。</div>
+          <div class="watch-form">
+            <input id="transfer-id" placeholder="设备代码（9 位数字）" maxlength="9" />
+            <input id="transfer-pw" placeholder="连接密码（自己的设备可留空）" />
+            <button id="transfer-connect" class="primary">连接</button>
+          </div>
+          <div id="transfer-pending" class="pending hidden">
+            <div class="pending-text">
+              <span class="pending-dot"></span>
+              已向「<span id="transfer-pending-name">设备</span>」发送文件传输请求
+              <span id="transfer-pending-countdown" class="muted"></span>
+            </div>
+            <button id="transfer-cancel" class="ghost">取消请求</button>
+          </div>
+
+        </div>
+
+        <div id="transfer-error" class="error"></div>
+        <div id="transfer-session-card" class="card hidden">
+          <div class="card-row">
+            <div>
+              <div class="card-title">已连接「<span id="transfer-device-name">远程设备</span>」</div>
+              <div class="muted small">选择文件后通过加密数据通道发送</div>
+            </div>
+            <button id="transfer-send" class="primary compact">选择文件</button>
+            <button id="transfer-stop" class="ghost danger">断开</button>
+          </div>
+        </div>
+
+        <div id="transfer-progress-card" class="card hidden">
+          <button id="transfer-cancel-send" class="compact hidden">取消发送</button>
+          <div class="card-row">
+            <div>
+              <div id="transfer-progress-title" class="card-title">等待传输</div>
+              <div id="transfer-progress-meta" class="muted small"></div>
+            </div>
+            <span id="transfer-progress-percent" class="mono-sm">0%</span>
+          </div>
+          <div class="transfer-progress-track">
+            <div id="transfer-progress-bar" class="transfer-progress-bar"></div>
+          </div>
+        </div>
+      <div class="card"><div class="card-title">传输记录（本次运行）</div><div id="transfer-history"></div></div>
+      </section>
+
       <!-- 我的设备 -->
       <section id="page-devices" class="page hidden">
         <h1 class="page-title">我的设备</h1>
@@ -228,6 +327,7 @@
   <!-- 应用内弹窗（Tauri 的 WebView 不支持 prompt/confirm/alert） -->
   <div id="modal" class="modal hidden">
     <div class="modal-card">
+      <div id="modal-avatar" class="avatar-preview hidden"></div>
       <div id="modal-title" class="modal-title">提示</div>
       <div id="modal-message" class="modal-message muted small"></div>
       <input id="modal-input" class="hidden" />
@@ -238,6 +338,12 @@
     </div>
   </div>
 
+  <script src="feedback.js"></script>
+  <script src="avatar-crop.js"></script>
+  <script src="avatars.js"></script>
+  <script src="profile.js"></script>
   <script src="app.js"></script>
+  <script src="social.js"></script>
+  <script src="friend-calls.js"></script>
 </body>
 </html>

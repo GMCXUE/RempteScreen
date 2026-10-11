@@ -1,11 +1,18 @@
 // 前端逻辑：轮询状态 → 渲染视图；用户操作 → invoke 命令。
 const { invoke } = window.__TAURI__.core;
+let publishCallError = "";
+document.getElementById('publish-floating-btn').addEventListener('click', async () => {
+  try { await invoke('open_call_window'); }
+  catch (error) { publishCallError = String(error); }
+});
 const $ = (id) => document.getElementById(id);
 
-const SERVER_URL = "http://91.208.104.182";
+const SERVER_URL = "http://121.43.102.154";
 let currentPage = "cast";
 /** 本机设备号（来自后端状态），用于在设备列表里标记「本机」 */
 let ownDeviceId = "";
+let latestFileTransfer = null;
+let transferBusy = false;
 
 // ---------- 视图切换 ----------
 
@@ -16,12 +23,14 @@ function showLogin(show) {
 
 function switchPage(page) {
   currentPage = page;
+  document.querySelector(".content").classList.toggle("social-content", page === "messages");
   for (const button of document.querySelectorAll(".nav-item")) {
     button.classList.toggle("active", button.dataset.page === page);
   }
   for (const section of document.querySelectorAll(".page")) {
     section.classList.toggle("hidden", section.id !== `page-${page}`);
   }
+  if (page === "transfer") refreshTransfer();
 }
 
 for (const button of document.querySelectorAll(".nav-item")) {
@@ -40,6 +49,7 @@ function askDialog({
   cancelText = "取消",
   danger = false,
   hideCancel = false,
+  avatarId = null,
 }) {
   return new Promise((resolve) => {
     const modal = $("modal");
@@ -48,6 +58,8 @@ function askDialog({
     const cancel = $("modal-cancel");
 
     $("modal-title").textContent = title;
+    $("modal-avatar").classList.toggle("hidden", avatarId === null);
+    if (avatarId !== null) window.accountAvatars?.render($("modal-avatar"), avatarId);
     $("modal-message").textContent = message;
     $("modal-message").classList.toggle("hidden", !message);
 
@@ -133,6 +145,14 @@ async function refresh() {
     ? "投送中 —— 其他设备正在观看这台屏幕"
     : "打开后，其他设备输入下面的设备代码与密码即可观看本机屏幕";
   $("publish-status").style.color = state.publishing ? "var(--green)" : "";
+  $("publish-call-card").classList.toggle("hidden", !state.publishing);
+  if (state.publishing) {
+    try {
+      const call = await invoke("call_state", { scope: "publish" });
+      $("publish-mic-btn").textContent = call.microphone ? "关闭麦克风" : "打开麦克风";
+      $("publish-camera-btn").textContent = call.camera ? "关闭摄像头" : "打开摄像头";
+    } catch {}
+  }
 
   for (const chip of document.querySelectorAll("#quality-res .chip")) {
     chip.classList.toggle("active", Number(chip.dataset.h) === state.share_height);
@@ -153,7 +173,7 @@ async function refresh() {
     $("server-text").textContent = "正在连接…";
   }
 
-  $("cast-error").textContent = state.last_error || "";
+  $("cast-error").textContent = publishCallError || state.last_error || "";
 
   $("set-server").textContent = SERVER_URL;
   $("set-quality").textContent = qualityLabel(state.share_height, state.share_fps);
@@ -162,8 +182,7 @@ async function refresh() {
   $("account-name").textContent = name;
   $("menu-name").textContent = name;
   $("menu-email").textContent = state.account_email || "—";
-  $("account-avatar").textContent =
-    name === "未登录" ? "—" : name.trim().slice(0, 1).toUpperCase();
+  window.accountAvatars?.renderOwn();
   $("user-chip").classList.toggle("hidden", !state.logged_in);
 }
 
@@ -177,6 +196,7 @@ $("login-btn").addEventListener("click", async () => {
       email: $("email").value.trim(),
       password: $("password").value,
     });
+    window.dispatchEvent(new Event("social-account-changed"));
     await invoke("register_device");
   } catch (error) {
     $("login-error").textContent = String(error);
@@ -195,6 +215,33 @@ $("publish-toggle").addEventListener("change", async (event) => {
     event.target.checked = !enabled;
   }
   refresh();
+});
+
+async function togglePublishCall(kind) {
+  if ($("publish-mic-btn").disabled || $("publish-camera-btn").disabled) return;
+  $("publish-mic-btn").disabled = $("publish-camera-btn").disabled = true;
+  publishCallError = "正在处理通话设备，请留意系统权限提示…";
+  $("cast-error").textContent = publishCallError;
+  try {
+    const state = await invoke("call_state", { scope: "publish" });
+    const command = kind === "microphone" ? "call_set_microphone" : "call_set_camera";
+    await invoke(command, { scope: "publish", enabled: !state[kind] });
+    publishCallError = "";
+  } catch (error) {
+    publishCallError = String(error);
+  } finally {
+    $("publish-mic-btn").disabled = $("publish-camera-btn").disabled = false;
+    await refresh();
+  }
+}
+
+$("publish-mic-btn").addEventListener("click", async () => {
+  try { await togglePublishCall("microphone"); }
+  catch (error) { $("cast-error").textContent = `麦克风操作失败：${error}`; }
+});
+$("publish-camera-btn").addEventListener("click", async () => {
+  try { await togglePublishCall("camera"); }
+  catch (error) { $("cast-error").textContent = `摄像头操作失败：${error}`; }
 });
 
 for (const chip of document.querySelectorAll("#quality-res .chip, #quality-fps .chip")) {
@@ -285,6 +332,9 @@ async function refreshIncoming() {
   const request = requests[0];
   incomingRequestId = request.requestId;
   $("incoming-viewer").textContent = request.viewerName || "未知设备";
+  $("incoming-action").textContent = request.purpose === "files"
+    ? "请求建立文件传输连接"
+    : "请求观看本机屏幕";
   banner.classList.remove("hidden");
 }
 
@@ -312,10 +362,10 @@ async function refreshWatch() {
   const formCard = $("watch-form-card");
   const viewerCard = $("viewer-card");
   // 只以会话状态为准（累计帧数曾导致断开后卡片不消失）
-  const active = state.watching;
+  const active = state.watching && state.mode !== "transfer";
 
   // 等待对方同意：显示倒计时横幅
-  const pending = Boolean(state.pending_device);
+  const pending = Boolean(state.pending_device) && state.mode !== "transfer";
   if (pending) {
     $("watch-pending").classList.remove("hidden");
     $("pending-name").textContent = state.pending_device;
@@ -377,7 +427,14 @@ $("pending-cancel").addEventListener("click", async () => {
   refreshWatch();
 });
 
-$("viewer-refocus").addEventListener("click", () => invoke("open_viewer_window"));
+$("viewer-refocus").addEventListener("click", async () => {
+  const button = $("viewer-refocus");
+  if (button.disabled) return;
+  button.disabled = true;
+  try { await invoke("open_viewer_window"); }
+  catch (error) { $("watch-error").textContent = String(error); }
+  finally { button.disabled = false; }
+});
 
 $("watch-stop").addEventListener("click", async () => {
   // 任何一步失败都要继续把界面刷回来（否则看起来像「点了没反应」）
@@ -391,6 +448,150 @@ $("watch-stop").addEventListener("click", async () => {
   } catch {
     // 窗口可能已经关掉了，忽略
   }
+  refreshWatch();
+});
+
+// ---------- 文件传输（独立页面，不打开观看窗口） ----------
+
+const transferHistory = new Map();
+$("transfer-cancel-send").addEventListener("click", () => invoke("ft_cancel_send"));
+
+function renderTransferProgress(progress) {
+  if (!progress) return;
+  latestFileTransfer = progress;
+  $("transfer-cancel-send").classList.toggle("hidden", progress.direction !== "send" || progress.done);
+  const key = `${progress.direction}:${progress.id}`;
+  transferHistory.set(key, progress);
+  if (transferHistory.size > 100) transferHistory.delete(transferHistory.keys().next().value);
+  $("transfer-history").replaceChildren(...[...transferHistory.values()].reverse().map(item => {
+    const row = document.createElement("div");
+    row.className = `transfer-history-item${item.error ? " failed" : ""}`;
+    row.textContent = `${item.direction === "recv" ? "接收" : "发送"} · ${item.name} · ${item.error || (item.done ? "已完成" : "传输中")}`;
+    if (item.direction === "recv" && item.done && !item.error && item.path) {
+      const button = document.createElement("button");
+      button.className = "ghost";
+      button.textContent = "打开所在目录";
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          await invoke("reveal_received_file", { path: item.path });
+          $("transfer-error").textContent = "";
+        } catch (error) {
+          $("transfer-error").textContent = String(error);
+        } finally {
+          button.disabled = false;
+        }
+      });
+      row.appendChild(button);
+    }
+    return row;
+  }));
+  const card = $("transfer-progress-card");
+  if (!card) return;
+  card.classList.remove("hidden");
+  const direction = progress.direction === "recv" ? "接收" : "发送";
+  const failed = Boolean(progress.error);
+  $("transfer-progress-title").textContent = failed
+    ? `${direction}失败：${progress.name}`
+    : progress.done
+      ? `${direction}完成：${progress.name}`
+      : `正在${direction}：${progress.name}`;
+  $("transfer-progress-meta").textContent = failed
+    ? progress.error
+    : progress.done && progress.path
+      ? `已保存至 ${progress.path}`
+      : `${progress.received || 0} / ${progress.size || 0} 字节`;
+  const percent = progress.size > 0
+    ? Math.min(100, Math.round(((progress.received || 0) / progress.size) * 100))
+    : progress.done ? 100 : 0;
+  $("transfer-progress-percent").textContent = `${percent}%`;
+  $("transfer-progress-bar").style.width = `${percent}%`;
+  $("transfer-progress-bar").style.background = failed ? "var(--red)" : "var(--accent)";
+  if (progress.direction === "send" && progress.done) {
+    transferBusy = false;
+    $("transfer-send").disabled = false;
+    $("transfer-send").textContent = "选择文件";
+  }
+}
+
+async function refreshTransfer() {
+  let state;
+  try {
+    state = await invoke("get_file_state");
+  } catch {
+    return;
+  }
+  const pending = Boolean(state.pending_device) && state.mode === "transfer";
+  $("transfer-pending").classList.toggle("hidden", !pending);
+  if (pending) {
+    $("transfer-pending-name").textContent = state.pending_device;
+    $("transfer-pending-countdown").textContent = state.pending_seconds > 0
+      ? `（${state.pending_seconds} 秒内有效）`
+      : "";
+  }
+
+  const connected = Boolean(state.watching);
+  $("transfer-form-card").classList.toggle("hidden", connected);
+  $("transfer-session-card").classList.toggle("hidden", !connected);
+  if (connected) {
+    $("transfer-device-name").textContent = state.device_name || "远程设备";
+    $("transfer-error").textContent = "";
+  } else if (state.error) {
+    $("transfer-error").textContent = state.error;
+  }
+
+  if (!latestFileTransfer) {
+    try {
+      const active = await invoke("ft_recv_list");
+      if (active.length) renderTransferProgress(active[active.length - 1]);
+    } catch {}
+  }
+}
+
+$("transfer-connect").addEventListener("click", async () => {
+  $("transfer-error").textContent = "";
+  $("transfer-connect").disabled = true;
+  try {
+    await invoke("start_file_transfer", {
+      deviceId: $("transfer-id").value.trim(),
+      password: $("transfer-pw").value.trim(),
+    });
+  } catch (error) {
+    $("transfer-error").textContent = String(error);
+  } finally {
+    $("transfer-connect").disabled = false;
+    refreshTransfer();
+  }
+});
+
+$("transfer-cancel").addEventListener("click", async () => {
+  await invoke("cancel_watch_request");
+  refreshTransfer();
+});
+
+$("transfer-send").addEventListener("click", async () => {
+  if (transferBusy) return;
+  transferBusy = true;
+  $("transfer-send").disabled = true;
+  $("transfer-send").textContent = "选择文件…";
+  try {
+    const selected = await invoke("ft_send_file");
+    if (!selected) {
+      transferBusy = false;
+      $("transfer-send").disabled = false;
+      $("transfer-send").textContent = "选择文件";
+    }
+  } catch (error) {
+    transferBusy = false;
+    $("transfer-send").disabled = false;
+    $("transfer-send").textContent = "选择文件";
+    $("transfer-error").textContent = String(error);
+  }
+});
+
+$("transfer-stop").addEventListener("click", async () => {
+  await invoke("stop_file_transfer");
+  refreshTransfer();
   refreshWatch();
 });
 
@@ -594,6 +795,18 @@ async function refreshDevices() {
       refreshWatch();
     });
 
+    const transferBtn = document.createElement("button");
+    transferBtn.className = "ghost";
+    transferBtn.textContent = "发文件";
+    transferBtn.disabled = isSelf || !device.online;
+    if (transferBtn.disabled) transferBtn.classList.add("muted-btn");
+    transferBtn.addEventListener("click", () => {
+      if (isSelf || !device.online) return;
+      $("transfer-id").value = device.deviceId;
+      $("transfer-pw").value = "";
+      switchPage("transfer");
+    });
+
     const renameBtn = document.createElement("button");
     renameBtn.className = "ghost";
     renameBtn.textContent = "重命名";
@@ -639,7 +852,7 @@ async function refreshDevices() {
       refresh();
     });
 
-    actions.append(watchBtn, renameBtn, unbindBtn);
+    actions.append(watchBtn, transferBtn, renameBtn, unbindBtn);
     void isSelf;
     item.append(main, actions);
     list.appendChild(item);
@@ -668,6 +881,7 @@ $("logout-btn").addEventListener("click", async () => {
   });
   if (!confirmed) return;
   await invoke("logout");
+  window.dispatchEvent(new Event("social-account-changed"));
   switchPage("cast");
   refresh();
   refreshHistory();
@@ -684,3 +898,28 @@ setInterval(refreshHistory, 5000);
 refreshDevices();
 setInterval(refreshDevices, 10000);
 setInterval(refreshIncoming, 3000);
+refreshTransfer();
+setInterval(refreshTransfer, 1500);
+
+
+// 文件传输：接收进度提示（本机作为投送端时接收对方发来的文件）
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("ft", (event) => {
+    const p = event.payload;
+    renderTransferProgress(p);
+    if (p.direction !== "recv") return;
+    if (p.done) {
+      window.showAppToast(p.error
+        ? `📄 文件「${p.name}」接收失败：${p.error}`
+        : `📄 已收到文件「${p.name}」，保存在 下载/RemoteScreen-Files/`, 8000);
+    } else {
+      const pct = p.size > 0 ? Math.round((p.received / p.size) * 100) : 0;
+      window.showAppToast(`📄 正在接收「${p.name}」 ${pct}%`, 0);
+    }
+  });
+}
+
+window.__TAURI__.event.listen('watch:peer-ended', async ({ payload }) => {
+  await refreshWatch();
+  window.showAppToast(payload, 8000);
+});
