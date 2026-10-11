@@ -15,6 +15,7 @@ mod capture_permissions;
 mod publisher;
 mod screen_frame;
 mod audio_playout;
+mod audio_buffer;
 mod file_transfer;
 mod file_session;
 mod viewer;
