@@ -21,7 +21,7 @@
   const separate=separateVideo();
   const me=window.accountAvatars?.me();
   syncVideoWindow(separate?{id:current.id,peerId:current.peerId,peerName:current.peerName,peerAvatarId:current.peerAvatarId,peerAvatarRevision:current.peerAvatarRevision,me:me?{id:me.id,avatarId:me.avatarId,avatarRevision:me.avatarRevision}:null,acceptedAt:current.acceptedAt,microphone:mic,camera,speaker,remoteCamera,connecting:joining||mediaConnecting,busy,visible:!folded,error:lastError}:null);
-  const bar=el('friend-call-bar');bar.classList.toggle('hidden',!current||(separate&&!folded&&!windowFailed));
+  const bar=el('friend-call-bar');bar.classList.toggle('hidden',!current||(separate&&!windowFailed));
   bar.classList.toggle('incoming',current?.status==='ringing'&&current.role==='callee');
   bar.classList.toggle('folded',folded);window.uiIcons.button(el('friend-call-fold'),folded?'return':'down',folded?'返回通话':'收起通话');
   if(!current)return;
@@ -83,6 +83,7 @@
  window.__TAURI__.event.listen('friend-call-window:action',({payload})=>{
   if(!current||(payload.callId&&payload.callId!==current.id))return;
   if(payload.action==='fold'){folded=true;render();return;}
+  if(payload.action==='restore'){folded=false;render();return;}
   const id={microphone:'friend-call-mic',camera:'friend-call-camera',speaker:'friend-call-speaker',hangup:'friend-call-hangup'}[payload.action];
   if(id)el(id).click();
  }).catch(()=>{});

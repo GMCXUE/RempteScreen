@@ -1949,6 +1949,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             friend_call_window::set_friend_call_window_state,
             friend_call_window::close_friend_call_window,
+            friend_call_window::dock_friend_call_mini,
             friend_call_window::get_friend_call_window_state,
             friend_call_window::friend_call_window_action,
             notifications::set_notification_context,
