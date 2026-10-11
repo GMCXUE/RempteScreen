@@ -22,9 +22,10 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
    window.me={id:'me',name:'我',accountId:'123456',avatarId:'cat'};window.peer={id:'peer',name:'小林',remark:'',accountId:'234567',avatarId:'rabbit',unread:0,online:true,lastText:'第一行',blocked:false};
    window.photo='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=';
    window.rows=[{id:'m1',seq:'1',senderId:'peer',kind:'text',text:'第一行\n第二行',createdAt:String(Date.now())},{id:'m2',seq:'2',senderId:'me',kind:'text',text:'我的消息',createdAt:String(Date.now())},{id:'m3',seq:'3',senderId:'me',kind:'text',text:'过期消息',createdAt:String(Date.now()-130000)}];
-   window.changes=[];window.calls=[];window.copy=[];window.confirm=true;window.failImage=true;window.friendCalls={start:()=>{}};window.askDialog=async()=>window.confirm;
+   window.changes=[];window.calls=[];window.copy=[];window.imageCopy=[];window.confirm=true;window.failImage=true;window.friendCalls={start:()=>{}};window.askDialog=async()=>window.confirm;
    window.__TAURI__={event:{listen:async()=>{}},core:{invoke:async(command,args)=>{
     if(command==='plugin:clipboard-manager|write_text'){window.copy.push(args.text);return;}
+    if(command==='copy_chat_image'){if(window.failCopy)throw '复制失败，请重试';window.imageCopy.push(args.image);return;}
     if(command==='pick_chat_image')return window.photo;
     if(command!=='social_api')return {};
     window.calls.push({op:args.operation,body:args.body});
@@ -53,7 +54,9 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.locator('#social-image').click();await page.waitForSelector('.chat-image-dialog');await page.locator('.chat-image-dialog .primary').click();await page.waitForFunction(()=>document.querySelector('.chat-image-error')?.textContent==='网络不可用');
   await page.locator('.chat-image-dialog .primary').click();await page.waitForSelector('[data-message-id="photo1"]');
   assert.equal(await page.evaluate(()=>{const ids=window.calls.filter(c=>c.op==='send-image').map(c=>c.body.clientId);return ids[0]===ids[1];}),true);
-  await page.getByRole('button',{name:'查看图片',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.chat-image-dialog p'));assert.ok(await page.locator('.chat-image-dialog img').getAttribute('src'));
+  await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>window.imageCopy.length===1);assert.equal(await page.evaluate(()=>window.imageCopy[0]===window.photo),true);
+  await page.evaluate(()=>window.failCopy=true);await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#social-error').textContent==='复制失败，请重试');await page.evaluate(()=>window.failCopy=false);
+  await page.getByRole('button',{name:'查看图片',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.chat-image-dialog p'));assert.ok(await page.locator('.chat-image-dialog img').getAttribute('src'));await page.locator('.chat-image-dialog').getByRole('button',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>window.imageCopy.length===2);
   // Another client retracts the image: incremental polling closes the open preview.
   await page.evaluate(()=>{const m=window.rows.find(m=>m.id==='photo1');Object.assign(m,{kind:'recalled',image:null,recalledAt:String(Date.now()),editSeq:String(window.changes.length+1)});window.changes.push({...m});});
   await page.clock.runFor(4100);await page.waitForSelector('.social-recalled[data-message-id="photo1"]');assert.equal(await page.locator('.chat-image-dialog').count(),0);

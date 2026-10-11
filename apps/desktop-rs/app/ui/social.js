@@ -8,7 +8,7 @@
   const error=e=>{el('social-error').textContent=String(e);};
   const button=(text,action,cls='ghost')=>{const b=node('button',text,cls);b.type='button';b.disabled=mutating;b.onclick=()=>Promise.resolve(action()).catch(error);return b;};
   const name=friend=>friend.remark||friend.name;
-  const chatUi=new window.ChatMessages({api,invoke:(command,args)=>window.__TAURI__.core.invoke(command,args),notice:text=>window.showAppToast(text),error,
+  const chatUi=new window.ChatMessages({api,invoke:(command,args)=>window.__TAURI__.core.invoke(command,args),notice:text=>window.showAppToast(text,1200),error,
     context:()=>({accountId:state?.me.id,peerId:peer?.id,generation})});
   function renderMessages(){chatUi.invalidate(messages);el('social-messages').replaceChildren(...messages.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();})));}
   async function change(operation,body) {

@@ -4,12 +4,19 @@
  const imageSource=value=>typeof value==='string'&&/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)?value:'';
  const canRecall=(message,accountId,now=Date.now())=>message.senderId===accountId&&['text','image'].includes(message.kind||'text')&&now-Number(message.createdAt)<=120000;
  class ChatMessages {
-  constructor(options){Object.assign(this,options);this.menu=null;this.dialog=null;this.dialogMessage=null;this.clockOffset=0;this.picking=false;document.addEventListener('pointerdown',e=>{if(this.menu&&!this.menu.contains(e.target))this.closeMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape')this.closeMenu();});}
+  constructor(options){Object.assign(this,options);this.menu=null;this.dialog=null;this.dialogMessage=null;this.clockOffset=0;this.picking=false;this.copyingImage=false;this.recalled=new Set();document.addEventListener('pointerdown',e=>{if(this.menu&&!this.menu.contains(e.target))this.closeMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape')this.closeMenu();});}
   valid(context){const current=this.context();return current.accountId===context.accountId&&current.peerId===context.peerId&&current.generation===context.generation;}
   closeMenu(){this.menu?.remove();this.menu=null;this.menuMessage=null;}
   close(){this.closeMenu();const dialog=this.dialog;this.dialog=null;this.dialogMessage=null;dialog?.close();dialog?.remove();}
-  invalidate(messages){if(messages.some(m=>m.id===this.dialogMessage&&m.kind==='recalled'))this.close();else if(messages.some(m=>m.id===this.menuMessage&&m.kind==='recalled'))this.closeMenu();}
+  invalidate(messages){for(const m of messages)if(m.kind==='recalled')this.recalled.add(m.id);if(messages.some(m=>m.id===this.dialogMessage&&m.kind==='recalled'))this.close();else if(messages.some(m=>m.id===this.menuMessage&&m.kind==='recalled'))this.closeMenu();}
   async copy(text){try{await this.invoke('plugin:clipboard-manager|write_text',{text});this.notice('已复制');}catch{this.error('复制失败，请重试');}}
+  async copyImage(message){
+   if(this.copyingImage)return;const context=this.context();this.copyingImage=true;
+   try{const result=await this.api('message-image',{peerId:context.peerId,messageId:message.id});if(!this.valid(context))return;
+    if(this.recalled.has(message.id))throw '图片已撤回';
+    await this.invoke('copy_chat_image',{image:result.image});if(this.valid(context))this.notice('图片已复制');
+   }catch(error){if(this.valid(context))this.error(String(error));}finally{this.copyingImage=false;}
+  }
   row(message,me,peer,onRecall){
    const mine=message.senderId===me.id,row=node('div','','social-message-row'+(mine?' mine':''));row.dataset.messageId=message.id;
    if(message.kind==='recalled'){row.className='social-recalled';row.append(node('span',mine?'你撤回了一条消息':'对方撤回了一条消息'));return row;}
@@ -31,7 +38,7 @@
   showMenu(message,bubble,onRecall,anchor){
    this.closeMenu();const context=this.context();const menu=node('div','','chat-context-menu');menu.setAttribute('role','menu');this.menu=menu;this.menuMessage=message.id;
    const add=(label,action)=>{const b=node('button',label);b.type='button';b.setAttribute('role','menuitem');b.onclick=()=>{this.closeMenu();Promise.resolve(action()).catch(this.error);};menu.append(b);};
-   if(message.kind==='image')add('查看图片',()=>this.preview(message));
+   if(message.kind==='image'){add('查看图片',()=>this.preview(message));add('复制图片',()=>this.copyImage(message));}
    else {const selection=window.getSelection(),body=bubble.querySelector('.chat-message-text');const selected=selection&&!selection.isCollapsed&&body?.contains(selection.anchorNode)&&body.contains(selection.focusNode)?selection.toString():'';add(selected?'复制选中文字':'复制',()=>this.copy(selected||message.text));}
    if(canRecall(message,context.accountId,Date.now()+this.clockOffset))add('撤回',async()=>{
     if(!(await window.askDialog({title:'撤回消息？',message:'撤回后，对方将无法在聊天中查看这条消息。',danger:true}))||!this.valid(context))return;
@@ -41,9 +48,9 @@
   }
   createDialog(title){this.close();const dialog=node('dialog','','chat-image-dialog');const heading=node('div','','chat-image-heading');heading.append(node('strong',title));const close=node('button','关闭','ghost');close.type='button';close.onclick=()=>dialog.close();heading.append(close);dialog.append(heading);dialog.onclose=()=>{dialog.remove();if(this.dialog===dialog){this.dialog=null;this.dialogMessage=null;}};document.body.append(dialog);this.dialog=dialog;dialog.showModal();return dialog;}
   async preview(message){
-   const context=this.context(),dialog=this.createDialog('查看图片');this.dialogMessage=message.id;
+   const context=this.context(),dialog=this.createDialog('查看图片');this.dialogMessage=message.id;const copy=node('button','复制图片','ghost');copy.type='button';copy.disabled=true;copy.onclick=()=>this.copyImage(message);dialog.querySelector('.chat-image-heading').insertBefore(copy,dialog.querySelector('.chat-image-heading button'));
    const image=node('img');image.alt='聊天图片';image.src=imageSource(message.image?.thumbnail);dialog.append(image);const status=node('p','正在加载图片…','muted small');dialog.append(status);
-   try{const result=await this.api('message-image',{peerId:context.peerId,messageId:message.id});if(!this.valid(context)||this.dialog!==dialog)return;image.src=imageSource(result.image);status.remove();}
+   try{const result=await this.api('message-image',{peerId:context.peerId,messageId:message.id});if(!this.valid(context)||this.dialog!==dialog)return;image.src=imageSource(result.image);status.remove();copy.disabled=false;}
    catch(error){if(this.dialog===dialog)status.textContent=String(error);}
   }
   async chooseImage(onSent){

@@ -246,6 +246,26 @@ async fn pick_chat_image() -> Result<Option<String>, String> {
     pick_avatar_image().await
 }
 #[tauri::command]
+async fn copy_chat_image(app: tauri::AppHandle, image: String) -> Result<(), String> {
+    use base64::Engine;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    tauri::async_runtime::spawn_blocking(move || {
+        let encoded = image.strip_prefix("data:image/jpeg;base64,").ok_or("无法复制图片，请重试")?;
+        if encoded.len() > 12 * 1024 * 1024 { return Err("图片过大，无法复制".to_owned()); }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "无法读取图片")?;
+        if bytes.len() > 8 * 1024 * 1024 { return Err("图片过大，无法复制".to_owned()); }
+        let dimensions = image::ImageReader::with_format(std::io::Cursor::new(&bytes), image::ImageFormat::Jpeg)
+            .into_dimensions().map_err(|_| "无法读取图片")?;
+        if dimensions.0 == 0 || dimensions.1 == 0 || u64::from(dimensions.0) * u64::from(dimensions.1) > 24_000_000 {
+            return Err("图片过大，无法复制".to_owned());
+        }
+        let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
+            .map_err(|_| "无法读取图片")?.into_rgba8();
+        let rgba = tauri::image::Image::new_owned(decoded.into_raw(), dimensions.0, dimensions.1);
+        app.clipboard().write_image(&rgba).map_err(|_| "复制失败，请重试".to_owned())
+    }).await.map_err(|_| "复制失败，请重试".to_owned())?
+}
+#[tauri::command]
 async fn social_api(operation: String, body: Option<serde_json::Value>, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
     let token = state.creds.lock().unwrap().account_token.clone().ok_or("请先登录")?;
     let saved_token=token.clone();let saved_operation=operation.clone();
@@ -1903,6 +1923,7 @@ fn main() {
             social_api,
             pick_avatar_image,
             pick_chat_image,
+            copy_chat_image,
             get_state,
             login,
             register_device,
