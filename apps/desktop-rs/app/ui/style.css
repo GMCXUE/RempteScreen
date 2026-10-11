@@ -101,11 +101,6 @@ button.primary.compact {
   display: flex;
   flex-direction: column;
 }
-.brand {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13.5px; font-weight: 600;
-  padding: 0 8px 18px;
-}
 nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
   display: flex; align-items: center; gap: 9px;
@@ -320,41 +315,46 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 }
 .history-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
-/* ---------- 右上角用户栏 ---------- */
-.topbar {
+/* ---------- 左上角账号入口 ---------- */
+.sidebar-account {
   position: relative;
-  display: flex;
-  justify-content: flex-end;
-  margin: -6px 0 14px;
-  min-height: 34px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
 }
 .user-chip {
   display: flex;
+  width: 100%;
+  min-width: 0;
   align-items: center;
-  gap: 8px;
-  padding: 5px 10px 5px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: #fff;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: .15s;
+  transition: background-color .15s;
 }
-.user-chip:hover { border-color: #c9d6ea; background: #f7faff; }
+.user-chip:hover, .user-chip[aria-expanded="true"] { background: var(--accent-soft); }
 .user-chip .avatar {
-  width: 24px; height: 24px;
+  width: 32px; height: 32px;
   font-size: 12px;
   font-weight: 600;
 }
-.user-name { font-size: 12.5px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .caret {
   width: 12px; height: 12px;
+  flex-shrink: 0;
   fill: none; stroke: var(--muted); stroke-width: 1.5;
   stroke-linecap: round; stroke-linejoin: round;
 }
 .user-menu {
   position: absolute;
-  top: 40px; right: 0;
-  width: 200px;
+  top: calc(100% + 8px); left: 0;
+  width: 220px;
+  max-width: calc(100vw - 32px);
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -572,7 +572,6 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 #social-older { align-self: center; margin-top: 8px; font-size: 12px; }
 /* Message workspace owns its height; only lists scroll. */
 .content.social-content { position: relative; padding: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
-.social-content > .topbar { position: absolute; right: 16px; top: 12px; margin: 0; z-index: 4; }
 .social-content > .pending { flex-shrink: 0; margin: 8px 12px; }
 #page-messages { flex: 1; min-height: 0; max-width: none; width: 100%; display: flex; }
 .social-layout.card { flex: 1; min-height: 0; grid-template-columns: 248px minmax(0,1fr); border: 0; border-radius: 0; margin: 0; box-shadow: none; }
@@ -588,7 +587,7 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 .social-list-empty { padding: 64px 8px; color: #98a2b3; }
 .social-identity { flex-shrink: 0; margin: 0; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 11px; max-height: 110px; overflow: auto; }
 .social-chat { min-height: 0; }
-.social-chat > .card-row { height: 58px; min-height: 58px; padding: 0 180px 0 20px; flex-shrink: 0; flex-wrap: nowrap; }
+.social-chat > .card-row { height: 58px; min-height: 58px; padding: 0 20px; flex-shrink: 0; flex-wrap: nowrap; }
 #social-chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 #social-actions { margin-left: auto; flex-shrink: 0; }
 .social-messages { min-height: 0; height: auto; max-height: none; }
@@ -599,7 +598,7 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 .social-compose button.primary, .social-request-actions button.primary { width: auto; margin-top: 0; padding: 7px 16px; min-height: 32px; flex-shrink: 0; }
 #social-error { margin: 0; padding: 8px 20px; font-size: 12px; flex-shrink: 0; }
 #social-error:empty { display: none; }
-@media(max-width:760px) { .social-layout.card { grid-template-columns: 210px minmax(0,1fr); } .social-content > .topbar .user-name { max-width: 65px; } .social-chat > .card-row { padding-right: 135px; } }
+@media(max-width:760px) { .social-layout.card { grid-template-columns: 210px minmax(0,1fr); } }
 .social-bubble { flex-shrink: 0; }
 
 #social-actions { display: flex; align-items: center; gap: 4px; }

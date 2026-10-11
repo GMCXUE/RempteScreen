@@ -36,9 +36,21 @@
   <!-- 主界面：左侧导航 + 右侧内容 -->
   <div id="app" class="app hidden">
     <aside class="sidebar">
-      <div class="brand">
-        <span class="logo"></span>
-        <span>RemoteScreen</span>
+      <div class="sidebar-account">
+        <button class="user-chip" id="user-chip" type="button" aria-label="账号菜单" aria-haspopup="true" aria-controls="user-menu" aria-expanded="false">
+          <span id="account-avatar" class="avatar">—</span>
+          <span id="account-name" class="user-name">未登录</span>
+          <svg viewBox="0 0 16 16" class="caret" aria-hidden="true"><path d="M4 6.5l4 4 4-4"/></svg>
+        </button>
+        <div id="user-menu" class="user-menu hidden">
+          <div class="menu-head">
+            <div class="menu-name" id="menu-name">—</div>
+            <div class="menu-email" id="menu-email">—</div>
+          </div>
+          <button id="edit-profile" class="menu-item">个人资料</button>
+          <button id="choose-avatar" class="menu-item">更换头像</button>
+          <button id="logout-btn" class="menu-item danger">退出登录</button>
+        </div>
       </div>
       <nav>
         <button class="nav-item" data-page="messages">
@@ -84,23 +96,6 @@
           </div>
         </div>
 
-
-      <header class="topbar">
-        <div class="user-chip" id="user-chip">
-          <div id="account-avatar" class="avatar">—</div>
-          <span id="account-name" class="user-name">未登录</span>
-          <svg viewBox="0 0 16 16" class="caret"><path d="M4 6.5l4 4 4-4"/></svg>
-        </div>
-        <div id="user-menu" class="user-menu hidden">
-          <div class="menu-head">
-            <div class="menu-name" id="menu-name">—</div>
-            <div class="menu-email" id="menu-email">—</div>
-          </div>
-          <button id="edit-profile" class="menu-item">个人资料</button>
-          <button id="choose-avatar" class="menu-item">更换头像</button>
-          <button id="logout-btn" class="menu-item danger">退出登录</button>
-        </div>
-      </header>
 
       <!-- 投送 -->
       <section id="page-messages" class="page wide hidden">

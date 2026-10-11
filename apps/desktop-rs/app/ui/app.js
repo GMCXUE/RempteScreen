@@ -894,13 +894,22 @@ async function refreshDevices() {
 
 $("devices-refresh").addEventListener("click", refreshDevices);
 
-// ---------- 右上角用户菜单 ----------
+// ---------- 左上角账号菜单 ----------
 
 $("user-chip").addEventListener("click", (event) => {
   event.stopPropagation();
   $("user-menu").classList.toggle("hidden");
 });
 document.addEventListener("click", () => $("user-menu").classList.add("hidden"));
+new MutationObserver(() => {
+  $("user-chip").setAttribute("aria-expanded", String(!$("user-menu").classList.contains("hidden")));
+}).observe($("user-menu"), { attributes: true, attributeFilter: ["class"] });
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("user-menu").classList.contains("hidden")) {
+    $("user-menu").classList.add("hidden");
+    $("user-chip").focus();
+  }
+});
 
 // ---------- 退出登录 ----------
 
