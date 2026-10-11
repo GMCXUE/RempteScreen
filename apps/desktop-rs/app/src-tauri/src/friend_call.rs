@@ -64,7 +64,7 @@ async fn run(url:&str,token:&str,peer:&str,video:bool,frames:viewer::FrameStore,
                     },
                     RemoteTrack::Video(track) if publication.source()==TrackSource::Camera => {
                         if let Some(c)=decoder.take(){c.store(true,Ordering::Relaxed);}
-                        decoder=Some(viewer::spawn_camera_decoder(track,event_frames.clone(),event_stop.clone()));
+                        if !publication.is_muted() {decoder=Some(viewer::spawn_camera_decoder(track,event_frames.clone(),event_stop.clone()));}
                     },_=>{}
                 },
                 RoomEvent::TrackUnpublished{publication,..}|RoomEvent::TrackUnsubscribed{publication,..} => {
@@ -72,7 +72,16 @@ async fn run(url:&str,token:&str,peer:&str,video:bool,frames:viewer::FrameStore,
                         if let Some(c)=decoder.take(){c.store(true,Ordering::Relaxed);}*event_frames.lock().unwrap()=None;
                     } else if publication.source()==TrackSource::Microphone {playouts.remove(&publication.sid().to_string());}
                 },
-                RoomEvent::TrackMuted{publication,..} if publication.source()==TrackSource::Camera => {*event_frames.lock().unwrap()=None;},
+                RoomEvent::TrackMuted{publication,participant} if publication.source()==TrackSource::Camera && participant.identity().as_str()==peer => {
+                    if let Some(c)=decoder.take(){c.store(true,Ordering::Relaxed);}
+                    *event_frames.lock().unwrap()=None;
+                },
+                RoomEvent::TrackUnmuted{publication,participant} if publication.source()==TrackSource::Camera && participant.identity().as_str()==peer => {
+                    if let Some(Track::RemoteVideo(track))=publication.track() {
+                        if let Some(c)=decoder.take(){c.store(true,Ordering::Relaxed);}
+                        decoder=Some(viewer::spawn_camera_decoder(track,event_frames.clone(),event_stop.clone()));
+                    }
+                },
                 RoomEvent::ParticipantDisconnected(p) if p.identity().as_str()==peer => {event_stop.store(true,Ordering::Relaxed);break;},
                 RoomEvent::Disconnected{..} => {event_stop.store(true,Ordering::Relaxed);break;},
                 _=>{}

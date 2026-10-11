@@ -18,7 +18,6 @@ pub struct NotificationContext {
     diagnostics: Mutex<serde_json::Value>,
     ring: Mutex<Option<(String, u64, String)>>,
     stopped: Mutex<HashSet<String>>,
-    owned_call: Mutex<Option<(String, String)>>,
     dismissed_calls: Mutex<HashSet<String>>,
 }
 #[cfg(target_os = "macos")]
@@ -67,7 +66,8 @@ extern "C" fn native_event(value: *const std::ffi::c_char) {
                 if let Some(id) = data["extra"]["callId"].as_str() {
                     state.stopped.lock().unwrap().insert(id.into());
                     if matches!(data["action"].as_str(), Some("reject" | "hangup")) {
-                        state.dismissed_calls.lock().unwrap().insert(id.into());
+                        let mut dismissed = state.dismissed_calls.lock().unwrap();
+                        dismissed.insert(id.into());
                         dismiss_call_panel(id);
                     }
                     let mut ring = state.ring.lock().unwrap();
@@ -322,11 +322,17 @@ pub fn set_call_notification_context(
     dismissed_call_id: Option<String>,
     state: tauri::State<NotificationContext>,
 ) {
-    *state.owned_call.lock().unwrap() =
-        owned_call_id.and_then(|id| api::load_creds().account_token.map(|token| (id, token)));
-    if let Some(id) = dismissed_call_id {
+    // The webview reports ownership only after acceptance succeeds. Keep a
+    // tombstone so an in-flight native ringing snapshot cannot reopen it.
+    if let Some(id) = dismissed_call_id.or(owned_call_id) {
+        let mut dismissed = state.dismissed_calls.lock().unwrap();
+        dismissed.insert(id.clone());
         dismiss_call_panel(&id);
-        state.dismissed_calls.lock().unwrap().insert(id);
+        state.stopped.lock().unwrap().insert(id.clone());
+        let mut ring = state.ring.lock().unwrap();
+        if ring.as_ref().is_some_and(|r| r.0 == id) {
+            *ring = None;
+        }
     }
 }
 fn now() -> u64 {
@@ -468,10 +474,6 @@ pub fn start(app: tauri::AppHandle) {
                     let _ = w.set_badge_count(None);
                 }
                 update_call_panel(None);
-                *app.state::<NotificationContext>()
-                    .owned_call
-                    .lock()
-                    .unwrap() = None;
                 app.state::<NotificationContext>()
                     .dismissed_calls
                     .lock()
@@ -608,24 +610,19 @@ pub fn start(app: tauri::AppHandle) {
                 let mut audible = None;
                 let mut panel = None;
                 let state = app.state::<NotificationContext>();
-                let owned = state.owned_call.lock().unwrap().clone();
                 let dismissed = state.dismissed_calls.lock().unwrap().clone();
                 if let Some(calls) = calls["calls"].as_array() {
                     for c in calls {
                         let id = c["id"].as_str().unwrap_or_default();
-                        let local_owned = owned
-                            .as_ref()
-                            .is_some_and(|(call, saved_token)| call == id && saved_token == &token);
                         if show_call_panel(
                             c["status"].as_str().unwrap_or_default(),
                             c["role"] == "callee",
-                            local_owned,
                             dismissed.contains(id),
                         ) {
                             panel = Some(serde_json::json!({
                                 "id":id,"accountId":user,"peerId":c["peerId"],"peerName":c["peerName"],"peerAvatarId":c["peerAvatarId"],"peerAvatarRevision":c["peerAvatarRevision"],
                                 "kind":c["kind"],"status":c["status"],"role":c["role"],"acceptedAt":c["acceptedAt"],
-                                "expiresAt":if c["status"] == "ringing" { c["createdAt"].as_u64().unwrap_or(0).saturating_add(45000) } else { now().saturating_add(30000) }
+                                "expiresAt":c["createdAt"].as_u64().unwrap_or(0).saturating_add(45000)
                             }));
                             if c["peerAvatarId"] == "custom" {
                                 let key=format!("{user}:{}:{}",c["peerId"],c["peerAvatarRevision"]);
@@ -681,17 +678,18 @@ pub fn start(app: tauri::AppHandle) {
                         }
                     }
                 }
-                if panel.as_ref().is_some_and(|c| {
-                    state
-                        .dismissed_calls
-                        .lock()
-                        .unwrap()
-                        .contains(c["id"].as_str().unwrap_or_default())
-                }) {
-                    panel = None;
+                {
+                    // Queue updates and dismissals under the same lock, including
+                    // after a potentially slow avatar fetch.
+                    let dismissed = state.dismissed_calls.lock().unwrap();
+                    if panel.as_ref().is_some_and(|c| {
+                        dismissed.contains(c["id"].as_str().unwrap_or_default())
+                    }) {
+                        panel = None;
+                    }
+                    if api::load_creds().account_token.as_deref() != Some(&token) { continue; }
+                    update_call_panel(panel);
                 }
-                if api::load_creds().account_token.as_deref() != Some(&token) { continue; }
-                update_call_panel(panel);
                 if let Some(calls) = calls["calls"].as_array() {
                     state.dismissed_calls.lock().unwrap().retain(|id| {
                         calls

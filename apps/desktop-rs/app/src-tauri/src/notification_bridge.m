@@ -80,29 +80,32 @@ void rs_notifications_remove(const char *identifier) {
     label.font=bold?[NSFont boldSystemFontOfSize:size]:[NSFont systemFontOfSize:size];
     label.lineBreakMode=NSLineBreakByTruncatingTail;[self.panel.contentView addSubview:label];return label;
 }
-- (NSButton *)button:(NSRect)frame title:(NSString *)title color:(NSColor *)color action:(SEL)action {
-    NSButton *button=[[NSButton alloc] initWithFrame:frame];button.title=title;
-    button.bordered=NO;button.wantsLayer=YES;button.layer.backgroundColor=color.CGColor;button.layer.cornerRadius=10;
-    button.font=[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];button.contentTintColor=NSColor.whiteColor;
+- (NSButton *)button:(NSRect)frame symbol:(NSString *)symbol label:(NSString *)label color:(NSColor *)color action:(SEL)action {
+    NSButton *button=[[NSButton alloc] initWithFrame:frame];button.title=@"";
+    button.image=[[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:label]
+        imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:16 weight:NSFontWeightSemibold]];
+    button.imagePosition=NSImageOnly;button.toolTip=label;button.accessibilityLabel=label;
+    button.bordered=NO;button.wantsLayer=YES;button.layer.backgroundColor=color.CGColor;button.layer.cornerRadius=frame.size.height/2;
+    button.contentTintColor=NSColor.whiteColor;
     button.target=self;button.action=action;[self.panel.contentView addSubview:button];return button;
 }
 - (instancetype)init {
     if((self=[super init])) {
-        self.panel=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,340,142) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
+        self.panel=[[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,320,108) styleMask:NSWindowStyleMaskBorderless|NSWindowStyleMaskNonactivatingPanel backing:NSBackingStoreBuffered defer:NO];
         self.panel.level=NSFloatingWindowLevel;self.panel.hidesOnDeactivate=NO;self.panel.releasedWhenClosed=NO;
         self.panel.collectionBehavior=NSWindowCollectionBehaviorCanJoinAllSpaces|NSWindowCollectionBehaviorFullScreenAuxiliary;
         self.panel.opaque=NO;self.panel.backgroundColor=NSColor.clearColor;self.panel.hasShadow=YES;self.panel.movableByWindowBackground=YES;
-        self.panel.accessibilityLabel=@"RemoteScreen 通话";
-        NSVisualEffectView *surface=[[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0,0,340,142)];
+        self.panel.accessibilityLabel=@"RemoteScreen 来电";
+        NSVisualEffectView *surface=[[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0,0,320,108)];
         surface.material=NSVisualEffectMaterialPopover;surface.state=NSVisualEffectStateActive;surface.wantsLayer=YES;surface.layer.cornerRadius=18;surface.layer.masksToBounds=YES;
         self.panel.contentView=surface;
-        self.avatar=[[NSImageView alloc] initWithFrame:NSMakeRect(20,78,48,48)];
+        self.avatar=[[NSImageView alloc] initWithFrame:NSMakeRect(16,52,40,40)];
         self.avatar.imageScaling=NSImageScaleProportionallyUpOrDown;self.avatar.wantsLayer=YES;
-        self.avatar.layer.cornerRadius=14;self.avatar.layer.masksToBounds=YES;[surface addSubview:self.avatar];
-        self.nameLabel=[self label:NSMakeRect(80,103,240,23) size:17 bold:YES];
-        self.statusLabel=[self label:NSMakeRect(80,78,240,20) size:13 bold:NO];self.statusLabel.textColor=NSColor.secondaryLabelColor;
-        self.answer=[self button:NSMakeRect(20,20,144,42) title:@"接通" color:[NSColor colorWithRed:0.13 green:0.65 blue:0.48 alpha:1] action:@selector(accept:)];
-        self.hangup=[self button:NSMakeRect(176,20,144,42) title:@"挂断" color:[NSColor colorWithRed:0.89 green:0.36 blue:0.39 alpha:1] action:@selector(end:)];
+        self.avatar.layer.cornerRadius=12;self.avatar.layer.masksToBounds=YES;[surface addSubview:self.avatar];
+        self.nameLabel=[self label:NSMakeRect(68,75,236,20) size:15 bold:YES];
+        self.statusLabel=[self label:NSMakeRect(68,53,236,18) size:12 bold:NO];self.statusLabel.textColor=NSColor.secondaryLabelColor;
+        self.answer=[self button:NSMakeRect(228,12,32,32) symbol:@"phone.fill" label:@"接通" color:[NSColor colorWithRed:0.13 green:0.65 blue:0.48 alpha:1] action:@selector(accept:)];
+        self.hangup=[self button:NSMakeRect(272,12,32,32) symbol:@"phone.down.fill" label:@"挂断" color:[NSColor colorWithRed:0.89 green:0.36 blue:0.39 alpha:1] action:@selector(end:)];
         self.timer=[NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(tick:) userInfo:nil repeats:YES];
     }return self;
 }
@@ -113,6 +116,7 @@ void rs_notifications_remove(const char *identifier) {
     NSDictionary *extra=@{@"kind":@"call",@"accountId":self.call[@"accountId"]?:@"",@"peerId":self.call[@"peerId"]?:@"",@"callId":self.call[@"id"]?:@""};
     self.awaitingAnswer=[action isEqual:@"answer"];
     self.pendingUntil=[NSDate dateWithTimeIntervalSinceNow:8];self.answer.enabled=NO;self.hangup.enabled=NO;
+    [self tick:nil];
     report(@{@"type":@"action",@"action":action,@"extra":extra});
 }
 - (void)tick:(NSTimer *)timer {
@@ -123,24 +127,14 @@ void rs_notifications_remove(const char *identifier) {
         self.pendingUntil=nil;
         if(self.awaitingAnswer){self.awaitingAnswer=NO;[self update:nil];return;}
     }
-    BOOL active=[self.call[@"status"] isEqual:@"active"];
-    BOOL incoming=[self.call[@"role"] isEqual:@"callee"];
-    self.answer.hidden=!incoming&&!active;
-    self.answer.title=active?@"已接通":(self.awaitingAnswer?@"接通中":@"接通");
-    self.answer.enabled=!active&&!self.pendingUntil;
+    self.answer.enabled=!self.pendingUntil;
     self.hangup.enabled=!self.pendingUntil;
-    self.hangup.title=incoming||active?@"挂断":@"取消";
     NSString *kind=[self.call[@"kind"] isEqual:@"video"]?@"视频":@"语音";
-    if(active) {
-        long seconds=MAX(0,(long)((now-[self.call[@"acceptedAt"] doubleValue])/1000));
-        self.statusLabel.stringValue=[NSString stringWithFormat:@"%@通话 · %ld:%02ld",kind,seconds/60,seconds%60];
-    }else if(self.awaitingAnswer)self.statusLabel.stringValue=@"正在接通…";
-    else self.statusLabel.stringValue=[NSString stringWithFormat:incoming?@"%@来电":@"%@通话 · 等待对方接通",kind];
+    self.statusLabel.stringValue=self.awaitingAnswer?@"正在接通…":[NSString stringWithFormat:@"%@来电",kind];
 }
 - (void)update:(NSDictionary *)call {
-    // The independent server poll can see acceptance before the media webview
-    // confirms local ownership. Keep the panel through that short transition.
-    if(!call && self.awaitingAnswer && [self.pendingUntil timeIntervalSinceNow]>0)return;
+    // This panel is only an incoming alert; active controls live in the call UI.
+    if(![call[@"status"] isEqual:@"ringing"] || ![call[@"role"] isEqual:@"callee"])call=nil;
     BOOL changed=![self.call[@"id"] isEqual:call[@"id"]]||![self.call[@"status"] isEqual:call[@"status"]];
     if(changed){self.pendingUntil=nil;self.awaitingAnswer=NO;}
     self.call=call;
@@ -151,7 +145,7 @@ void rs_notifications_remove(const char *identifier) {
     [self tick:nil];if(!self.call)return;
     if(!self.panel.visible) {
         NSScreen *screen=NSScreen.mainScreen?:NSScreen.screens.firstObject;
-        NSRect frame=screen.visibleFrame;[self.panel setFrameTopLeftPoint:NSMakePoint(NSMaxX(frame)-360,NSMaxY(frame)-20)];
+        NSRect frame=screen.visibleFrame;[self.panel setFrameTopLeftPoint:NSMakePoint(NSMaxX(frame)-self.panel.frame.size.width-20,NSMaxY(frame)-20)];
         [self.panel orderFrontRegardless];
     }
 }

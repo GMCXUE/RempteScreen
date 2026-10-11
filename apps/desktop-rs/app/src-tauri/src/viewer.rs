@@ -473,10 +473,15 @@ async fn run_watch(
 
 /// 把通话摄像头轨独立编码到小窗帧池，绝不覆盖屏幕共享主画面。
 pub fn spawn_camera_decoder(track: RemoteVideoTrack, frames: FrameStore, stop: Arc<AtomicBool>) -> Arc<AtomicBool> {
+    spawn_camera_preview(track.rtc_track(), frames, stop)
+}
+
+/// Local and remote camera previews share the same bounded frame decoder.
+pub fn spawn_camera_preview(track: livekit::webrtc::video_track::RtcVideoTrack, frames: FrameStore, stop: Arc<AtomicBool>) -> Arc<AtomicBool> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel = cancelled.clone();
     tauri::async_runtime::spawn(async move {
-        let mut stream = NativeVideoStream::new(track.rtc_track());
+        let mut stream = NativeVideoStream::new(track);
         let mut rgb = Vec::new();
         let mut last_encode = Instant::now() - Duration::from_secs(1);
         while !stop.load(Ordering::Relaxed) && !cancel.load(Ordering::Relaxed) {

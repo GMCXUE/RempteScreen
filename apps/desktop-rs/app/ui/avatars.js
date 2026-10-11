@@ -47,6 +47,6 @@
   }catch(error){picking=false;window.showAppToast(String(error));}
  }
  window.accountAvatars={catalog,normalize,image,render,renderOwn,update,choose,me:()=>me};
- document.getElementById('choose-avatar').onclick=choose;document.getElementById('social-choose-avatar').onclick=choose;
+ for(const id of ['choose-avatar','social-choose-avatar']){const button=document.getElementById(id);if(button)button.onclick=choose;}
  window.addEventListener('social-account-changed',()=>{++version;me=null;images.clear();renderOwn();document.querySelectorAll('.avatar-dialog').forEach(d=>d.close());});
 })();

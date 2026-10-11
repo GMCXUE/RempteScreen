@@ -35,6 +35,10 @@ impl CallMedia {
     pub fn camera_enabled(&self) -> bool {
         self.camera.is_some()
     }
+
+    pub fn camera_preview(&self) -> Option<Vec<u8>> {
+        self.camera.as_ref().and_then(|camera| camera.preview.frames.lock().unwrap().clone())
+    }
 }
 
 struct Operation(Arc<Mutex<CallMedia>>);
@@ -161,6 +165,82 @@ struct CameraCapture {
     #[cfg(target_os = "windows")]
     _native: crate::windows_camera::Capture,
     publication: LocalTrackPublication,
+    preview: CameraPreview,
+}
+
+struct CameraPreview {
+    frames: crate::viewer::FrameStore,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+impl CameraPreview {
+    fn start(track: &LocalVideoTrack) -> Self {
+        let frames=Arc::new(Mutex::new(None));
+        let stop=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        crate::viewer::spawn_camera_preview(track.rtc_track(),frames.clone(),stop.clone());
+        Self { frames,stop }
+    }
+}
+impl Drop for CameraPreview {
+    fn drop(&mut self) {
+        self.stop.store(true,std::sync::atomic::Ordering::Relaxed);
+        *self.frames.lock().unwrap()=None;
+    }
+}
+
+#[cfg(test)]
+mod camera_preview_tests {
+    use super::*;
+    use livekit::webrtc::prelude::{I420Buffer, RtcVideoSource, VideoFrame, VideoResolution, VideoRotation};
+    use livekit::webrtc::video_source::native::NativeVideoSource;
+
+    #[test]
+    fn local_preview_uses_existing_track_and_clears_on_close() {
+        tauri::async_runtime::block_on(async {
+            let source=NativeVideoSource::new(VideoResolution{width:16,height:16},false);
+            let track=LocalVideoTrack::create_video_track("preview-test",RtcVideoSource::Native(source.clone()));
+            let preview=CameraPreview::start(&track);
+            let frames=preview.frames.clone();
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let mut buffer=I420Buffer::new(16,16);
+                let (y,u,v)=buffer.data_mut();y.fill(90);u.fill(128);v.fill(128);
+                source.capture_frame(&VideoFrame::new(VideoRotation::VideoRotation0,buffer));
+                if frames.lock().unwrap().is_some(){break;}
+            }
+            let jpeg=frames.lock().unwrap().clone().expect("Local track must produce preview frames without a second capture");
+            let image=image::load_from_memory(&jpeg).unwrap();
+            assert_eq!((image.width(),image.height()),(16,16));
+            drop(preview);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(frames.lock().unwrap().is_none(),"Late frames cannot restore a closed preview");
+        });
+    }
+    #[test]
+    fn cancelled_camera_decoder_cannot_restore_a_muted_frame() {
+        tauri::async_runtime::block_on(async {
+            let source=NativeVideoSource::new(VideoResolution{width:16,height:16},false);
+            let track=LocalVideoTrack::create_video_track("mute-preview-test",RtcVideoSource::Native(source.clone()));
+            let frames=Arc::new(Mutex::new(None));
+            let stop=Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancelled=crate::viewer::spawn_camera_preview(track.rtc_track(),frames.clone(),stop);
+            let frame=|| {
+                let mut buffer=I420Buffer::new(16,16);
+                let (y,u,v)=buffer.data_mut();y.fill(90);u.fill(128);v.fill(128);
+                VideoFrame::new(VideoRotation::VideoRotation0,buffer)
+            };
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                source.capture_frame(&frame());
+                if frames.lock().unwrap().is_some(){break;}
+            }
+            assert!(frames.lock().unwrap().is_some());
+            cancelled.store(true,std::sync::atomic::Ordering::Relaxed);
+            *frames.lock().unwrap()=None;
+            source.capture_frame(&frame());
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            assert!(frames.lock().unwrap().is_none());
+        });
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -227,7 +307,7 @@ impl CameraCapture {
         );
         let publication = match local
             .publish_track(
-                LocalTrack::Video(track),
+                LocalTrack::Video(track.clone()),
                 TrackPublishOptions {
                     source: TrackSource::Camera,
                     video_codec: VideoCodec::H264,
@@ -281,6 +361,7 @@ impl CameraCapture {
             child,
             reader: Some(reader),
             publication,
+            preview: CameraPreview::start(&track),
         })
     }
 }
@@ -298,14 +379,14 @@ impl CameraCapture {
         let capture = crate::windows_camera::Capture::start().await?;
         if media.lock().unwrap().closed { return Err("通话会话已经关闭".into()); }
         let track = LocalVideoTrack::create_video_track("call-camera", capture.source());
-        let publication = local.publish_track(LocalTrack::Video(track), TrackPublishOptions {
+        let publication = local.publish_track(LocalTrack::Video(track.clone()), TrackPublishOptions {
             source: TrackSource::Camera,
             video_codec: VideoCodec::H264,
             simulcast: false,
             video_encoding: Some(VideoEncoding { max_bitrate: 900_000, max_framerate: 24.0 }),
             ..Default::default()
         }).await.map_err(|error| format!("发布摄像头失败：{error}"))?;
-        Ok(Self { _native: capture, publication })
+        Ok(Self { _native: capture, publication, preview: CameraPreview::start(&track) })
     }
 }
 

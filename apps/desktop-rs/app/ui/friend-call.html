@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>视频通话</title><link rel="stylesheet" href="friend-call.css"></head>
+<body><main id="call-stage" aria-label="视频通话">
+  <section id="remote-surface" class="video-surface main-video" data-source="remote">
+    <img id="remote-video" alt="对方视频" draggable="false" hidden>
+    <div class="video-placeholder"><div id="remote-avatar" class="avatar"></div><p id="remote-placeholder">等待对方视频</p></div>
+    <span class="video-caption" id="remote-caption">对方</span>
+  </section>
+  <section id="local-surface" class="video-surface small-video" data-source="local" role="button" tabindex="0" aria-label="切换双方画面" title="点击切换双方画面">
+    <img id="local-video" alt="自己的视频" draggable="false" hidden>
+    <div class="video-placeholder"><div id="local-avatar" class="avatar"></div><p id="local-placeholder">摄像头已关闭</p></div>
+    <span class="video-caption">我</span>
+  </section>
+  <header id="call-header" class="chrome">
+    <div class="heading"><strong id="peer-name">视频通话</strong><span id="call-status" role="status">正在连接通话…</span></div>
+    <div class="window-actions"><button id="fullscreen" aria-label="全屏"></button><button id="fold" aria-label="收起通话"></button></div>
+  </header>
+  <div id="call-error" role="status" hidden></div>
+  <footer id="call-controls" class="chrome" aria-label="通话控制">
+    <button id="microphone" type="button"></button><button id="camera" type="button"></button><button id="speaker" type="button"></button><button id="hangup" type="button"></button>
+    <button id="hide-controls" class="hide-control" type="button">隐藏控制栏</button>
+  </footer>
+  <button id="show-controls" class="show-control" type="button" aria-label="显示控制栏">显示控制栏</button>
+</main><script src="ui-icons.js"></script><script src="avatars.js"></script><script src="friend-call-window.js"></script></body></html>

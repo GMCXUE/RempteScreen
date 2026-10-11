@@ -4,7 +4,8 @@
   "windows": [
     "main",
     "viewer",
-    "call-video"
+    "call-video",
+    "friend-call"
   ],
   "permissions": [
     "core:default",

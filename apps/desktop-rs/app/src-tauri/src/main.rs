@@ -7,6 +7,7 @@
 mod api;
 mod call;
 mod friend_call;
+mod friend_call_window;
 mod notifications;
 mod notification_policy;
 mod microphone;
@@ -1751,6 +1752,7 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(notifications::NotificationContext::default())
+        .manage(friend_call_window::CallWindowState::default())
         .manage(AppState {
             audio_gate: tokio::sync::Mutex::new(()),
             friend: Mutex::new(None),
@@ -1937,7 +1939,18 @@ fn main() {
                 .header("Content-Type", "image/jpeg").header("Cache-Control", "no-store")
                 .body(frame.unwrap_or_default()).unwrap());
         })
+        .register_asynchronous_uri_scheme_protocol("friendlocalcamera", move |ctx, _request, responder| {
+            let state=ctx.app_handle().state::<AppState>();
+            let frame=state.friend.lock().unwrap().as_ref().and_then(|s|s.media.lock().unwrap().camera_preview());
+            responder.respond(tauri::http::Response::builder().status(if frame.is_some(){200}else{204})
+                .header("Content-Type","image/jpeg").header("Cache-Control","no-store")
+                .body(frame.unwrap_or_default()).unwrap());
+        })
         .invoke_handler(tauri::generate_handler![
+            friend_call_window::set_friend_call_window_state,
+            friend_call_window::close_friend_call_window,
+            friend_call_window::get_friend_call_window_state,
+            friend_call_window::friend_call_window_action,
             notifications::set_notification_context,
             notifications::set_call_notification_context,
             notifications::prepare_call_notification_answer,

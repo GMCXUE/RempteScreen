@@ -1,10 +1,9 @@
 pub(crate) fn show_call_panel(
     status: &str,
     callee: bool,
-    local_owned: bool,
     dismissed: bool,
 ) -> bool {
-    !dismissed && ((status == "ringing" && callee) || (status == "active" && local_owned))
+    !dismissed && status == "ringing" && callee
 }
 
 pub(crate) fn can_ring(enabled: bool, muted: bool, stopped: bool, expires: u64, now: u64) -> bool {
@@ -24,14 +23,13 @@ pub(crate) fn should_alert(
 mod tests {
     use super::{can_ring, should_alert, show_call_panel};
     #[test]
-    fn call_panel_follows_incoming_and_local_accepted_call() {
-        assert!(show_call_panel("ringing", true, false, false));
-        assert!(show_call_panel("active", true, true, false));
-        assert!(!show_call_panel("active", true, false, false)); // Answered on another device.
-        assert!(!show_call_panel("ended", true, true, false));
-        assert!(!show_call_panel("ringing", true, false, true));
-        assert!(!show_call_panel("active", true, true, true));
-        assert!(!show_call_panel("ringing", false, true, false));
+    fn call_panel_only_shows_unanswered_incoming_calls() {
+        assert!(show_call_panel("ringing", true, false));
+        assert!(!show_call_panel("active", true, false));
+        assert!(!show_call_panel("ended", true, false));
+        assert!(!show_call_panel("ringing", false, false));
+        // A late ringing response must not reopen an accepted/dismissed call.
+        assert!(!show_call_panel("ringing", true, true));
     }
     #[test]
     fn ringing_stops_for_mute_decision_and_expiry() {
