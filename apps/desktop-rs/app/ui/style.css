@@ -817,6 +817,15 @@ body:has(.content.social-content #social-compose:not(.hidden)) .friend-call-bar 
 .friend-call-bar.folded .friend-call-heading span {color:var(--green);}
 .friend-call-bar.folded #friend-call-fold {color:var(--muted);}
 .friend-call-bar.folded .friend-call-controls,.friend-call-bar.folded .friend-call-decisions {display:none;}
+.friend-call-bar.incoming {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px;background:#fff;color:var(--text);border-color:var(--line);border-radius:18px;box-shadow:0 6px 24px #15223816;}
+.friend-call-bar.incoming .friend-call-top {grid-column:1;grid-row:1;min-width:0;gap:10px;}
+.friend-call-bar.incoming .friend-call-heading strong {font-size:14px;}
+.friend-call-bar.incoming .friend-call-heading span {font-size:12px;color:var(--muted);}
+.friend-call-bar.incoming #friend-call-fold,.friend-call-bar.incoming #friend-call-video {display:none;}
+.friend-call-bar.incoming .friend-call-decisions {grid-column:2;grid-row:1;margin:0;gap:8px;display:flex;}
+.friend-call-bar.incoming .friend-call-decisions button {flex:none;width:36px;height:36px;border-radius:50%;gap:0;}
+.friend-call-bar.incoming .friend-call-decisions svg {width:36px;height:36px;padding:9px;}
+.friend-call-bar.incoming .friend-call-decisions .control-label {display:none;}
 .social-call-button {width:36px;height:36px;border:0!important;color:var(--muted)!important;}
 .social-call-button .control-label {display:none;}
 .social-call-button:hover {color:var(--accent)!important;background:#eef4ff;}

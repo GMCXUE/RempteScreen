@@ -6,6 +6,8 @@ use livekit::prelude::*;
 #[cfg(target_os = "macos")]
 use livekit::webrtc::prelude::{NV12Buffer, RtcVideoSource, VideoFrame, VideoResolution, VideoRotation};
 #[cfg(target_os = "macos")]
+use livekit::webrtc::video_frame::native::VideoFrameBufferExt;
+#[cfg(target_os = "macos")]
 use livekit::webrtc::video_source::native::NativeVideoSource;
 #[cfg(target_os = "macos")]
 use std::io::{BufRead, Read};
@@ -192,6 +194,38 @@ mod camera_preview_tests {
     use super::*;
     use livekit::webrtc::prelude::{I420Buffer, RtcVideoSource, VideoFrame, VideoResolution, VideoRotation};
     use livekit::webrtc::video_source::native::NativeVideoSource;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_nv12_camera_preview_uses_capture_path() {
+        tauri::async_runtime::block_on(async {
+            let source=NativeVideoSource::new(VideoResolution{width:16,height:16},false);
+            let track=LocalVideoTrack::create_video_track("nv12-preview-test",RtcVideoSource::Native(source.clone()));
+            let preview=CameraPreview::start(&track);
+            let frames=preview.frames.clone();
+            let mut bytes=vec![128;16*16*3/2];bytes[..16*16].fill(90);
+            let mut captured=false;
+            for _ in 0..30 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                capture_nv12(&source,16,16,&bytes).unwrap();
+                if let Some(jpeg)=frames.lock().unwrap().as_ref() {
+                    let image=image::load_from_memory(jpeg).unwrap().to_rgb8();
+                    assert_eq!(image.dimensions(),(16,16));
+                    let pixel=image.get_pixel(8,8).0;
+                    if (60..120).contains(&pixel[0]) {
+                        assert!(pixel.iter().all(|value|value.abs_diff(pixel[0])<5));
+                        captured=true;break;
+                    }
+                }
+            }
+            assert!(captured,"NV12 capture must safely produce its own preview pixels");
+            assert!(capture_nv12(&source,16,16,&bytes[..bytes.len()-1]).is_err());
+            drop(preview);
+            capture_nv12(&source,16,16,&bytes).unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(frames.lock().unwrap().is_none());
+        });
+    }
 
     #[test]
     fn local_preview_uses_existing_track_and_clears_on_close() {
@@ -453,14 +487,20 @@ fn capture_nv12(
     height: u32,
     bytes: &[u8],
 ) -> Result<(), String> {
-    let y_length = width as usize * height as usize;
-    if bytes.len() < y_length {
+    if width == 0 || height == 0 {
         return Err("摄像头帧不完整".into());
     }
     let mut buffer = NV12Buffer::new(width, height);
     let (y, uv) = buffer.data_mut();
+    let y_length = y.len();
+    if bytes.len() != y_length + uv.len() {
+        return Err("摄像头帧不完整".into());
+    }
     y.copy_from_slice(&bytes[..y_length]);
     uv.copy_from_slice(&bytes[y_length..]);
+    // The SDK's native preview sink rejects this NV12 buffer variant at its FFI boundary.
+    // Normalize the shared capture track before sending it to preview and publication.
+    let buffer = buffer.to_i420();
     // false means normal frame-rate/resolution adaptation, not a capture failure.
     source.capture_frame(&VideoFrame::new(VideoRotation::VideoRotation0, buffer));
     Ok(())

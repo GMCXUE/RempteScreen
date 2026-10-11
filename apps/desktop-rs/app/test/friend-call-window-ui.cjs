@@ -59,7 +59,9 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   const main=await browser.newPage();main.on('pageerror',e=>errors.push(String(e)));await main.clock.install();
   await main.route('http://local.test/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><html><body></body></html>'}));
   await main.goto('http://local.test/main');
-  await main.setContent('<div id="app"></div><aside id="friend-call-bar"><div id="friend-call-avatar"></div><strong id="friend-call-name"></strong><span id="friend-call-status"></span><button id="friend-call-fold"></button><img id="friend-call-video"><div id="friend-call-controls"><button id="friend-call-mic"></button><button id="friend-call-camera"></button><button id="friend-call-speaker"></button></div><button id="friend-call-answer"></button><button id="friend-call-hangup"></button></aside><p id="social-error"></p>');
+  const callMarkup=fs.readFileSync(path.join(root,'index.html'),'utf8').match(/<aside id="friend-call-bar"[\s\S]*?<\/aside>/)[0];
+  await main.setContent('<div id="app"></div>'+callMarkup+'<p id="social-error"></p>');
+  await main.addStyleTag({path:path.join(root,'style.css')});
   await main.evaluate(()=>{
    window.commands=[];window.listeners={};window.serverCall={id:'call-test',peerName:'测试好友',kind:'video',status:'active',owned:true,acceptedAt:Date.now(),grant:{livekitUrl:'test',token:'test',peerIdentity:'peer'}};
    window.accountAvatars={render:()=>{},me:()=>({id:'me',avatarId:'dog'})};window.toasts=[];window.showAppToast=(text,duration)=>window.toasts.push({text,duration});
@@ -91,6 +93,13 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await main.locator('#social-error').evaluate(e=>e.textContent='好友加载失败');
   await main.evaluate(()=>window.dispatchEvent(new CustomEvent('friend-call-notice',{detail:'通话连接已断开'})));
   assert.equal(await main.locator('#social-error').textContent(),'好友加载失败','real chat errors are preserved');
+  await main.evaluate(()=>{window.serverCall={id:'incoming-style',peerName:'名称很长的测试好友',peerAvatarId:'penguin',kind:'video',status:'ringing',role:'callee',owned:false};});await main.clock.runFor(2200);
+  await main.waitForFunction(()=>document.getElementById('friend-call-bar').classList.contains('incoming'));
+  const avatar=await main.locator('#friend-call-avatar').boundingBox(),answer=await main.locator('#friend-call-answer').boundingBox(),reject=await main.locator('#friend-call-hangup').boundingBox();
+  assert.equal(avatar.width,44);assert.equal(answer.width,36);assert.equal(reject.width,36);
+  assert.ok(Math.abs(avatar.y+avatar.height/2-answer.y-answer.height/2)<.1,'avatar and incoming actions share a compact row');
+  assert.ok(avatar.x+avatar.width<answer.x&&answer.x+answer.width<reject.x);
+  assert.ok((await main.locator('#friend-call-bar').boundingBox()).height<90);
   assert.deepEqual(errors,[]);
   console.log('PASS: two feeds, full viewport, swap, hidden controls, fullscreen, action routing, fold/restore, stale actions and end cleanup');
  } finally {await browser.close();}

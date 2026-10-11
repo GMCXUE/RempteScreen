@@ -22,6 +22,7 @@
   const me=window.accountAvatars?.me();
   syncVideoWindow(separate?{id:current.id,peerId:current.peerId,peerName:current.peerName,peerAvatarId:current.peerAvatarId,peerAvatarRevision:current.peerAvatarRevision,me:me?{id:me.id,avatarId:me.avatarId,avatarRevision:me.avatarRevision}:null,acceptedAt:current.acceptedAt,microphone:mic,camera,speaker,remoteCamera,connecting:joining||mediaConnecting,busy,visible:!folded,error:lastError}:null);
   const bar=el('friend-call-bar');bar.classList.toggle('hidden',!current||(separate&&!folded&&!windowFailed));
+  bar.classList.toggle('incoming',current?.status==='ringing'&&current.role==='callee');
   bar.classList.toggle('folded',folded);window.uiIcons.button(el('friend-call-fold'),folded?'return':'down',folded?'返回通话':'收起通话');
   if(!current)return;
   el('friend-call-name').textContent=current.peerName;
