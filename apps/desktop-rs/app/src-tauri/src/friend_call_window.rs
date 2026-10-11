@@ -28,14 +28,14 @@ fn destroy_windows(app: &tauri::AppHandle) {
     }
 }
 
-fn create_mini(app: &tauri::AppHandle) -> Result<(), String> {
+fn create_mini(app: &tauri::AppHandle, voice: bool) -> Result<(), String> {
     let builder = tauri::WebviewWindowBuilder::new(
         app,
         "friend-call-mini",
         tauri::WebviewUrl::App("friend-call-mini.html".into()),
     )
-    .title("视频通话 · RemoteScreen")
-    .inner_size(180.0, 240.0)
+    .title("通话 · RemoteScreen")
+    .inner_size(180.0, if voice { 140.0 } else { 240.0 })
     .min_inner_size(28.0, 64.0)
     .decorations(false)
     .resizable(false)
@@ -54,7 +54,7 @@ fn create_mini(app: &tauri::AppHandle) -> Result<(), String> {
     };
     let window = builder
         .build()
-        .map_err(|e| format!("打开视频悬浮窗失败：{e}"))?;
+        .map_err(|e| format!("打开通话悬浮窗失败：{e}"))?;
     let handle = app.clone();
     window.on_window_event(move |event| match event {
         tauri::WindowEvent::Moved(_) => {
@@ -154,7 +154,7 @@ pub async fn set_friend_call_window_state(
             });
         }
         if !visible && app.get_webview_window("friend-call-mini").is_none() {
-            create_mini(&app)?;
+            create_mini(&app, current["kind"] == "voice")?;
         }
         // A slow platform window creation can outlive the call or a fold request.
         // Use the current snapshot before displaying it, never the old request.
@@ -180,9 +180,13 @@ pub async fn set_friend_call_window_state(
             if visible {
                 let _ = window.hide();
             } else {
+                if !latest["docked"].as_bool().unwrap_or(false) {
+                    let height = if latest["kind"] == "voice" { 140.0 } else { 240.0 };
+                    let _ = window.set_size(tauri::LogicalSize::new(180.0, height));
+                }
                 window
                     .show()
-                    .map_err(|e| format!("显示视频悬浮窗失败：{e}"))?;
+                    .map_err(|e| format!("显示通话悬浮窗失败：{e}"))?;
             }
             let _ = window.emit("friend-call-window:state", latest);
         }
@@ -223,6 +227,11 @@ pub fn friend_call_window_action(
     {
         return Err("通话已结束".into());
     }
+    if action == "restore" {
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show(); let _ = main.unminimize(); let _ = main.set_focus();
+        }
+    }
     app.emit_to(
         "main",
         "friend-call-window:action",
@@ -259,7 +268,7 @@ pub fn dock_friend_call_mini(
     }
     let window = app
         .get_webview_window("friend-call-mini")
-        .ok_or("视频悬浮窗已关闭")?;
+        .ok_or("通话悬浮窗已关闭")?;
     let monitor = window
         .current_monitor()
         .ok()
@@ -283,7 +292,8 @@ pub fn dock_friend_call_mini(
     };
     if edge != 0 {
         let (width, height) = if restore {
-            (180.0, 240.0)
+            let voice = state.0.lock().unwrap().as_ref().is_some_and(|c| c["kind"] == "voice");
+            (180.0, if voice { 140.0 } else { 240.0 })
         } else {
             (28.0, 64.0)
         };

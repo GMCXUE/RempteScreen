@@ -19,9 +19,10 @@
  function render(){
   invoke('set_call_notification_context',{ownedCallId:current?.status==='active'&&current.owned?current.id:null,dismissedCallId:null}).catch(()=>{});
   const separate=separateVideo();
+  const miniVoice=current?.kind==='voice'&&current.status==='active'&&current.owned&&folded;
   const me=window.accountAvatars?.me();
-  syncVideoWindow(separate?{id:current.id,peerId:current.peerId,peerName:current.peerName,peerAvatarId:current.peerAvatarId,peerAvatarRevision:current.peerAvatarRevision,me:me?{id:me.id,avatarId:me.avatarId,avatarRevision:me.avatarRevision}:null,acceptedAt:current.acceptedAt,microphone:mic,camera,speaker,remoteCamera,connecting:joining||mediaConnecting,busy,visible:!folded,error:lastError}:null);
-  const bar=el('friend-call-bar');bar.classList.toggle('hidden',!current||(separate&&!windowFailed));
+  syncVideoWindow(separate||miniVoice?{kind:current.kind,id:current.id,peerId:current.peerId,peerName:current.peerName,peerAvatarId:current.peerAvatarId,peerAvatarRevision:current.peerAvatarRevision,me:me?{id:me.id,avatarId:me.avatarId,avatarRevision:me.avatarRevision}:null,acceptedAt:current.acceptedAt,microphone:mic,camera,speaker,remoteCamera,connecting:joining||mediaConnecting,busy,visible:separate&&!folded,error:lastError}:null);
+  const bar=el('friend-call-bar');bar.classList.toggle('hidden',!current||((separate||miniVoice)&&!windowFailed));
   bar.classList.toggle('incoming',current?.status==='ringing'&&current.role==='callee');
   bar.classList.toggle('folded',folded);window.uiIcons.button(el('friend-call-fold'),folded?'return':'down',folded?'返回通话':'收起通话');
   if(!current)return;

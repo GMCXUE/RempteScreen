@@ -2,8 +2,8 @@
  const {invoke,convertFileSrc}=window.__TAURI__.core,$=id=>document.getElementById(id),mini=$('mini');
  let call=null,docked=false,disposed=false,busy=false,revision=0,pointer=null,dragging=false,dockTimer=null,abortFrame=null;
  function clearFrame(){$('video').hidden=true;$('video').removeAttribute('src');$('placeholder').hidden=false;}
- function layout(data){docked=!!data.docked;mini.classList.toggle('docked',docked);$('handle').hidden=!docked;$('handle').textContent=data.dockSide<0?'›':'‹';mini.setAttribute('aria-label',docked?'展开视频悬浮窗':'视频通话，点击返回，拖到边缘收起');}
- function apply(data){const changed=call?.id!==data?.id;if(changed){++revision;abortFrame?.();clearFrame();}call=data;if(!call)return;layout(call);if(changed){window.accountAvatars.render($('avatar'),{id:call.peerId,avatarId:call.peerAvatarId,avatarRevision:call.peerAvatarRevision});$('name').textContent=call.peerName;}if(!call.remoteCamera)clearFrame();}
+ function layout(data){docked=!!data.docked;mini.classList.toggle('docked',docked);$('handle').hidden=!docked;$('handle').textContent=data.dockSide<0?'›':'‹';mini.setAttribute('aria-label',docked?'展开通话悬浮窗':'通话中，点击返回，拖到边缘收起');}
+ function apply(data){const changed=call?.id!==data?.id;if(changed){++revision;abortFrame?.();clearFrame();}call=data;if(!call)return;mini.classList.toggle('voice',call.kind==='voice');$('kind').textContent=call.kind==='voice'?'语音通话中':'视频通话';layout(call);if(changed){window.accountAvatars.render($('avatar'),{id:call.peerId,avatarId:call.peerAvatarId,avatarRevision:call.peerAvatarRevision});$('name').textContent=call.peerName;}if(call.kind==='voice'||!call.remoteCamera)clearFrame();}
  async function open(){if(!call)return;try{if(docked)layout(await invoke('dock_friend_call_mini',{callId:call.id,restore:true}));else await invoke('friend_call_window_action',{callId:call.id,action:'restore'});}catch(error){console.error(error);}}
  function armDock(){if(!dragging)return;clearTimeout(dockTimer);dockTimer=setTimeout(async()=>{dragging=false;if(!call||call.visible)return;try{layout(await invoke('dock_friend_call_mini',{callId:call.id,restore:false}));}catch(_){}},400);}
  mini.addEventListener('pointerdown',e=>{if(e.button!==0)return;pointer={x:e.clientX,y:e.clientY,id:e.pointerId};dragging=false;mini.setPointerCapture(e.pointerId);});
@@ -16,7 +16,7 @@
  window.__TAURI__.event.listen('friend-call-mini:moved',armDock).then(stop=>stops.push(stop));
  const frames=setInterval(()=>{
   if(!call||call.visible||docked||disposed||busy||document.hidden)return;
-  if(!call.remoteCamera){clearFrame();return;}busy=true;const id=call.id,version=revision,frame=new Image();
+  if(call.kind==='voice'||!call.remoteCamera){clearFrame();return;}busy=true;const id=call.id,version=revision,frame=new Image();
   const finish=()=>{clearTimeout(timeout);frame.onload=frame.onerror=null;busy=false;abortFrame=null;};
   const timeout=setTimeout(()=>{finish();clearFrame();frame.src='';},3000);abortFrame=()=>{finish();frame.src='';};
   frame.onload=()=>{if(call?.id===id&&version===revision&&call.remoteCamera){$('video').src=frame.src;$('video').hidden=false;$('placeholder').hidden=true;}finish();};

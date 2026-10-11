@@ -6,7 +6,7 @@
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#e8edf5;font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;user-select:none}
 .shell{position:relative;width:100%;height:100%;border:1px solid transparent;border-radius:16px;overflow:hidden;background:#182130}
 .video-area{position:absolute;inset:0;display:grid;place-items:center;overflow:hidden}
-#video{position:absolute;width:100%;height:100%;object-fit:cover;background:#080d13}#video[hidden]{display:none}
+#video{transform:scaleX(-1);position:absolute;width:100%;height:100%;object-fit:cover;background:#080d13}#video[hidden]{display:none}
 .placeholder{text-align:center;color:#8593a6;line-height:1.8;pointer-events:none}.placeholder svg{display:block;margin:0 auto 8px;color:#586b81}.placeholder strong{display:block;color:#becad9;font-weight:500}
 .shell:hover{border-color:#ffffff35}.hint{position:absolute;bottom:8px;left:0;right:0;text-align:center;opacity:0;pointer-events:none;text-shadow:0 1px 4px #000}.shell:hover .hint{opacity:1}.fold{width:32px;height:32px;display:grid;place-items:center;position:absolute;right:7px;top:7px;border:0;border-radius:50%;background:#15203099;color:white;opacity:0;cursor:pointer}.shell:hover .fold{opacity:1}.shell.folded{border-radius:50%}.folded .fold,.folded .hint,.folded .placeholder{display:none}
 </style></head>
