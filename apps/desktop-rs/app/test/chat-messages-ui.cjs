@@ -27,6 +27,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
     if(command==='plugin:clipboard-manager|write_text'){window.copy.push(args.text);return;}
     if(command==='copy_chat_image'){if(window.failCopy)throw '复制失败，请重试';window.imageCopy.push(args.image);return;}
     if(command==='pick_chat_image')return window.photo;
+    if(command==='read_chat_image'){window.clipboardReads=(window.clipboardReads||0)+1;if(window.clipboardError)throw window.clipboardError;return window.clipboardImage||null;}
     if(command!=='social_api')return {};
     window.calls.push({op:args.operation,body:args.body});
     if(args.operation==='state')return {me:window.me,friends:[window.peer],requests:[],outgoing:[],blocked:[]};
@@ -44,6 +45,28 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   });
   for(const file of ['feedback.js','avatars.js','chat-messages.js','social.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,file),'utf8')});
   await page.locator('[data-page="messages"]').click();await page.waitForSelector('.social-contact');await page.locator('.social-contact').click();await page.waitForSelector('[data-message-id="m1"]');
+  // Native image clipboard fallback opens a preview, preserves text, and never sends on paste.
+  await page.locator('#social-draft').fill('保留草稿');
+  await page.evaluate(()=>{window.clipboardImage=window.photo;document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:new DataTransfer(),bubbles:true,cancelable:true}));});
+  await page.waitForSelector('.chat-image-dialog');assert.equal(await page.locator('#social-draft').inputValue(),'保留草稿');assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.op==='send-image').length),0);
+  await page.locator('.chat-image-dialog').getByRole('button',{name:'关闭',exact:true}).click();
+  await page.clock.runFor(1);await page.waitForSelector('.chat-image-dialog',{state:'detached'});
+  // Image blobs supplied by the WebView bypass native reads; plain text keeps default paste.
+  await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File([Uint8Array.from(atob(window.photo.split(',')[1]),c=>c.charCodeAt(0))],'screenshot.png',{type:'image/png'}));const event=new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true});document.querySelector('#social-draft').dispatchEvent(event);window.imagePastePrevented=event.defaultPrevented;});
+  await page.waitForSelector('.chat-image-dialog');assert.equal(await page.evaluate(()=>window.imagePastePrevented&&window.clipboardReads===1),true);
+  await page.locator('.chat-image-dialog').getByRole('button',{name:'关闭',exact:true}).click();
+  await page.clock.runFor(1);await page.waitForSelector('.chat-image-dialog',{state:'detached'});
+  await page.evaluate(()=>{const data=new DataTransfer();data.setData('text/plain','正常文字');const event=new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true});document.querySelector('#social-draft').dispatchEvent(event);window.textPastePrevented=event.defaultPrevented;});
+  assert.equal(await page.evaluate(()=>window.textPastePrevented),false);assert.equal(await page.locator('.chat-image-dialog').count(),0);assert.equal(await page.evaluate(()=>window.clipboardReads),1);
+  await page.evaluate(()=>{window.clipboardImage=null;document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:new DataTransfer(),bubbles:true}));});
+  await page.waitForFunction(()=>window.clipboardReads===2);assert.equal(await page.locator('.chat-image-dialog').count(),0);
+  await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File([new Uint8Array(8*1024*1024+1)],'large.png',{type:'image/png'}));document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});
+  await page.waitForFunction(()=>document.querySelector('#social-error').textContent==='图片过大，请选择 8 MB 以内的图片');assert.equal(await page.locator('.chat-image-dialog').count(),0);
+  // Ctrl/Cmd+V fallback is needed when the WebView emits no paste event for native images.
+  await page.evaluate(()=>window.clipboardImage=window.photo);await page.locator('#social-draft').focus();
+  await page.evaluate(()=>document.querySelector('#social-draft').dispatchEvent(new KeyboardEvent('keydown',{key:'v',metaKey:true,bubbles:true})));
+  await page.clock.runFor(65);await page.waitForSelector('.chat-image-dialog');assert.equal(await page.evaluate(()=>window.clipboardReads),3);
+  await page.locator('.chat-image-dialog').getByRole('button',{name:'关闭',exact:true}).click();await page.clock.runFor(1);await page.waitForSelector('.chat-image-dialog',{state:'detached'});
   // Whole body copy does not include its timestamp. Selecting a substring copies only that selection.
   await page.locator('[data-message-id="m1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制',exact:true}).click();assert.equal(await page.evaluate(()=>window.copy.at(-1)),'第一行\n第二行');
   await page.evaluate(()=>{const text=document.querySelector('[data-message-id="m1"] .chat-message-text').firstChild;const range=document.createRange();range.setStart(text,0);range.setEnd(text,3);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);});
@@ -51,9 +74,10 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.evaluate(()=>getSelection().removeAllRanges());
   await page.locator('[data-message-id="m3"] .social-bubble').focus();await page.keyboard.press('Shift+F10');assert.equal(await page.getByRole('menuitem',{name:'撤回',exact:true}).count(),0);await page.keyboard.press('Escape');
   await page.locator('[data-message-id="m2"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'撤回',exact:true}).click();await page.waitForSelector('.social-recalled[data-message-id="m2"]');assert.equal(await page.locator('[data-message-id="m2"]').textContent(),'你撤回了一条消息');
-  await page.locator('#social-image').click();await page.waitForSelector('.chat-image-dialog');await page.locator('.chat-image-dialog .primary').click();await page.waitForFunction(()=>document.querySelector('.chat-image-error')?.textContent==='网络不可用');
+  await page.evaluate(()=>{window.clipboardImage=window.photo;document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:new DataTransfer(),bubbles:true}));});await page.waitForSelector('.chat-image-dialog');await page.locator('.chat-image-dialog .primary').click();await page.waitForFunction(()=>document.querySelector('.chat-image-error')?.textContent==='网络不可用');
   await page.locator('.chat-image-dialog .primary').click();await page.waitForSelector('[data-message-id="photo1"]');
   assert.equal(await page.evaluate(()=>{const ids=window.calls.filter(c=>c.op==='send-image').map(c=>c.body.clientId);return ids[0]===ids[1];}),true);
+  assert.equal(await page.locator('#social-draft').inputValue(),'保留草稿');
   await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>window.imageCopy.length===1);assert.equal(await page.evaluate(()=>window.imageCopy[0]===window.photo),true);
   await page.evaluate(()=>window.failCopy=true);await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#social-error').textContent==='复制失败，请重试');await page.evaluate(()=>window.failCopy=false);
   await page.getByRole('button',{name:'查看图片',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.chat-image-dialog p'));assert.ok(await page.locator('.chat-image-dialog img').getAttribute('src'));await page.locator('.chat-image-dialog').getByRole('button',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>window.imageCopy.length===2);

@@ -168,6 +168,18 @@
   el('social-tab-friends').onclick=()=>{friendsTab=true;renderContacts();};
   el('social-older').onclick=()=>load(true);
   el('social-image').onclick=()=>chatUi.chooseImage(async()=>{await load();await refresh();}).catch(error);
+  let pasteFallback=null;
+  const imageSent=async()=>{await load();await refresh();};
+  el('social-draft').addEventListener('keydown',event=>{
+    if(event.key.toLowerCase()!=='v'||!(event.metaKey||event.ctrlKey)||event.altKey||event.shiftKey||event.repeat)return;
+    clearTimeout(pasteFallback);
+    // Some WebViews do not emit paste when the clipboard contains only native pixels.
+    pasteFallback=setTimeout(()=>{if(document.activeElement===el('social-draft'))chatUi.prepareImage(()=>window.__TAURI__.core.invoke('read_chat_image'),imageSent).catch(error);},60);
+  });
+  el('social-draft').addEventListener('paste',event=>{
+    clearTimeout(pasteFallback);
+    chatUi.pasteImage(event,imageSent).catch(error);
+  });
   el('social-compose').onsubmit=async event=>{
     event.preventDefault();if(!peer || mutating)return;
     const text=el('social-draft').value.trim();if(!text)return;

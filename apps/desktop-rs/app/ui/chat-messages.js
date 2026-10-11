@@ -53,10 +53,23 @@
    try{const result=await this.api('message-image',{peerId:context.peerId,messageId:message.id});if(!this.valid(context)||this.dialog!==dialog)return;image.src=imageSource(result.image);status.remove();copy.disabled=false;}
    catch(error){if(this.dialog===dialog)status.textContent=String(error);}
   }
-  async chooseImage(onSent){
+  async pasteImage(event,onSent){
+   const items=Array.from(event.clipboardData?.items||[]),file=items.find(item=>item.kind==='file'&&item.type.startsWith('image/'))?.getAsFile();
+   if(file){event.preventDefault();return this.prepareImage(async()=>{
+    if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw '请选择 JPG、PNG 或 WebP 图片';
+    if(file.size>8*1024*1024)throw '图片过大，请选择 8 MB 以内的图片';
+    return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject('无法读取剪贴板图片，请重新复制');reader.readAsDataURL(file);});
+   },onSent);}
+   // Leave ordinary text paste (including the caret and selected text) to the WebView.
+   if(event.clipboardData?.getData('text/plain'))return;
+   return this.prepareImage(()=>this.invoke('read_chat_image'),onSent);
+  }
+  async chooseImage(onSent){return this.prepareImage(()=>this.invoke('pick_chat_image'),onSent);}
+  async prepareImage(read,onSent){
    if(this.picking)return;const context=this.context();if(!context.peerId)return;this.picking=true;
    try{
-    const image=await this.invoke('pick_chat_image');if(!image||!this.valid(context))return;
+    const image=await read();if(!image||!this.valid(context))return;
+    if(!imageSource(image))throw '请选择 JPG、PNG 或 WebP 图片';
     const dialog=this.createDialog('发送图片'),photo=node('img');photo.alt='待发送图片';photo.src=imageSource(image);dialog.append(photo);
     const status=node('p','','chat-image-error');dialog.append(status);const send=node('button','发送','primary');send.type='button';dialog.append(send);const clientId=crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('');let busy=false;
     dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
@@ -66,7 +79,7 @@
      catch(error){if(this.dialog===dialog&&this.valid(context))status.textContent=String(error);}
      finally{busy=false;send.disabled=false;send.textContent='发送';dialog.querySelector('.chat-image-heading button').disabled=false;}
     };
-   }finally{this.picking=false;}
+   }catch(error){if(this.valid(context))throw error;}finally{this.picking=false;}
   }
  }
  window.ChatMessages=ChatMessages;

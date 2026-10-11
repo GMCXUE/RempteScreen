@@ -246,6 +246,35 @@ async fn pick_chat_image() -> Result<Option<String>, String> {
     pick_avatar_image().await
 }
 #[tauri::command]
+async fn read_chat_image() -> Result<Option<String>, String> {
+    use base64::Engine;
+    // Clipboard and encoding work must stay off the UI thread.
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut clipboard = arboard::Clipboard::new().map_err(|_| "无法读取剪贴板图片，请重新复制")?;
+        let image = match clipboard.get_image() {
+            Ok(image) => image,
+            Err(arboard::Error::ContentNotAvailable) => return Ok(None),
+            Err(_) => return Err("无法读取剪贴板图片，请重新复制".to_owned()),
+        };
+        let pixels = image.width.checked_mul(image.height).ok_or("图片过大，请选择其他图片")?;
+        if pixels == 0 || pixels > 24_000_000 || image.width > u16::MAX as usize || image.height > u16::MAX as usize {
+            return Err("图片过大，请选择其他图片".to_owned());
+        }
+        if image.bytes.len() != pixels * 4 { return Err("无法读取剪贴板图片，请重新复制".to_owned()); }
+        let mut rgb = Vec::with_capacity(pixels * 3);
+        for pixel in image.bytes.chunks_exact(4) {
+            // JPEG has no alpha; keep screenshots with transparent areas on white.
+            let alpha = u16::from(pixel[3]);
+            for channel in &pixel[..3] { rgb.push(((u16::from(*channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8); }
+        }
+        let mut bytes = Vec::new();
+        jpeg_encoder::Encoder::new(&mut bytes, 88).encode(&rgb, image.width as u16, image.height as u16, jpeg_encoder::ColorType::Rgb)
+            .map_err(|_| "无法读取剪贴板图片，请重新复制")?;
+        if bytes.len() > 8 * 1024 * 1024 { return Err("图片过大，请选择 8 MB 以内的图片".to_owned()); }
+        Ok(Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))))
+    }).await.map_err(|_| "无法读取剪贴板图片，请重新复制".to_owned())?
+}
+#[tauri::command]
 async fn copy_chat_image(app: tauri::AppHandle, image: String) -> Result<(), String> {
     use base64::Engine;
     use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -1923,6 +1952,7 @@ fn main() {
             social_api,
             pick_avatar_image,
             pick_chat_image,
+            read_chat_image,
             copy_chat_image,
             get_state,
             login,
