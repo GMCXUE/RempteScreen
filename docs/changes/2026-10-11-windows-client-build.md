@@ -9,7 +9,7 @@ GitHub Actions 运行 `38019214587`（提交 `58b0959`）在 `webrtc-sys` 编译
 
 - SDK 解压到 `C:\lk`，通过 LiveKit 官方支持的 `LK_CUSTOM_WEBRTC` 指向短路径，校验完整 ZIP 的 SHA256、锁定 SDK 标签和必需文件。
 - Cargo 构建目录改为 `C:\rs-target`；锁定 Tauri CLI 2.12.1，保留 Rust `Cargo.lock`，明确使用 Windows MSVC x64 目标。
-- 原生 CI 运行 `38117915549` 编译通过后，在链接阶段发现静态 WebRTC `/MT` 与默认 `/MD` 的运行库冲突（LNK2038/LNK2005）。根据 LiveKit 官方 Cargo 配置，为 Windows MSVC x64 增加 `+crt-static`，统一原生桥接与 Rust 的运行库。
+- 原生 CI 运行 `38117915549` 编译通过后，在链接阶段发现静态 WebRTC `/MT` 与默认 `/MD` 的运行库冲突（LNK2038/LNK2005）。根据 [LiveKit 官方 Cargo 配置](https://github.com/livekit/rust-sdks/blob/main/.cargo/config.toml)，为 Windows MSVC x64 增加 `+crt-static`，统一原生桥接与 Rust 的运行库。
 - Windows 发布版使用 GUI 子系统，启动时不额外打开命令行窗口；构建缓存保留在独立工作目录以缩短后续验证。
 - Windows 目标检查另外发现 `scap 0.0.8` 与解析出的 `windows-capture 1.5` 构造器接口不兼容，锁定兼容的 `windows-capture 1.4.2`。
 - 新增 `tauri.windows.conf.json`，生成当前用户安装的 NSIS `*-setup.exe`，支持中文和英文，缺少 WebView2 时安装引导程序。
@@ -35,11 +35,11 @@ Windows 进程排除回环需要系统 build 20348 及以上；旧系统退回�
 
 - 已验证旧失败日志与官方 ZIP 内容、SHA256。
 - Mac `cargo check` 通过；帧转换回归检查通过（Windows 实机行为尚需验证）。
-- Windows 新增采集、摄像头、WASAPI、通话模块的 MSVC 目标 Rust 类型检查通过。使用临时检查工程跳过 C++ 静态库链接，不修改正式依赖源码；不等同于完整 Windows 构建或硬件实测。
+- Windows 应用入口、采集、摄像头、WASAPI、通话模块的 MSVC 目标 Rust 类型检查通过。使用临时检查工程跳过 Tauri 资源生成和 C++ 静态库链接，不修改正式依赖源码；不等同于完整 Windows 构建或硬件实测。
 - Windows 摄像头、WASAPI、采集线程及 NSIS 需要原生 Windows CI 构建和后续实机检查。本机为 Mac，不能把交叉类型检查当成完整 Windows 构建。
 - 验证分支拟为 `codex/windows-client`，包含当前 `apps/desktop-rs/app/` 完整源码、两个 Mac 采集辅助程序源码、本次 Windows 构建脚本和此说明；当前桌面端已有功能仍有未提交文件，需要纳入才能构建最新客户端。
 - 不上传账号数据、登录凭据、服务器数据库、安卓构建目录、已安装应用或本机日志。不得覆盖 `main`、旧 `dist` 或用户已有提交。
-- 用户已明确批准以上源码上传范围，将推送到独立验证分支并运行 CI；尚未生成 Windows 安装包。
+- 用户已明确批准以上源码上传范围。验证分支 `codex/windows-client` 的原生 Windows Actions 已全部通过，未修改 `main`。
 
 ## Windows 安装与检查
 
@@ -48,4 +48,6 @@ Windows 进程排除回环需要系统 build 20348 及以上；旧系统退回�
 3. 安装后登录现有账号，检查消息、文件传输、双向投屏、麦克风与摄像头。安卓端无需更换协议。
 4. 摄像头或麦克风无法启动时，在 Windows「设置 → 隐私和安全性」检查相应设备访问权限，同时确认没有被其他应用占用。
 
-构建验证运行：https://github.com/GMCXUE/RempteScreen/actions/runs/38117493413 。本机未执行 Windows 硬件测试。
+成功构建：[Actions 运行 38118769866](https://github.com/GMCXUE/RempteScreen/actions/runs/38118769866)，源码提交 `9718087b3bad6521f70826079faf45612b50f98e`。SDK 准备、完整原生编译链接、NSIS 安装包检查、产物上传和日志保存均通过。
+
+安装包为 `RemoteScreen_0.1.0_x64-setup.exe`（10.91 MiB），已上传到 `RemoteScreen-Windows-x64` artifact，产物 ID `11694748979`，保留至 2026-10-25。Windows 摄像头、音频、投屏及安装启动的实机行为尚未测试。
