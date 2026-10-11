@@ -1,7 +1,7 @@
         Info Looking up installed tauri packages to check mismatched versions...
    Compiling proc-macro2 v1.0.107
-   Compiling quote v1.0.47
    Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
    Compiling cfg-if v1.0.5
    Compiling windows-link v0.2.1
    Compiling serde_core v1.0.229
@@ -9,8 +9,8 @@
    Compiling windows-sys v0.61.2
    Compiling syn v3.0.6
    Compiling syn v2.0.119
-   Compiling icu_properties_data v2.3.0
    Compiling icu_normalizer_data v2.3.0
+   Compiling icu_properties_data v2.3.0
    Compiling memchr v2.8.3
    Compiling thiserror v2.0.21
    Compiling fastrand v2.5.0
@@ -18,14 +18,14 @@
    Compiling synstructure v0.14.0
    Compiling jobserver v0.1.35
    Compiling find-msvc-tools v0.1.14
-   Compiling shlex v2.0.1
-   Compiling cc v1.6.0
    Compiling serde_derive v1.0.229
    Compiling zerofrom-derive v0.1.8
    Compiling yoke-derive v0.8.4
    Compiling zerovec-derive v0.11.6
    Compiling displaydoc v0.2.7
    Compiling thiserror-impl v2.0.21
+   Compiling shlex v2.0.1
+   Compiling cc v1.6.0
    Compiling anyhow v1.0.104
    Compiling smallvec v1.16.2
    Compiling stable_deref_trait v1.2.1
@@ -36,9 +36,9 @@
    Compiling zmij v1.0.23
    Compiling serde v1.0.229
    Compiling log v0.4.34
-   Compiling hashbrown v0.17.1
    Compiling siphasher v1.0.4
    Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
    Compiling phf_shared v0.13.1
    Compiling zerovec v0.11.8
    Compiling indexmap v2.14.2
@@ -49,46 +49,46 @@
    Compiling phf_generator v0.13.1
    Compiling ident_case v1.0.1
    Compiling tinystr v0.8.4
-   Compiling crc32fast v1.5.2
    Compiling litemap v0.8.3
    Compiling writeable v0.6.4
+   Compiling crc32fast v1.5.2
+   Compiling regex-automata v0.4.18
+   Compiling icu_locale_core v2.3.0
    Compiling potential_utf v0.1.6
    Compiling zerotrie v0.2.5
-   Compiling icu_locale_core v2.3.0
-   Compiling regex-automata v0.4.18
    Compiling utf8_iter v1.0.4
-   Compiling icu_collections v2.3.0
    Compiling icu_provider v2.3.1
-   Compiling percent-encoding v2.3.2
+   Compiling icu_collections v2.3.0
    Compiling version_check v0.9.5
-   Compiling icu_normalizer v2.3.0
-   Compiling icu_properties v2.3.0
    Compiling regex v1.13.1
+   Compiling percent-encoding v2.3.2
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
    Compiling http v1.5.0
    Compiling idna_adapter v1.2.2
    Compiling form_urlencoded v1.2.2
    Compiling idna v1.1.0
    Compiling phf_macros v0.13.1
    Compiling semver v1.0.28
-   Compiling heck v0.5.0
-   Compiling bitflags v2.13.2
    Compiling fnv v1.0.7
    Compiling typeid v1.0.3
+   Compiling bitflags v2.13.2
+   Compiling heck v0.5.0
    Compiling url v2.5.8
    Compiling winapi-util v0.1.11
-   Compiling pin-project-lite v0.2.17
+   Compiling base64 v0.23.1
    Compiling num-conv v0.2.2
    Compiling time-core v0.1.9
-   Compiling base64 v0.23.1
+   Compiling pin-project-lite v0.2.17
    Compiling phf_codegen v0.13.1
-   Compiling erased-serde v0.4.10
    Compiling strsim v0.11.1
+   Compiling erased-serde v0.4.10
    Compiling generic-array v0.14.7
    Compiling darling_core v0.24.1
    Compiling once_cell v1.21.4
-   Compiling scopeguard v1.2.0
-   Compiling windows_x86_64_msvc v0.52.6
    Compiling new_debug_unreachable v1.0.6
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling scopeguard v1.2.0
    Compiling lock_api v0.4.14
    Compiling phf v0.13.1
    Compiling string_cache_codegen v0.6.1
@@ -98,21 +98,21 @@
    Compiling web_atoms v0.2.6
    Compiling parking_lot v0.12.5
    Compiling glob v0.3.4
-   Compiling winnow v1.0.4
    Compiling httparse v1.10.1
-   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling winnow v1.0.4
    Compiling darling_macro v0.24.1
    Compiling windows-targets v0.52.6
    Compiling string_cache v0.9.0
+   Compiling toml_parser v1.1.5+spec-1.1.0
    Compiling darling v0.24.1
    Compiling serde_with_macros v3.24.0
    Compiling socket2 v0.6.5
    Compiling mio v1.2.4
-   Compiling num-traits v0.2.19
    Compiling ring v0.17.14
+   Compiling num-traits v0.2.19
    Compiling tokio-macros v2.7.2
-   Compiling toml_datetime v1.1.2+spec-1.1.0
    Compiling serde_spanned v1.1.2
+   Compiling toml_datetime v1.1.2+spec-1.1.0
    Compiling dtoa v1.0.11
    Compiling toml_writer v1.1.3+spec-1.1.0
    Compiling tokio v1.53.2
@@ -122,14 +122,14 @@
    Compiling selectors v0.38.0
    Compiling indexmap v1.9.3
    Compiling windows-interface v0.59.3
-   Compiling derive_more-impl v2.1.1
    Compiling windows-implement v0.60.2
+   Compiling derive_more-impl v2.1.1
    Compiling cssparser-macros v0.7.1
    Compiling uuid v1.27.0
-   Compiling windows-strings v0.5.1
    Compiling windows-result v0.4.1
-   Compiling alloc-no-stdlib v3.0.0
+   Compiling windows-strings v0.5.1
    Compiling simd-adler32 v0.3.10
+   Compiling alloc-no-stdlib v3.0.0
    Compiling camino v1.2.6
    Compiling alloc-stdlib v0.3.0
    Compiling windows-core v0.62.2
@@ -138,14 +138,14 @@
    Compiling markup5ever v0.39.0
    Compiling servo_arc v0.4.3
    Compiling serde_derive_internals v0.29.1
+   Compiling deranged v0.5.8
    Compiling powerfmt v0.2.1
-   Compiling rustc-hash v2.1.3
-   Compiling web-time v1.1.0
-   Compiling hashbrown v0.12.3
    Compiling schemars v0.8.22
+   Compiling hashbrown v0.12.3
+   Compiling web-time v1.1.0
+   Compiling rustc-hash v2.1.3
    Compiling bit-vec v0.8.0
    Compiling adler2 v2.0.1
-   Compiling deranged v0.5.8
    Compiling bit-set v0.8.0
    Compiling cfb v0.14.0
    Compiling time v0.3.55
@@ -156,14 +156,14 @@
    Compiling same-file v1.0.6
    Compiling cargo-platform v0.1.9
    Compiling quick-xml v0.42.0
-   Compiling foldhash v0.2.0
-   Compiling either v1.19.0
-   Compiling dunce v1.0.5
-   Compiling dyn-clone v1.0.20
    Compiling futures-sink v0.3.34
-   Compiling plist v1.10.1
+   Compiling foldhash v0.2.0
+   Compiling dunce v1.0.5
+   Compiling either v1.19.0
+   Compiling dyn-clone v1.0.20
    Compiling itertools v0.14.0
    Compiling dom_query v0.28.0
+   Compiling plist v1.10.1
    Compiling cargo_metadata v0.19.2
    Compiling brotli v9.0.0
    Compiling walkdir v2.5.0
@@ -188,8 +188,8 @@
    Compiling prost v0.14.4
    Compiling zeroize v1.9.1
    Compiling foldhash v0.1.5
-   Compiling prettyplease v0.2.37
    Compiling byteorder v1.5.0
+   Compiling prettyplease v0.2.37
    Compiling hashbrown v0.15.5
    Compiling rustls-pki-types v1.15.1
    Compiling prost-types v0.14.4
@@ -198,30 +198,30 @@
    Compiling http-body v1.1.0
    Compiling winreg v0.56.0
    Compiling getrandom v0.2.17
-   Compiling futures-io v0.3.34
    Compiling option-ext v0.2.0
+   Compiling futures-io v0.3.34
    Compiling base64 v0.22.1
-   Compiling futures-task v0.3.34
    Compiling slab v0.4.12
-   Compiling fixedbitset v0.5.7
    Compiling untrusted v0.9.0
    Compiling typenum v1.20.1
+   Compiling fixedbitset v0.5.7
    Compiling zerocopy v0.8.62
-   Compiling petgraph v0.8.3
+   Compiling futures-task v0.3.34
    Compiling futures-util v0.3.34
+   Compiling petgraph v0.8.3
    Compiling dirs-sys v0.5.0
    Compiling embed-resource v3.0.12
    Compiling tracing-core v0.1.36
    Compiling tempfile v3.27.0
    Compiling futures-macro v0.3.34
-   Compiling syn v1.0.109
-   Compiling tower-service v0.3.3
-   Compiling subtle v2.6.1
-   Compiling multimap v0.10.1
    Compiling try-lock v0.2.5
    Compiling rustls v0.23.45
-   Compiling prost-build v0.14.4
+   Compiling syn v1.0.109
+   Compiling subtle v2.6.1
+   Compiling tower-service v0.3.3
+   Compiling multimap v0.10.1
    Compiling want v0.3.2
+   Compiling prost-build v0.14.4
    Compiling tracing v0.1.44
    Compiling tauri-winres v0.3.6
    Compiling dirs v7.0.0
@@ -235,22 +235,22 @@
    Compiling ppv-lite86 v0.2.21
    Compiling tauri-build v2.7.1
    Compiling pbjson-types v0.9.0
-   Compiling crypto-common v0.1.7
    Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
    Compiling rand_core v0.9.5
    Compiling futures-channel v0.3.34
    Compiling sync_wrapper v1.0.2
    Compiling webview2-com-sys v0.39.1
    Compiling schannel v0.1.29
    Compiling windows-version v0.1.7
-   Compiling strsim v0.10.0
-   Compiling ipnet v2.12.2
    Compiling scratch v1.0.9
-   Compiling tower-layer v0.3.3
    Compiling winapi v0.3.9
+   Compiling ipnet v2.12.2
+   Compiling strsim v0.10.0
+   Compiling tower-layer v0.3.3
+   Compiling darling_core v0.14.4
    Compiling tower v0.5.3
    Compiling hyper-util v0.1.21
-   Compiling darling_core v0.14.4
    Compiling rustls-native-certs v0.8.4
    Compiling rand_chacha v0.9.0
    Compiling digest v0.10.7
@@ -267,70 +267,70 @@
    Compiling serde_urlencoded v0.7.1
    Compiling hyper-rustls v0.27.10
    Compiling rand v0.9.5
-   Compiling darling_macro v0.14.4
    Compiling tower-http v0.6.11
+   Compiling darling_macro v0.14.4
    Compiling tauri v2.12.2
    Compiling http-body-util v0.1.5
    Compiling tauri-plugin v2.7.1
    Compiling termcolor v1.4.1
    Compiling webview2-com-macros v0.8.1
+   Compiling pxfm v0.1.30
+   Compiling unicode-width v0.2.2
+   Compiling cpufeatures v0.2.17
+   Compiling crossbeam-deque v0.8.8
    Compiling zune-core v0.5.3
    Compiling cxxbridge-flags v1.0.203
-   Compiling crossbeam-deque v0.8.8
    Compiling bitflags v1.3.2
-   Compiling cpufeatures v0.2.17
-   Compiling unicode-width v0.2.2
-   Compiling pxfm v0.1.30
-   Compiling codespan-reporting v0.13.1
-   Compiling png v0.17.16
-   Compiling moxcms v0.8.1
-   Compiling webview2-com v0.39.1
    Compiling cxx v1.0.203
+   Compiling png v0.17.16
    Compiling zune-jpeg v0.5.15
+   Compiling moxcms v0.8.1
+   Compiling codespan-reporting v0.13.1
+   Compiling webview2-com v0.39.1
    Compiling png v0.18.1
    Compiling reqwest v0.12.28
-   Compiling fs2 v0.4.3
    Compiling darling v0.14.4
+   Compiling fs2 v0.4.3
    Compiling livekit-protocol v0.8.0
    Compiling zip v0.6.6
    Compiling crossbeam-channel v0.5.17
    Compiling tokio-util v0.7.19
    Compiling windows-sys v0.59.0
-   Compiling bytemuck v1.25.2
-   Compiling windows_x86_64_msvc v0.48.5
    Compiling rayon-core v1.13.0
-   Compiling anstyle v1.0.14
    Compiling tauri-runtime v2.12.1
+   Compiling windows_x86_64_msvc v0.48.5
    Compiling once_cell_polyfill v1.70.2
+   Compiling wry v0.57.0
    Compiling byteorder-lite v0.1.0
    Compiling utf8parse v0.2.2
-   Compiling wry v0.57.0
+   Compiling bytemuck v1.25.2
+   Compiling anstyle v1.0.14
    Compiling image v0.25.10
-   Compiling sha2 v0.10.9
-   Compiling anstyle-parse v1.0.0
    Compiling anstyle-wincon v3.0.11
+   Compiling anstyle-parse v1.0.0
+   Compiling sha2 v0.10.9
    Compiling tokio-stream v0.1.19
    Compiling webrtc-sys-build v0.3.19
    Compiling from_variants_impl v1.0.2
-   Compiling ico v0.5.0
    Compiling cxx-build v1.0.203
+   Compiling ico v0.5.0
    Compiling sha1 v0.10.7
    Compiling windows-result v0.2.0
    Compiling anstyle-query v1.1.5
-   Compiling colorchoice v1.0.5
-   Compiling compression-core v0.4.33
-   Compiling is_terminal_polyfill v1.70.2
-   Compiling thiserror v1.0.69
-   Compiling pkg-config v0.3.34
-   Compiling muda v0.20.0
    Compiling tauri-runtime-wry v2.12.1
+   Compiling pkg-config v0.3.34
    Compiling data-encoding v2.11.1
+   Compiling thiserror v1.0.69
+   Compiling colorchoice v1.0.5
+   Compiling muda v0.20.0
    Compiling unicode-segmentation v1.13.3
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling compression-core v0.4.33
+   Compiling compression-codecs v0.4.45
+   Compiling anstream v1.0.0
    Compiling tao v0.37.1
    Compiling tungstenite v0.29.0
    Compiling webrtc-sys v0.3.48
-   Compiling anstream v1.0.0
-   Compiling compression-codecs v0.4.45
    Compiling windows-strings v0.1.0
    Compiling tauri-codegen v2.7.1
    Compiling from_variants v1.0.2
@@ -338,62 +338,62 @@
    Compiling softbuffer v0.4.8
    Compiling keyboard-types v0.8.3
    Compiling cxxbridge-macro v1.0.203
-   Compiling windows-interface v0.58.0
-   Compiling windows-implement v0.58.0
-   Compiling thiserror-impl v1.0.69
    Compiling serialize-to-javascript-impl v0.1.2
-   Compiling ntapi v0.4.3
+   Compiling windows-implement v0.58.0
+   Compiling windows-interface v0.58.0
+   Compiling thiserror-impl v1.0.69
    Compiling clap_lex v1.1.1
-   Compiling rayon v1.12.0
+   Compiling ntapi v0.4.3
    Compiling clap_builder v4.6.7
-   Compiling serialize-to-javascript v0.1.2
+   Compiling rayon v1.12.0
    Compiling windows-core v0.58.0
+   Compiling serialize-to-javascript v0.1.2
    Compiling windows-targets v0.48.5
    Compiling tauri-macros v2.7.1
-   Compiling async-compression v0.4.50
    Compiling tokio-tungstenite v0.29.0
-   Compiling tauri-plugin-notification v2.6.0
+   Compiling async-compression v0.4.50
    Compiling tauri-plugin-clipboard-manager v2.4.2
+   Compiling tauri-plugin-notification v2.6.0
    Compiling window-vibrancy v0.8.1
    Compiling bmrng v0.5.2
    Compiling windows-result v0.1.2
    Compiling windows-core v0.52.0
    Compiling clap_derive v4.6.7
-   Compiling serde_repr v0.1.21
    Compiling async-trait v0.1.92
+   Compiling serde_repr v0.1.21
    Compiling paste v1.0.15
    Compiling base64 v0.21.7
-   Compiling mime v0.3.17
    Compiling error-code v3.4.0
-   Compiling clipboard-win v5.4.1
+   Compiling mime v0.3.17
    Compiling livekit-net v0.1.3
+   Compiling clipboard-win v5.4.1
    Compiling clap v4.6.7
    Compiling windows v0.52.0
    Compiling windows-core v0.54.0
    Compiling livekit-data-stream v0.1.7
    Compiling windows-sys v0.48.0
    Compiling windows v0.58.0
-   Compiling nokhwa-core v0.1.9
    Compiling webpki-roots v1.0.9
+   Compiling nokhwa-core v0.1.9
    Compiling device-info v0.1.1
-   Compiling tauri-winrt-notification v0.8.1
    Compiling nanorand v0.7.0
+   Compiling tauri-winrt-notification v0.8.1
    Compiling spin v0.9.9
    Compiling os_info v3.15.0
    Compiling ctrlc v3.5.2
    Compiling livekit-region v0.1.1
-   Compiling livekit v0.9.4
+   Compiling rfd v0.15.4
    Compiling lazy_static v1.5.1
    Compiling cpal v0.15.3
+   Compiling livekit v0.9.4
    Compiling rtrb v0.3.5
-   Compiling rfd v0.15.4
    Compiling livekit-signaling v0.1.5
-   Compiling sysinfo v0.30.13
    Compiling windows-capture v1.4.2
    Compiling flume v0.11.1
    Compiling notify-rust v4.18.2
-   Compiling webpki-roots v0.26.11
+   Compiling sysinfo v0.30.13
    Compiling nokhwa-bindings-windows v0.4.6
+   Compiling webpki-roots v0.26.11
    Compiling dirs-sys v0.4.1
    Compiling livekit-rpc v0.1.3
    Compiling windows v0.54.0
@@ -404,8 +404,8 @@
    Compiling libloading v0.8.9
    Compiling dasp_sample v0.11.0
    Compiling wasapi v0.25.0
-   Compiling ureq v2.12.1
    Compiling nokhwa v0.10.11
+   Compiling ureq v2.12.1
    Compiling dirs v5.0.1
    Compiling scap v0.0.8
    Compiling hmac v0.12.1
@@ -485,7 +485,7 @@ warning: field `remote` is never read
    |         ^^^^^^
 
 warning: `remotescreen-desktop` (bin "remotescreen-desktop") generated 8 warnings (run `cargo fix --bin "remotescreen-desktop" -p remotescreen-desktop` to apply 1 suggestion)
-    Finished `release` profile [optimized] target(s) in 10m 40s
+    Finished `release` profile [optimized] target(s) in 9m 18s
        Built application at: C:\rs-target\x86_64-pc-windows-msvc\release\remotescreen-desktop.exe
         Info Patching C:\rs-target\x86_64-pc-windows-msvc\release\remotescreen-desktop.exe with bundle type information: nsis
         Info Verifying NSIS package
