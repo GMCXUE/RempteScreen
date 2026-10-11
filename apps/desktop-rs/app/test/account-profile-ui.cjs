@@ -36,7 +36,7 @@ const fs=require('fs'),assert=require('assert'),path=require('path');
     }
    }}};
   });
-  for(const file of scripts.filter(file=>['feedback.js','avatar-crop.js','avatars.js','profile.js','chat-messages.js','social.js'].includes(file)))await page.addScriptTag({content:fs.readFileSync(root+file,'utf8')});
+  for(const file of scripts.filter(file=>['ui-icons.js','feedback.js','avatar-crop.js','avatars.js','profile.js','chat-messages.js','social.js'].includes(file)))await page.addScriptTag({content:fs.readFileSync(root+file,'utf8')});
   assert.equal(await page.evaluate(()=>typeof window.toast),'undefined');
   await page.locator('[data-page="messages"]').click();
   await page.waitForFunction(()=>document.querySelector('#account-avatar img'));
@@ -74,6 +74,7 @@ const fs=require('fs'),assert=require('assert'),path=require('path');
   assert.equal(await page.locator('#ft-toast').innerText(),'头像已更新');
   assert.deepEqual(await page.evaluate(()=>window.saved),['fox','custom']);
   await page.locator('.social-identity summary').click();await page.locator('#social-edit-profile').click();await page.waitForSelector('.profile-dialog');
+  await page.getByRole('button',{name:'编辑资料',exact:true}).click();await page.waitForSelector('.profile-form');
   assert.equal(await page.locator('input[name="accountId"]').getAttribute('readonly'),'');
   await page.locator('input[name="name"]').fill('新的昵称');await page.locator('textarea[name="bio"]').fill('这是个人简介');await page.locator('input[name="region"]').fill('上海');
   const saveBox=await page.getByRole('button',{name:'保存资料',exact:true}).boundingBox();assert.ok(saveBox.y+saveBox.height<=620);

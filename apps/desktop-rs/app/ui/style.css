@@ -1,18 +1,19 @@
 /* RemoteScreen 桌面端 —— 横向布局，ToDesk 风格：浅色、扁平、卡片分组 */
 
 :root {
-  --bg: #f4f6f9;
+  --bg: #f5f7fb;
   --panel: #ffffff;
   --sidebar: #f8f9fb;
   --text: #232936;
-  --muted: #8b93a5;
-  --line: #e9ecf2;
-  --accent: #3b82f6;
+  --muted: #667085;
+  --subtle: #98a2b3;
+  --line: #e5eaf2;
+  --accent: #3478f6;
   --accent-soft: #ecf3ff;
   --accent-text: #1d63d2;
-  --green: #22a35e;
+  --green: #21a67a;
   --green-soft: #e8f6ee;
-  --red: #d9483f;
+  --red: #e45c64;
 }
 
 * { box-sizing: border-box; }
@@ -24,7 +25,7 @@ body {
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text);
   background: var(--bg);
-  font-size: 13px;
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -480,7 +481,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 }
 
 /* Shared visual language with the mobile client. */
-:root { --bg: #f4f6fa; --muted: #667085; --line: #e5eaf2; }
+:root { --bg: #f5f7fb; --muted: #667085; --line: #e5eaf2; }
 body { line-height: 1.5; }
 .sidebar { width: 196px; background: #fff; border-right: 1px solid var(--line); }
 .nav-item { padding: 11px 12px; border-radius: 11px; }
@@ -726,3 +727,115 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 #watch-form-card .watch-form .primary span {margin-left:10px;}
 .connection-note {color:#8390a5;font-size:11.5px;margin:12px 0 0;}
 @media(max-width:760px) {#watch-form-card .watch-form label {flex:1 1 160px;}#watch-form-card .watch-form {flex-wrap:wrap;}#watch-form-card .watch-form input {width:100%;}}
+
+/* Shared surfaces and controls across desktop and mobile. */
+.card {border-radius:16px;box-shadow:none;}
+button.primary {border-radius:12px;min-height:40px;}
+button.ghost {border-radius:10px;}
+button svg {width:20px;height:20px;flex-shrink:0;}
+button:has(>svg) {display:inline-flex;align-items:center;justify-content:center;gap:7px;}
+.section-heading {display:flex;align-items:center;justify-content:space-between;margin:24px 2px 10px;gap:12px;}
+.section-heading h2 {margin:0;font-size:13px;font-weight:600;color:var(--muted);}
+.section-heading>span {font-size:11px;color:var(--subtle);}
+.page-lead {margin:-10px 0 22px;color:var(--muted);font-size:13px;}
+.settings-profile {display:flex;align-items:center;gap:16px;padding:22px;}
+.profile-summary-avatar {width:56px;height:56px;border-radius:16px;flex-shrink:0;}
+.profile-summary-copy {display:flex;flex:1;min-width:0;flex-direction:column;gap:7px;}
+.profile-summary-copy strong {font-size:18px;font-weight:600;overflow-wrap:anywhere;}
+.settings-group {padding:0;overflow:hidden;}
+.settings-row {display:flex;align-items:center;gap:16px;width:100%;text-align:left;background:white;border:0;border-radius:0;padding:18px 20px;color:var(--text);font:inherit;}
+button.settings-row {cursor:pointer;}
+.settings-row+ .settings-row {border-top:1px solid var(--line);}
+button.settings-row:hover {background:#f7f9fc;}
+.settings-row>span:first-child {flex:1;min-width:0;}
+.settings-row strong,.settings-row small {display:block;}
+.settings-row strong {font-size:14px;font-weight:500;}
+.settings-row small {color:var(--subtle);font-size:12px;margin-top:5px;}
+.row-chevron {color:var(--subtle);font-size:22px;}
+.settings-value {color:var(--muted);font-size:12px;}
+.settings-note {font-size:12px;color:var(--muted);line-height:1.6;margin:12px 4px;}
+.settings-advanced {margin-top:18px;padding:16px 20px;color:var(--muted);font-size:12px;}
+.settings-advanced summary {cursor:pointer;}
+.settings-advanced .kv {margin-top:14px;}
+.profile-dialog,.avatar-dialog {border-radius:20px;padding:24px;}
+.profile-dialog h2,.avatar-dialog h2 {font-size:20px;font-weight:600;}
+.profile-hero {justify-content:flex-start;}
+.profile-hero strong {font-size:20px;overflow-wrap:anywhere;}
+.profile-hero .avatar-preview {width:64px;height:64px;border-radius:18px;flex-shrink:0;}
+.friend-profile-fields {grid-template-columns:76px minmax(0,1fr);gap:0;margin:20px 0;border:1px solid var(--line);border-radius:14px;overflow:hidden;font-size:13px;}
+.friend-profile-fields dt,.friend-profile-fields dd {padding:13px 14px;border-bottom:1px solid var(--line);background:#fff;}
+.friend-profile-fields dt {color:var(--muted);padding-right:0;}
+.friend-profile-fields dt:last-of-type,.friend-profile-fields dd:last-of-type {border-bottom:0;}
+.profile-form {gap:14px;}
+.profile-field input,.profile-field textarea,.profile-field select {background:#f7f9fc;min-height:40px;}
+.profile-field input[readonly] {border-color:transparent;}
+.profile-note {font-size:11px;line-height:1.6;}
+.profile-section-title {grid-column:1/-1;margin:6px 0 0;font-size:12px;font-weight:600;color:var(--muted);}
+
+#transfer-form-card .watch-form {display:flex;align-items:flex-end;gap:12px;margin-top:20px;}
+#transfer-form-card .watch-form label {flex:1;min-width:0;color:var(--muted);font-size:12px;}
+#transfer-form-card .watch-form label span {display:block;margin-bottom:7px;}
+#transfer-form-card .watch-form input {width:100%;margin:0;min-height:44px;border-radius:12px;background:#f7f9fc;}
+#transfer-form-card .watch-form button {min-height:44px;}
+.transfer-records {padding:0;overflow:hidden;}
+#transfer-history {gap:0;margin:0;}
+#transfer-history:empty::before {padding:36px 16px;background:white;border-radius:0;}
+.transfer-history-item,.transfer-history-item.failed {display:flex;align-items:center;gap:14px;padding:16px 18px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:white;color:var(--text);}
+.transfer-history-item:last-child {border-bottom:0;}
+.file-type-icon {display:grid;place-items:center;width:40px;height:44px;flex-shrink:0;border-radius:10px;background:#f2f4f7;color:var(--muted);}
+.file-type-icon svg {width:23px;height:23px;}
+.file-type-icon.blue {background:#eef4ff;color:var(--accent);}
+.file-type-icon.purple {background:#f3effb;color:#8564ce;}
+.file-type-icon.green {background:#edf8f3;color:var(--green);}
+.file-type-icon.amber {background:#fcf6eb;color:#b68530;}
+.file-type-icon.red {background:#fff0f1;color:var(--red);}
+.transfer-file-info {display:flex;flex:1;min-width:0;flex-direction:column;gap:5px;}
+.transfer-file-info strong {font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.transfer-task-error {font-size:12px;color:var(--red);line-height:1.5;}
+.transfer-task-track {height:3px;background:#ecf3ff;border-radius:3px;overflow:hidden;margin-top:3px;}
+.transfer-task-track>div {height:100%;background:var(--accent);border-radius:3px;}
+.transfer-status {flex-shrink:0;border-radius:6px;padding:4px 7px;font-size:11px;white-space:nowrap;background:#eef4ff;color:var(--accent);}
+.transfer-status.complete {background:#edf8f3;color:var(--green);}
+.transfer-status.failed {background:#fff0f1;color:var(--red);}
+.transfer-history-item button.transfer-folder-button {margin:0;padding:8px;border:0;background:transparent;color:var(--muted);}
+.transfer-folder-button .control-label {display:none;}
+.transfer-folder-button:hover {color:var(--accent);background:#eef4ff;}
+
+.friend-call-bar {padding:18px;border-radius:20px;}
+body:has(.content.social-content #social-compose:not(.hidden)) .friend-call-bar {bottom:var(--chat-composer-height,112px);max-height:calc(100vh - var(--chat-composer-height,112px) - 24px);}
+.friend-call-heading strong {font-size:16px;}
+.friend-call-bar .friend-call-controls,.friend-call-bar .friend-call-decisions {justify-content:center;gap:14px;}
+.friend-call-bar .friend-call-controls button,.friend-call-bar .friend-call-decisions button {display:flex;flex-direction:column;gap:8px;flex:1;padding:0;background:transparent!important;color:white;border-radius:12px;}
+.friend-call-controls button svg {width:48px;height:48px;padding:13px;border-radius:50%;background:#334158;}
+.friend-call-controls button.selected svg {background:#fff;color:#253047;}
+.friend-call-decisions button svg {width:52px;height:52px;padding:14px;border-radius:50%;}
+#friend-call-answer svg {background:var(--green);}
+#friend-call-hangup svg {background:var(--red);}
+.friend-call-bar .control-label {font-size:11px;}
+.friend-call-bar #friend-call-fold {display:grid;place-items:center;}
+#friend-call-fold .control-label {display:none;}
+.friend-call-bar.folded {background:white;color:var(--text);border-color:var(--line);width:244px;padding:12px 14px;box-shadow:0 6px 24px #15223816;}
+.friend-call-bar.folded .friend-call-heading span {color:var(--green);}
+.friend-call-bar.folded #friend-call-fold {color:var(--muted);}
+.friend-call-bar.folded .friend-call-controls,.friend-call-bar.folded .friend-call-decisions {display:none;}
+.social-call-button {width:36px;height:36px;border:0!important;color:var(--muted)!important;}
+.social-call-button .control-label {display:none;}
+.social-call-button:hover {color:var(--accent)!important;background:#eef4ff;}
+.chat-context-menu {padding:6px;border-radius:12px;box-shadow:0 8px 28px #24345418;}
+.chat-context-menu button {display:flex;justify-content:flex-start;padding:10px;gap:10px;border-radius:8px;}
+.chat-context-menu button svg {width:18px;height:18px;color:var(--muted);}
+.social-bubble.image-bubble {padding:0;}
+.social-bubble small {font-size:11px;margin-top:6px;color:var(--subtle);}
+.chat-image-dialog {background:#182130;color:white;border:1px solid #344054;border-radius:20px;padding:20px;}
+.chat-image-dialog .ghost {color:#eaecf0;background:#ffffff0d;border-color:#ffffff26;}
+.chat-image-dialog .muted {color:#c0c8d5;}
+.chat-image-dialog .chat-image-heading {margin-bottom:18px;gap:16px;}
+.alert-settings-dialog h3 {margin:0 0 14px;font-size:20px;font-weight:600;}
+.alert-settings-dialog label {font-size:14px;}
+.alert-settings-dialog input {margin:0;}
+.notification-advanced {border-top:1px solid var(--line);margin-top:16px;padding-top:14px;}
+.notification-advanced summary {color:var(--muted);font-size:12px;cursor:pointer;}
+.notification-advanced>button {display:block;padding:8px 0;background:transparent;border:0;color:var(--accent);font-size:12px;cursor:pointer;}
+.alert-settings-dialog .actions button {border-radius:10px;padding:10px 18px;border:1px solid var(--line);background:white;color:var(--muted);}
+.alert-settings-dialog .actions button.primary {background:var(--accent);color:white;width:auto;margin:0;}
+@media(max-width:760px) {#transfer-form-card .watch-form {flex-wrap:wrap;}#transfer-form-card .watch-form label {flex:1 1 140px;}}

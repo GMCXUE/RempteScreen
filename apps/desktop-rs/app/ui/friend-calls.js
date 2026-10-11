@@ -11,18 +11,20 @@
  function render(){
   invoke('set_call_notification_context',{ownedCallId:current?.status==='active'&&current.owned?current.id:null,dismissedCallId:null}).catch(()=>{});
   const bar=el('friend-call-bar');bar.classList.toggle('hidden',!current);
-  bar.classList.toggle('folded',folded);el('friend-call-fold').textContent=folded?'↗':'⌄';el('friend-call-fold').setAttribute('aria-label',folded?'返回通话':'收起通话');el('friend-call-fold').title=folded?'返回通话':'收起通话';
+  bar.classList.toggle('folded',folded);window.uiIcons.button(el('friend-call-fold'),folded?'return':'down',folded?'返回通话':'收起通话');
   if(!current)return;
   el('friend-call-name').textContent=current.peerName;
   window.accountAvatars?.render(el('friend-call-avatar'),{id:current.peerId,avatarId:current.peerAvatarId,avatarRevision:current.peerAvatarRevision});
   el('friend-call-status').textContent=lastError||(current.status==='ringing'?(current.role==='callee'?'邀请你进行':'正在等待对方接听 · ')+(current.kind==='video'?'视频通话':'语音通话'):(joining||mediaConnecting?'正在连接通话…':(current.kind==='video'?'视频通话中':'语音通话中')));
   el('friend-call-answer').classList.toggle('hidden',!(current.status==='ringing'&&current.role==='callee'));
-  el('friend-call-hangup').textContent=current.status==='ringing'?(current.role==='callee'?'挂断':'取消'):'挂断';
+  window.uiIcons.button(el('friend-call-answer'),'call','接通');
+  window.uiIcons.button(el('friend-call-hangup'),'hangup',current.status==='ringing'?(current.role==='callee'?'挂断':'取消'):'挂断');
   el('friend-call-controls').classList.toggle('hidden',current.status!=='active');
-  el('friend-call-mic').textContent=mic?'麦克风开':'麦克风关';
-  el('friend-call-camera').textContent=camera?'摄像头开':'摄像头关';
+  window.uiIcons.button(el('friend-call-mic'),mic?'mic':'micOff',mic?'静音':'取消静音');
+  window.uiIcons.button(el('friend-call-camera'),camera?'video':'videoOff',camera?'关闭摄像头':'打开摄像头');
   el('friend-call-camera').classList.toggle('hidden',current.kind!=='video');
-  el('friend-call-speaker').textContent=speaker?'声音开':'声音关';
+  window.uiIcons.button(el('friend-call-speaker'),speaker?'speaker':'speakerOff',speaker?'关闭声音':'打开声音');
+  for(const [id,selected] of [['friend-call-mic',!mic],['friend-call-camera',camera],['friend-call-speaker',speaker]]){el(id).classList.toggle('selected',selected);el(id).setAttribute('aria-pressed',String(selected));}
   if(current.status==='active'&&!lastError&&!joining&&!mediaConnecting){const seconds=Math.max(0,Math.floor((Date.now()-(current.acceptedAt||Date.now()))/1000));el('friend-call-status').textContent=`${folded?'返回通话 · ':''}${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}`;}
   bar.querySelectorAll('button').forEach(b=>b.disabled=busy||joining||mediaConnecting);
   // Hanging up must remain possible while media permissions/connect are pending.

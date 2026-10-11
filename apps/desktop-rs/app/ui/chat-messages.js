@@ -37,7 +37,7 @@
   }
   showMenu(message,bubble,onRecall,anchor){
    this.closeMenu();const context=this.context();const menu=node('div','','chat-context-menu');menu.setAttribute('role','menu');this.menu=menu;this.menuMessage=message.id;
-   const add=(label,action)=>{const b=node('button',label);b.type='button';b.setAttribute('role','menuitem');b.onclick=()=>{this.closeMenu();Promise.resolve(action()).catch(this.error);};menu.append(b);};
+   const add=(label,action)=>{const b=node('button');window.uiIcons.button(b,label==='撤回'?'undo':label==='查看图片'?'expand':'copy',label);b.type='button';b.setAttribute('role','menuitem');b.onclick=()=>{this.closeMenu();Promise.resolve(action()).catch(this.error);};menu.append(b);};
    if(message.kind==='image'){add('查看图片',()=>this.preview(message));add('复制图片',()=>this.copyImage(message));}
    else {const selection=window.getSelection(),body=bubble.querySelector('.chat-message-text');const selected=selection&&!selection.isCollapsed&&body?.contains(selection.anchorNode)&&body.contains(selection.focusNode)?selection.toString():'';add(selected?'复制选中文字':'复制',()=>this.copy(selected||message.text));}
    if(canRecall(message,context.accountId,Date.now()+this.clockOffset))add('撤回',async()=>{

@@ -21,7 +21,7 @@
   return img;
  }
  function render(element,value){if(element)element.replaceChildren(image(value));}
- function renderOwn(){render(document.getElementById('account-avatar'),me);}
+ function renderOwn(){render(document.getElementById('account-avatar'),me);render(document.getElementById('settings-avatar'),me);const name=document.getElementById('settings-account-name'),id=document.getElementById('settings-account-id');if(name)name.textContent=me?.name||'个人资料';if(id)id.textContent=me?.accountId?`账号 ID：${me.accountId}`:'查看与编辑个人资料';}
  function update(value){me=value;renderOwn();}
  async function choose(){
   if(picking)return;document.getElementById('user-menu').classList.add('hidden');picking=true;const session=version;

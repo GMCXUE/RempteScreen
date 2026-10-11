@@ -23,6 +23,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
     return [];
    }}};
   });
+  await page.addScriptTag({content:fs.readFileSync(path.join(root,'ui-icons.js'),'utf8')});
   await page.addScriptTag({content:fs.readFileSync(path.join(root,'app.js'),'utf8')});
   await page.locator('[data-page="watch"]').click();
   await page.locator('#watch-id').fill('522 952 991');assert.equal(await page.locator('#watch-id').inputValue(),'522952991');

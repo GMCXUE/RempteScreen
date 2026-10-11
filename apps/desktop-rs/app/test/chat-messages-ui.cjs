@@ -46,7 +46,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
     return {ok:true};
    }}};
   });
-  for(const file of ['feedback.js','avatars.js','chat-messages.js','social.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,file),'utf8')});
+  for(const file of ['ui-icons.js','feedback.js','avatars.js','chat-messages.js','social.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,file),'utf8')});
   await page.locator('[data-page="messages"]').click();await page.waitForSelector('.social-contact');await page.locator('.social-contact').click();await page.waitForSelector('[data-message-id="m1"]');
   // Clipboard images belong inside the composer and never send on paste.
   await page.locator('#social-draft').fill('保留草稿');

@@ -97,7 +97,8 @@
   function renderActions() {
     const root=el('social-actions');const wasOpen=root.querySelector('details')?.open;root.replaceChildren();if(!peer)return;
     const current=peer,accountId=state?.me.id;
-    root.append(button('语音',()=>window.friendCalls.start(current,'voice'),'social-call-button'),button('视频',()=>window.friendCalls.start(current,'video'),'social-call-button'));
+    const voice=button('语音',()=>window.friendCalls.start(current,'voice'),'social-call-button'),video=button('视频',()=>window.friendCalls.start(current,'video'),'social-call-button');
+    window.uiIcons.button(voice,'call','语音通话');window.uiIcons.button(video,'video','视频通话');root.append(voice,video);
     const menu=node('details','','social-menu');menu.open=!!wasOpen;const toggle=node('summary','•••');toggle.setAttribute('aria-label','好友管理');menu.append(toggle);
     const items=node('div','','social-menu-items');menu.append(items);root.append(menu);
     const muteButton=button('免打扰',async()=>{
@@ -147,6 +148,7 @@
     finally{loading=false;}
   }
   const toast=text=>window.showAppToast(text);
+  new ResizeObserver(()=>{document.body.style.setProperty('--chat-composer-height',`${Math.ceil(el('social-compose').getBoundingClientRect().height)+12}px`);}).observe(el('social-compose'));
   el('social-alert-settings').onclick=async()=>{
     try{
       const accountId=state?.me.id;
@@ -156,9 +158,10 @@
         const row=node('label',label);const input=node('input');input.type='checkbox';input.checked=value[key];input.onchange=()=>value[key]=input.checked;row.append(input);dialog.append(row);
       }
       dialog.append(node('p','免打扰可在好友菜单中设置。设置仅应用于本设备。','muted small'));
-      const diagnostics=node('p','正在检查通知状态…','muted small');dialog.append(diagnostics);
+      const advanced=node('details','','notification-advanced');advanced.append(node('summary','系统通知设置'));
+      const diagnostics=node('p','正在检查通知状态…','muted small');advanced.append(diagnostics);dialog.append(advanced);
       const refreshDiagnostics=async()=>{const data=await window.__TAURI__.core.invoke('notification_diagnostics');const p=data.permission||{};diagnostics.textContent=`系统通知：${p.authorization===2?'已允许':p.authorization===1?'已关闭，请在系统通知设置中允许':'等待系统授权'}${p.alerts!==undefined&&p.alerts!==2?'；系统横幅已关闭':''}${p.sounds!==undefined&&p.sounds!==2?'；系统声音已关闭':''}${data.pollError?'；同步失败：'+data.pollError:''}${data.delivery?.error?'；发送失败：'+data.delivery.error:''}`;};refreshDiagnostics().catch(error);
-      dialog.append(button('系统通知设置',async()=>{await window.__TAURI__.core.invoke('open_notification_settings');}),button('测试消息通知',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'message'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}),button('测试来电铃声',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'call'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}));
+      advanced.append(button('系统通知设置',async()=>{await window.__TAURI__.core.invoke('open_notification_settings');}),button('测试消息通知',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'message'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}),button('测试来电铃声',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'call'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}));
       const actions=node('div','','actions');actions.append(button('取消',()=>dialog.close()),button('保存',async()=>{
         await window.__TAURI__.core.invoke('notification_settings',{accountId,value});dialog.close();
       },'primary'));dialog.append(actions);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();

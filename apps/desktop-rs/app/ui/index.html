@@ -239,15 +239,16 @@
       <!-- 文件传输 -->
       <section id="page-transfer" class="page wide hidden">
         <h1 class="page-title">文件传输</h1>
+        <p class="page-lead">在设备之间发送与接收文件</p>
 
         <div id="transfer-form-card" class="card">
-          <div class="card-title">连接远程设备</div>
-          <div class="muted small">建立独立传输连接，不会打开或遮挡屏幕观看窗口。</div>
-          <div class="watch-form">
-            <input id="transfer-id" placeholder="设备代码（9 位数字）" maxlength="9" />
-            <input id="transfer-pw" placeholder="连接密码（自己的设备可留空）" />
-            <button id="transfer-connect" class="primary">连接</button>
+          <div class="connection-heading"><span class="connection-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v12H3z"/><path d="M12 10v7m-3-3 3 3 3-3"/></svg></span><div><div class="card-title">连接设备</div><div class="muted small">输入对方的设备代码</div></div></div>
+          <div class="watch-form transfer-connect-form">
+            <label><span>设备代码</span><input id="transfer-id" placeholder="9 位数字" inputmode="numeric" maxlength="9" /></label>
+            <label><span>连接密码（可选）</span><input id="transfer-pw" placeholder="连接密码（可选）" /></label>
+            <button id="transfer-connect" class="primary compact">连接设备</button>
           </div>
+          <p class="connection-note">自己的设备免密，其他设备可请求同意</p>
           <div id="transfer-pending" class="pending hidden">
             <div class="pending-text">
               <span class="pending-dot"></span>
@@ -264,7 +265,7 @@
           <div class="card-row">
             <div>
               <div class="card-title">已连接「<span id="transfer-device-name">远程设备</span>」</div>
-              <div class="muted small">选择文件后通过加密数据通道发送</div>
+              <div class="muted small">选择文件，发送到这台设备</div>
             </div>
             <button id="transfer-send" class="primary compact">选择文件</button>
             <button id="transfer-stop" class="ghost danger">断开</button>
@@ -272,19 +273,20 @@
         </div>
 
         <div id="transfer-progress-card" class="card hidden">
-          <button id="transfer-cancel-send" class="compact hidden">取消发送</button>
           <div class="card-row">
             <div>
               <div id="transfer-progress-title" class="card-title">等待传输</div>
               <div id="transfer-progress-meta" class="muted small"></div>
             </div>
             <span id="transfer-progress-percent" class="mono-sm">0%</span>
+            <button id="transfer-cancel-send" class="ghost danger hidden">取消发送</button>
           </div>
           <div class="transfer-progress-track">
             <div id="transfer-progress-bar" class="transfer-progress-bar"></div>
           </div>
         </div>
-      <div class="card"><div class="card-title">传输记录（本次运行）</div><div id="transfer-history"></div></div>
+        <div class="section-heading"><h2>传输记录</h2><span>本次运行</span></div>
+        <div class="card transfer-records"><div id="transfer-history"></div></div>
       </section>
 
       <!-- 我的设备 -->
@@ -307,19 +309,16 @@
       <!-- 设置 -->
       <section id="page-settings" class="page hidden">
         <h1 class="page-title">设置</h1>
-
-        <div class="card">
-          <div class="kv"><span class="muted">服务器</span><span id="set-server" class="mono-sm">—</span></div>
-          <div class="kv"><span class="muted">当前画质</span><span id="set-quality">—</span></div>
-          <div class="kv last"><span class="muted">客户端版本</span><span>0.1.1 · Tauri / Rust</span></div>
+        <div class="card settings-profile"><div id="settings-avatar" class="profile-summary-avatar"></div><div class="profile-summary-copy"><strong id="settings-account-name">个人资料</strong><span id="settings-account-id" class="muted small"></span></div><button id="settings-profile" class="ghost" type="button">查看资料</button></div>
+        <div class="section-heading"><h2>提醒与投屏</h2></div>
+        <div class="card settings-group">
+          <button id="settings-alerts" class="settings-row" type="button"><span><strong>消息与来电提醒</strong><small>通知、提示音与来电铃声</small></span><span class="row-chevron" aria-hidden="true">›</span></button>
+          <button id="settings-cast" class="settings-row" type="button"><span><strong>投屏画质</strong><small>清晰度与帧率</small></span><span id="set-quality" class="settings-value">—</span><span class="row-chevron" aria-hidden="true">›</span></button>
         </div>
-        <div class="card">
-          <div class="card-title">关于采集</div>
-          <div class="muted small" style="line-height:1.8">
-            采集走 macOS ScreenCaptureKit 原生接口，H.264 单层发布，带宽吃紧时优先保帧率。<br />
-            首次开启投送需在「系统设置 → 隐私与安全性 → 屏幕录制」中授权本应用。
-          </div>
-        </div>
+        <p class="settings-note">首次投屏时，请按系统提示允许屏幕录制。麦克风与摄像头权限可在系统设置中管理。</p>
+        <div class="section-heading"><h2>关于</h2></div>
+        <div class="card settings-group"><div class="settings-row"><span><strong>RemoteScreen</strong><small>客户端版本</small></span><span class="settings-value">0.1.0</span></div></div>
+        <details class="card settings-advanced"><summary>高级信息</summary><div class="kv last"><span class="muted">服务器</span><span id="set-server" class="mono-sm">—</span></div></details>
       </section>
     </main>
   </div>
@@ -338,6 +337,7 @@
     </div>
   </div>
 
+  <script src="ui-icons.js"></script>
   <script src="feedback.js"></script>
   <script src="avatar-crop.js"></script>
   <script src="avatars.js"></script>

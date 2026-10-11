@@ -457,6 +457,8 @@ $("watch-stop").addEventListener("click", async () => {
 // ---------- 文件传输（独立页面，不打开观看窗口） ----------
 
 const transferHistory = new Map();
+$("settings-alerts").addEventListener("click", () => $("social-alert-settings").click());
+$("settings-cast").addEventListener("click", () => document.querySelector('[data-page="cast"]').click());
 $("transfer-cancel-send").addEventListener("click", () => invoke("ft_cancel_send"));
 
 function renderTransferProgress(progress) {
@@ -469,11 +471,39 @@ function renderTransferProgress(progress) {
   $("transfer-history").replaceChildren(...[...transferHistory.values()].reverse().map(item => {
     const row = document.createElement("div");
     row.className = `transfer-history-item${item.error ? " failed" : ""}`;
-    row.textContent = `${item.direction === "recv" ? "接收" : "发送"} · ${item.name} · ${item.error || (item.done ? "已完成" : "传输中")}`;
+    const kind = window.uiIcons.fileKind(item.name);
+    const icon = document.createElement("div");
+    icon.className = `file-type-icon ${kind.tone}`;
+    icon.append(window.uiIcons.create(kind.icon));
+    const info = document.createElement("div");
+    info.className = "transfer-file-info";
+    const name = document.createElement("strong");
+    name.textContent = name.title = item.name;
+    const meta = document.createElement("span");
+    meta.className = "muted small";
+    meta.textContent = `${item.direction === "recv" ? "接收" : "发送"} · ${window.uiIcons.bytes(item.size)}${!item.done && !item.error ? ` · ${Math.round(Math.max(0, Math.min(1, (item.received || 0) / (item.size || 1))) * 100)}%` : ""}`;
+    info.append(name, meta);
+    if (!item.done && !item.error) {
+      const track = document.createElement("div"), bar = document.createElement("div");
+      track.className = "transfer-task-track";
+      bar.style.width = `${Math.max(0, Math.min(100, (item.received || 0) / (item.size || 1) * 100))}%`;
+      track.append(bar); info.append(track);
+    }
+    if (item.error) {
+      const error = document.createElement("span");
+      error.className = "transfer-task-error";
+      error.textContent = item.error;
+      info.append(error);
+    }
+    const status = document.createElement("span");
+    status.className = `transfer-status ${item.error ? "failed" : item.done ? "complete" : "active"}`;
+    status.textContent = item.error ? "失败" : item.done ? "已完成" : "传输中";
+    row.append(icon, info, status);
     if (item.direction === "recv" && item.done && !item.error && item.path) {
       const button = document.createElement("button");
       button.className = "ghost";
-      button.textContent = "打开所在目录";
+      window.uiIcons.button(button, "folder", "打开所在目录");
+      button.classList.add("transfer-folder-button");
       button.addEventListener("click", async () => {
         button.disabled = true;
         try {
@@ -491,7 +521,7 @@ function renderTransferProgress(progress) {
   }));
   const card = $("transfer-progress-card");
   if (!card) return;
-  card.classList.remove("hidden");
+  card.classList.toggle("hidden", Boolean(progress.done));
   const direction = progress.direction === "recv" ? "接收" : "发送";
   const failed = Boolean(progress.error);
   $("transfer-progress-title").textContent = failed
@@ -503,7 +533,7 @@ function renderTransferProgress(progress) {
     ? progress.error
     : progress.done && progress.path
       ? `已保存至 ${progress.path}`
-      : `${progress.received || 0} / ${progress.size || 0} 字节`;
+      : `${window.uiIcons.bytes(progress.received)} / ${window.uiIcons.bytes(progress.size)}`;
   const percent = progress.size > 0
     ? Math.min(100, Math.round(((progress.received || 0) / progress.size) * 100))
     : progress.done ? 100 : 0;
