@@ -1,6 +1,6 @@
 {
-  "runId": "38196442688",
-  "prepareOutcome": "cancelled",
-  "outcome": "skipped",
-  "sha": "d128530942950dd1ead8043ae1308c0164175700"
+  "runId": "38196655498",
+  "outcome": "success",
+  "sha": "fbb95d7a4965f22f5db0983cf36287ae7ddbf0c5",
+  "prepareOutcome": "success"
 }
