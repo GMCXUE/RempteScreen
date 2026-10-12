@@ -1,0 +1,56 @@
+// Use a disposable database to exercise an actual pre-migration user table.
+import assert from 'node:assert/strict';
+import pg from 'pg';
+const url = new URL(process.env.TEST_DATABASE_URL ?? 'postgres://remotescreen:remotescreen@127.0.0.1:54329/remotescreen_test');
+const database = `rs_accounts_${process.pid}_${Date.now()}`;
+const admin = new pg.Pool({connectionString:url.toString()});
+let db, legacy;
+try {
+ await admin.query(`CREATE DATABASE "${database}"`);
+ url.pathname = `/${database}`; process.env.DATABASE_URL = url.toString();
+ legacy = new pg.Pool({connectionString:url.toString()});
+ await legacy.query(`CREATE TABLE users (id TEXT PRIMARY KEY,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,password_salt TEXT NOT NULL,password_hash TEXT NOT NULL,created_at BIGINT NOT NULL)`);
+ const security = await import('../src/security.mjs');
+ const {salt,hash} = await security.createPasswordRecord('old-password-123');
+ await legacy.query('INSERT INTO users VALUES($1,$2,$3,$4,$5,$6)', ['user_legacy','legacy@example.test','旧账号',salt,hash,123456]);
+ await legacy.end(); legacy=null;
+ db = await import('../src/db.mjs'); await db.openDatabase();
+ const users = await import('../src/users.mjs');
+ const old = await users.findUserById('user_legacy');
+ assert.match(old.account_id,/^[1-9][0-9]{5}$/);
+ assert.equal(old.created_at,'123456'); assert.equal(old.password_hash,hash);
+ const number = old.account_id;
+ assert.equal((await users.authenticate({email:number,password:'old-password-123'})).user.id,old.id);
+ assert.equal((await users.authenticate({email:' LEGACY@EXAMPLE.TEST ',password:'old-password-123'})).user.id,old.id);
+ assert.equal((await users.authenticate({email:number,password:'wrong'})).error,'invalid_credentials');
+ assert.equal(users.toPublicUser(old).accountId,number);
+ const created = await Promise.all(Array.from({length:24},(_,i)=>users.createUser({email:`parallel-${i}@example.test`,name:`用户${i}`,password:'parallel-password'})));
+ const numbers = [number,...created.map(r=>r.user.account_id)];
+ numbers.forEach(n=>assert.match(n,/^[1-9][0-9]{5}$/));
+ assert.equal(new Set(numbers).size,numbers.length);
+ await assert.rejects(()=>db.query('UPDATE users SET account_id=$1 WHERE id=$2',[number,created[0].user.id]),e=>e.code==='23505');
+ await assert.rejects(()=>db.query('UPDATE users SET account_id=$1 WHERE id=$2',['012345',old.id]),e=>e.code==='23514');
+ const session=await users.createSession(old.id);
+ const social=(await import('../src/social.mjs')).createSocialHandler;
+ const request={headers:{authorization:`Bearer ${session.token}`}};
+ const target=created[0].user;
+ const found=await social('search')({request,body:{query:target.account_id}});
+ assert.equal(found.body.users[0].id,target.id);assert.equal(found.body.users[0].accountId,target.account_id);
+ await social('request')({request,body:{peerId:target.id}});
+ const targetSession=await users.createSession(target.id);
+ await social('decision')({request:{headers:{authorization:`Bearer ${targetSession.token}`}},body:{peerId:old.id,accept:true}});
+ const state=await social('state')({request});assert.equal(state.body.me.accountId,number);assert.equal(state.body.friends[0].accountId,target.account_id);
+ const handlers=await import('../src/handlers.mjs');
+ const login=await handlers.login({body:{email:number,password:'old-password-123'}});assert.equal(login.status,200);assert.equal(login.body.user.accountId,number);
+ const {config}=await import('../src/config.mjs');
+ for(let i=0;i<config.auth.loginMaxFailures;i++)await handlers.login({body:{email:i%2?number:old.email,password:'wrong'}});
+ assert.equal((await handlers.login({body:{email:number,password:'old-password-123'}})).status,429);
+ assert.equal((await handlers.login({body:{email:old.email,password:'old-password-123'}})).status,429);
+ await db.closeDatabase();await db.openDatabase();
+ assert.equal((await users.findUserById(old.id)).account_id,number);
+ assert.equal((await social('state')({request})).body.friends[0].id,target.id);
+ console.log('数字账号 ID 检查通过：旧账号补号、24 个并发注册、唯一/格式约束、双登录方式、共享错误次数限制、好友搜索与重启持久化');
+} finally {
+ await legacy?.end();await db?.closeDatabase();
+ await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);await admin.end();
+}

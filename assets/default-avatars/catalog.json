@@ -1,0 +1,34 @@
+[
+  {
+    "id": "cat",
+    "label": "小橘猫"
+  },
+  {
+    "id": "dog",
+    "label": "小柴犬"
+  },
+  {
+    "id": "fox",
+    "label": "小狐狸"
+  },
+  {
+    "id": "rabbit",
+    "label": "小白兔"
+  },
+  {
+    "id": "bear",
+    "label": "小棕熊"
+  },
+  {
+    "id": "panda",
+    "label": "小熊猫"
+  },
+  {
+    "id": "penguin",
+    "label": "小企鹅"
+  },
+  {
+    "id": "owl",
+    "label": "小猫头鹰"
+  }
+]

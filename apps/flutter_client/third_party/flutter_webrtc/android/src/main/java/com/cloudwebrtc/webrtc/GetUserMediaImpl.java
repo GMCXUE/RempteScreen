@@ -382,6 +382,13 @@ public class GetUserMediaImpl {
     }
 
     private ConstraintsMap getUserAudio(ConstraintsMap constraints, MediaStream stream) {
+        boolean friendCall = constraints.getType("audio") == ObjectType.Map
+                && constraints.getMap("audio").hasKey("friendCallAudio")
+                && constraints.getMap("audio").getBoolean("friendCallAudio");
+        if (!friendCall) {
+            if (!playbackAudioCapture.useMicrophoneInput()) return null;
+            audioDeviceModule.setAudioRecordEnabled(true);
+        }
         AudioSwitchManager.instance.start();
         MediaConstraints audioConstraints = new MediaConstraints();
         String deviceId = null;
@@ -395,7 +402,8 @@ public class GetUserMediaImpl {
         Log.i(TAG, "getUserMedia(audio): " + audioConstraints);
 
         String trackId = stateProvider.getNextTrackUUID();
-        PeerConnectionFactory pcFactory = stateProvider.getPeerConnectionFactory();
+        PeerConnectionFactory pcFactory = friendCall
+                ? stateProvider.getFriendCallPeerConnectionFactory() : stateProvider.getPeerConnectionFactory();
         AudioSource audioSource = pcFactory.createAudioSource(audioConstraints);
         AudioTrack track = pcFactory.createAudioTrack(trackId, audioSource);
         stream.addTrack(track);

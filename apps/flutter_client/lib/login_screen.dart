@@ -34,7 +34,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final password = _password.text;
 
     if (email.isEmpty || password.isEmpty) {
-      setState(() => _error = '请把邮箱和密码都填上');
+      setState(() => _error = _register ? '请把邮箱和密码都填上' : '请填写账号 ID 或邮箱和密码');
       return;
     }
 
@@ -45,7 +45,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final account = _register
-          ? await api.register(email: email, password: password, name: _name.text)
+          ? await api.register(
+              email: email, password: password, name: _name.text)
           : await api.login(email: email, password: password);
 
       if (!mounted) return;
@@ -70,12 +71,14 @@ class _LoginScreenState extends State<LoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 const SizedBox(height: 20),
-                Icon(Icons.cast, size: 44, color: Theme.of(context).colorScheme.primary),
+                Icon(Icons.cast,
+                    size: 44, color: Theme.of(context).colorScheme.primary),
                 const SizedBox(height: 14),
                 Text(
                   _register ? '注册账号' : '登录',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                      fontSize: 21, fontWeight: FontWeight.w600),
                 ),
                 Text(
                   '设备会绑定到你的账号下',
@@ -95,12 +98,16 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 18),
                 TextField(
                   controller: _email,
-                  keyboardType: TextInputType.emailAddress,
-                  autofillHints: const [AutofillHints.email],
-                  decoration: const InputDecoration(
-                    labelText: '邮箱',
-                    prefixIcon: Icon(Icons.alternate_email),
-                    border: OutlineInputBorder(),
+                  keyboardType: _register
+                      ? TextInputType.emailAddress
+                      : TextInputType.text,
+                  autofillHints: [
+                    _register ? AutofillHints.email : AutofillHints.username
+                  ],
+                  decoration: InputDecoration(
+                    labelText: _register ? '邮箱' : '账号 ID 或邮箱',
+                    prefixIcon: const Icon(Icons.alternate_email),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -133,9 +140,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
-                  child: Text(_busy
-                      ? '请稍候…'
-                      : (_register ? '注册' : '登录')),
+                  child: Text(_busy ? '请稍候…' : (_register ? '注册' : '登录')),
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),

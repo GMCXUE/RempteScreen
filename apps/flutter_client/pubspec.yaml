@@ -1,7 +1,7 @@
 name: remotescreen
 description: RemoteScreen —— 投送本机屏幕，或观看其他设备的屏幕
 publish_to: none
-version: 0.1.0
+version: 0.2.11+2026101212
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -14,13 +14,19 @@ dependencies:
   livekit_client: ^2.4.0
   # 渲染远端画面要用它的 RTCVideoRenderer / RTCVideoView
   flutter_webrtc: ^1.6.0
+  cryptography: ^2.7.0
+  crypto: ^3.0.7
   http: ^1.2.0
   shared_preferences: ^2.2.0
+  image_picker: ^1.2.4
+  shorebird_code_push: ^2.0.7
+  video_player: ^2.14.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  video_player_platform_interface: ^6.9.0
 
 # 本地补丁版：给 Android 投屏补上 mediaProjection 前台服务。
 # Android 14+（实测 Android 17 对所有 targetSdk 生效）要求 getMediaProjection()
@@ -31,3 +37,7 @@ dependency_overrides:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/avatars/
+    - assets/update-public-key.json
+    - shorebird.yaml

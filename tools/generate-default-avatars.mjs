@@ -1,0 +1,24 @@
+// Original vector portraits; stable IDs preserve existing account selections.
+import {mkdirSync,writeFileSync} from 'node:fs';
+const root=new URL('../assets/default-avatars/',import.meta.url);mkdirSync(root,{recursive:true});
+const eyes=(x1=99,x2=157,y=130)=>`<ellipse cx="${x1}" cy="${y}" rx="6" ry="8" fill="#293644"/><ellipse cx="${x2}" cy="${y}" rx="6" ry="8" fill="#293644"/><circle cx="${x1+1}" cy="${y-3}" r="2" fill="white"/><circle cx="${x2+1}" cy="${y-3}" r="2" fill="white"/>`;
+const blush=`<ellipse cx="82" cy="152" rx="12" ry="7" fill="#F18E90" opacity=".55"/><ellipse cx="174" cy="152" rx="12" ry="7" fill="#F18E90" opacity=".55"/>`;
+const smile=`<path d="M113 163 Q120 171 128 164 Q136 171 143 163" fill="none" stroke="#584B50" stroke-width="3.5" stroke-linecap="round"/>`;
+const nose=`<path d="M121 150 Q128 147 135 150 Q133 157 128 158 Q123 157 121 150" fill="#70545A"/>`;
+const face=fill=>`<path d="M55 129 Q52 65 128 65 Q204 65 201 129 Q207 201 128 205 Q49 201 55 129" fill="${fill}"/>`;
+const pointEars=(fill,inner)=>`<path d="M60 104 L47 38 Q75 38 99 74 M157 74 Q181 38 209 38 L196 105" fill="${fill}"/><path d="M63 80 L59 54 L83 80 M173 80 L197 54 L193 81" fill="${inner}"/>`;
+const catalog=[
+ ['cat','小橘猫','#EEF2FA','#D7E4F5',pointEars('#DCA05C','#EAC3AF')+face('#F6CA86')+`<path d="M112 67 L116 85 M128 65 V84 M144 67 L140 85" stroke="#DDA35D" stroke-width="7" stroke-linecap="round"/><path d="M72 143 L45 137 M72 155 L43 158 M184 143 L211 137 M184 155 L213 158" stroke="#C99157" stroke-width="3" stroke-linecap="round"/>`+eyes()+blush+nose+smile],
+ ['dog','小柴犬','#F5EDE8','#EBDACE',`<path d="M80 92 Q50 41 31 87 Q23 128 61 141 M176 92 Q206 41 225 87 Q233 128 195 141" fill="#A77B66"/>`+face('#DAB292')+`<path d="M58 145 Q81 155 97 148 Q112 136 128 138 Q144 136 159 148 Q175 155 198 145 Q196 200 128 205 Q60 200 58 145" fill="#FDF2DE"/>`+eyes()+blush+`<ellipse cx="128" cy="150" rx="12" ry="9" fill="#51454B"/>`+smile],
+ ['fox','小狐狸','#F5E9E9','#EAD1D4',pointEars('#DA8666','#F3C5AE')+face('#E79B74')+`<path d="M55 133 Q87 131 128 158 Q169 131 201 133 Q204 202 128 205 Q52 202 55 133" fill="#FFF5E4"/>`+eyes()+blush+nose+smile],
+ ['rabbit','小白兔','#EFEAF7','#DED4F1',`<path d="M82 86 Q57 11 91 9 Q111 10 112 77 M144 77 Q145 10 165 9 Q199 11 174 86" fill="#F9F8FA"/><path d="M89 75 Q73 26 91 23 Q100 23 100 74 M156 74 Q156 23 165 23 Q183 26 167 75" fill="#D8ABC2"/>`+face('#F9F8FA')+eyes()+blush+`<path d="M122 151 Q128 147 134 151 L128 158 Z" fill="#B885A1"/>`+smile],
+ ['bear','小棕熊','#E9F1ED','#CCDED3',`<circle cx="66" cy="72" r="30" fill="#AA896D"/><circle cx="190" cy="72" r="30" fill="#AA896D"/><circle cx="66" cy="72" r="15" fill="#DDC0A1"/><circle cx="190" cy="72" r="15" fill="#DDC0A1"/>`+face('#BE9A77')+`<ellipse cx="128" cy="160" rx="36" ry="27" fill="#F0D9B9"/>`+eyes()+blush+`<ellipse cx="128" cy="151" rx="12" ry="8" fill="#604D49"/>`+smile],
+ ['panda','小熊猫','#E9EDF4','#D0D9E8',`<circle cx="66" cy="73" r="28" fill="#3A4756"/><circle cx="190" cy="73" r="28" fill="#3A4756"/>`+face('#FCFBF5')+`<ellipse cx="97" cy="130" rx="24" ry="28" transform="rotate(23 97 130)" fill="#3A4756"/><ellipse cx="159" cy="130" rx="24" ry="28" transform="rotate(-23 159 130)" fill="#3A4756"/><circle cx="102" cy="129" r="7" fill="white"/><circle cx="154" cy="129" r="7" fill="white"/><circle cx="102" cy="131" r="3.5" fill="#293644"/><circle cx="154" cy="131" r="3.5" fill="#293644"/>`+blush+nose+smile],
+ ['penguin','小企鹅','#E6F0F4','#C9E0E9',`<path d="M58 125 Q59 47 128 47 Q197 47 198 125 L200 182 Q184 211 128 211 Q72 211 56 182 Z" fill="#43596A"/><path d="M76 118 Q73 77 106 87 Q128 101 150 87 Q183 77 180 118 L180 166 Q176 199 128 201 Q80 199 76 166 Z" fill="#FBFAEF"/>`+eyes(103,153,125)+blush+`<path d="M111 150 Q128 140 145 150 L128 165 Z" fill="#E1AF54"/>`],
+ ['owl','小猫头鹰','#F2EEDF','#E2DABF',`<path d="M58 113 L45 48 L101 70 Q128 59 155 70 L211 48 L198 113" fill="#A49274"/>`+face('#BCA887')+`<ellipse cx="96" cy="128" rx="37" ry="39" fill="#F7ECCC"/><ellipse cx="160" cy="128" rx="37" ry="39" fill="#F7ECCC"/>`+eyes(98,158,126)+blush+`<path d="M116 150 L140 150 L128 166 Z" fill="#B88043"/>`],
+];
+for(const [id,label,bg,accent,art] of catalog){
+ const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="${bg}"/><stop offset="1" stop-color="${accent}"/></linearGradient><filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dy="5" stdDeviation="3" flood-color="#384257" flood-opacity=".08"/></filter></defs><rect width="256" height="256" rx="64" fill="url(#bg)"/><circle cx="213" cy="34" r="58" fill="white" opacity=".18"/><ellipse cx="128" cy="219" rx="63" ry="9" fill="#56637A" opacity=".09"/><g filter="url(#shadow)">${art}</g></svg>`;
+ writeFileSync(new URL(`${id}.svg`,root),svg);
+}
+writeFileSync(new URL('catalog.json',root),JSON.stringify(catalog.map(([id,label])=>({id,label})),null,2)+'\n');

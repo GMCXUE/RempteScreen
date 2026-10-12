@@ -84,9 +84,11 @@ export async function registerAccount({ body }) {
 
 /** POST /v1/auth/login */
 export async function login({ body }) {
-  const email = String(body?.email ?? '').trim();
+  const email = String(body?.login ?? body?.email ?? '').trim();
 
-  const limit = loginLimiter.check(email.toLowerCase());
+  const user = await users.findUserByLogin(email);
+  const limiterKey = user?.id ?? email.toLowerCase();
+  const limit = loginLimiter.check(limiterKey);
   if (limit.blocked) {
     return fail(429, 'rate_limited', `尝试过于频繁，请 ${limit.retryAfterSec} 秒后重试`, {
       retryAfterSec: limit.retryAfterSec,
@@ -96,18 +98,18 @@ export async function login({ body }) {
   const result = await users.authenticate({ email, password: body?.password });
 
   if (result.error) {
-    const outcome = loginLimiter.recordFailure(email.toLowerCase());
+    const outcome = loginLimiter.recordFailure(limiterKey);
     if (outcome.cooldown) {
       return fail(429, 'rate_limited', `密码错误次数过多，请 ${outcome.retryAfterSec} 秒后重试`, {
         retryAfterSec: outcome.retryAfterSec,
       });
     }
-    return fail(401, 'invalid_credentials', '邮箱或密码不正确', {
+    return fail(401, 'invalid_credentials', '账号 ID、邮箱或密码不正确', {
       remainingAttempts: outcome.remainingAttempts,
     });
   }
 
-  loginLimiter.recordSuccess(email.toLowerCase());
+  loginLimiter.recordSuccess(limiterKey);
   const session = await users.createSession(result.user.id);
 
   return ok({
@@ -181,6 +183,14 @@ export async function registerDevice({ body, request }) {
       name: result.record.name,
     }),
     identity,
+    fileToken: signLiveKitToken({
+      identity: `file-host-${result.deviceId}`,
+      room: `files-${result.deviceId}`,
+      canPublish: false,
+      canSubscribe: false,
+      canPublishData: true,
+      name: result.record.name,
+    }),
     heartbeatIntervalSec: config.heartbeat.intervalSec,
   });
 }
@@ -221,6 +231,8 @@ export async function heartbeat({ body, params }) {
 
 /** 观看方发起：POST /v1/connect-requests { deviceId, viewerName } */
 export async function createConnectRequest({ body, request }) {
+  const purpose = body?.purpose ?? 'screen';
+  if (!['screen', 'files'].includes(purpose)) return fail(400, 'invalid_purpose', '连接用途无效');
   const deviceId = String(body?.deviceId ?? '').trim();
   if (!isDeviceId(deviceId)) {
     return fail(400, 'invalid_device_id', '设备 ID 必须是 9 位数字');
@@ -246,6 +258,7 @@ export async function createConnectRequest({ body, request }) {
   const entry = requests.createRequest({
     deviceId: found.record.device_id,
     viewerName: typeof body?.viewerName === 'string' ? body.viewerName.slice(0, 32) : '',
+    purpose,
     viewerAddress: request?.socket?.remoteAddress ?? '',
   });
   connectLimiter.recordSuccess(deviceId);
@@ -413,11 +426,15 @@ export async function decideConnectRequest({ body, params }) {
   if (!approve) return ok({ approved: false });
 
   const identity = `viewer-${randomBytes(4).toString('hex')}`;
-  const roomName = `device-${entry.deviceId}`;
+  const filesOnly = entry.purpose === 'files';
+  const roomName = `${filesOnly ? 'files' : 'device'}-${entry.deviceId}`;
   const token = signLiveKitToken({
     identity,
     room: roomName,
-    canPublish: false,
+    canPublish: !filesOnly,
+    canSubscribe: !filesOnly,
+    canPublishData: true,
+    canPublishSources: filesOnly ? undefined : ['camera', 'microphone'],
     name: entry.viewerName || '观看端',
   });
   const device = await store.findOnlineDevice(entry.deviceId);
@@ -499,6 +516,8 @@ export async function refreshDevicePassword({ body, params }) {
  * 校验顺序刻意设计为「限流 → 在线 → 密码」，避免被拿来做离线爆破的算力放大器。
  */
 export async function connect({ body, request }) {
+  const purpose = body?.purpose ?? 'screen';
+  if (!['screen', 'files'].includes(purpose)) return fail(400, 'invalid_purpose', '连接用途无效');
   const deviceId = String(body?.deviceId ?? '').trim();
   const password = String(body?.password ?? '').trim();
 
@@ -541,11 +560,12 @@ export async function connect({ body, request }) {
   connectLimiter.recordSuccess(deviceId);
 
   const identity = `viewer-${randomBytes(4).toString('hex')}`;
-  const roomName = `device-${found.record.device_id}`;
+  const filesOnly = purpose === 'files';
+  const roomName = `${filesOnly ? 'files' : 'device'}-${found.record.device_id}`;
 
   // 通知目标设备「有观看者连入」—— 设备端据此自动打开「允许远程观看本设备」，
   // 否则同账号直连后对方只会停在「等待画面」。
-  notify(`device:${found.record.device_id}`, {
+  if (!filesOnly) notify(`device:${found.record.device_id}`, {
     type: 'viewer-connected',
     viewerName: typeof body?.viewerName === 'string' ? body.viewerName.slice(0, 32) : '观看端',
     roomName,
@@ -560,7 +580,10 @@ export async function connect({ body, request }) {
     token: signLiveKitToken({
       identity,
       room: roomName,
-      canPublish: false,
+      canPublish: !filesOnly,
+      canSubscribe: !filesOnly,
+      canPublishData: true,
+      canPublishSources: filesOnly ? undefined : ['camera', 'microphone'],
       name: typeof body?.viewerName === 'string' ? body.viewerName : undefined,
     }),
     identity,

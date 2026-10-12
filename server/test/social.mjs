@@ -1,0 +1,100 @@
+// Isolated PostgreSQL integration checks; never reset an existing database.
+import assert from 'node:assert/strict';
+import pg from 'pg';
+import sharp from 'sharp';
+const url=new URL(process.env.TEST_DATABASE_URL ?? 'postgres://remotescreen:remotescreen@127.0.0.1:54329/remotescreen_test');
+const database=`rs_social_${process.pid}_${Date.now()}`;
+const admin=new pg.Pool({connectionString:url.toString()});
+let db;
+try {
+ await admin.query(`CREATE DATABASE "${database}"`);
+ url.pathname=`/${database}`;process.env.DATABASE_URL=url.toString();
+ db=await import('../src/db.mjs');await db.openDatabase();
+ const users=await import('../src/users.mjs');const {createSocialHandler}=await import('../src/social.mjs');
+ const people=[];
+ for(const name of ['Alice','Bob','Carol']) {
+  const {user}=await users.createUser({email:`${name.toLowerCase()}@example.test`,name,password:'test-secret-12345'});
+  const session=await users.createSession(user.id);people.push({...user,token:session.token});
+ }
+ const [a,b,c]=people;
+ let passed=0;
+ const api=(actor,op,body={})=>createSocialHandler(op)({request:{headers:{authorization:actor?`Bearer ${actor.token}`:''}},body});
+ async function expect(actor,op,body,status=200) { const result=await api(actor,op,body);assert.equal(result.status,status,`${op}: ${JSON.stringify(result.body)}`);passed++;return result.body; }
+ await expect(null,'state',{},401);
+ await expect(null,'avatar',{avatarId:'fox'},401);
+ assert.equal(users.toPublicUser(await users.findUserById(a.id)).avatarId,'cat');
+ for (const avatarId of ['dog','fox','rabbit','bear','panda','penguin','owl','cat']) {
+  assert.equal((await expect(a,'avatar',{avatarId})).avatarId,avatarId);
+ }
+ for (const avatarId of ['../fox',null,{},'unknown']) await expect(a,'avatar',{avatarId},400);
+ await expect(a,'avatar',{avatarId:'fox',peerId:b.id,userId:b.id});
+ assert.equal((await expect(a,'state',{})).me.avatarId,'fox');
+ assert.equal((await users.findUserById(b.id)).avatar_id,'cat');
+ assert.equal(users.toPublicUser(await users.findUserById(a.id)).avatarId,'fox');
+ await expect(null,'account-profile',{name:'Nobody'},401);
+ await expect(null,'avatar-image',{peerId:a.id,revision:'a'.repeat(64)},401);
+ const photo=await sharp({create:{width:320,height:240,channels:3,background:'#85abb8'}}).jpeg().toBuffer();
+ const uploaded=await expect(a,'avatar',{avatarId:'custom',image:'data:image/jpeg;base64,'+photo.toString('base64')});
+ assert.equal(uploaded.avatarId,'custom');assert.match(uploaded.avatarRevision,/^[a-f0-9]{64}$/);
+ const image=await expect(b,'avatar-image',{peerId:a.id,revision:uploaded.avatarRevision});
+ const normalized=Buffer.from(image.image.split(',')[1],'base64');
+ const metadata=await sharp(normalized).metadata();assert.equal(metadata.width,256);assert.equal(metadata.height,256);assert.equal(metadata.format,'png');assert.equal(metadata.exif,undefined);
+ assert.deepEqual(await expect(a,'avatar',{avatarId:'custom'}),uploaded);
+ for(const bad of [null,'data:image/png;base64,YmFk','data:image/svg+xml;base64,YmFk','data:image/png;base64,'+'A'.repeat(410000)]) await expect(a,'avatar',{avatarId:'custom',image:bad},400);
+ await expect(a,'avatar-image',{peerId:a.id,revision:'../photo'},400);
+ await expect(b,'avatar-image',{peerId:a.id,revision:'b'.repeat(64)},404);
+ assert.equal((await expect(a,'state',{})).me.avatarRevision,uploaded.avatarRevision);
+ const profile={name:' Alice 新昵称 ',bio:' 简介 ',gender:'female',birthday:'2000-02-29',region:' 上海 '};
+ const saved=(await expect(a,'account-profile',{...profile,id:b.id,accountId:b.account_id,email:'other@example.test'})).user;
+ assert.equal(saved.name,'Alice 新昵称');assert.equal(saved.bio,'简介');assert.equal(saved.region,'上海');assert.equal(saved.id,a.id);assert.equal(saved.accountId,a.account_id);assert.equal(saved.email,a.email);assert.equal(saved.avatarRevision,uploaded.avatarRevision);assert.equal(saved.avatar_image,undefined);
+ assert.equal((await users.findUserById(b.id)).name,'Bob');
+ const search=(await expect(b,'search',{query:a.id})).users[0];assert.equal(search.bio,undefined);assert.equal(search.birthday,undefined);assert.equal(search.email,undefined);assert.equal(search.avatarRevision,uploaded.avatarRevision);
+ for(const invalid of [{name:''},{name:'x'.repeat(33)},{bio:'x'.repeat(161)},{region:'x'.repeat(33)},{gender:'invalid'},{birthday:'2001-02-29'},{birthday:'1899-01-01'},{birthday:'2999-01-01'},{birthday:0}]) await expect(a,'account-profile',{...profile,...invalid},400);
+ await db.closeDatabase();await db.openDatabase();
+ const persisted=(await expect(a,'state',{})).me;assert.equal(persisted.bio,'简介');assert.equal(persisted.avatarRevision,uploaded.avatarRevision);
+ assert.equal((await expect(b,'avatar-image',{peerId:a.id,revision:uploaded.avatarRevision})).image,image.image);
+ await expect(a,'avatar',{avatarId:'fox'});
+ await expect(b,'avatar-image',{peerId:a.id,revision:uploaded.avatarRevision},404);
+ const reset=(await users.findUserById(a.id));assert.equal(reset.avatar_image,null);assert.equal(reset.avatar_revision,'');
+ await expect(a,'search',null,400);
+ await expect(a,'send',[],400);
+ const found=await expect(a,'search',{query:b.id});assert.equal(found.users[0].id,b.id);assert.equal(found.users[0].email,undefined);assert.equal(found.users[0].avatarId,'cat');
+ await expect(a,'request',{peerId:a.id},400);
+ await expect(a,'send',{peerId:b.id,clientId:'before_friend',text:'hello'},403);
+ await expect(a,'request',{peerId:b.id,note:'hello'});
+ await expect(a,'request',{peerId:b.id},409);
+ await expect(a,'decision',{peerId:b.id,accept:true},409);
+ await expect(c,'decision',{peerId:a.id,accept:true},409);
+ assert.equal((await expect(b,'state',{})).requests[0].id,a.id);
+ assert.equal((await expect(b,'state',{})).requests[0].avatarId,'fox');assert.equal((await expect(b,'state',{})).requests[0].bio,undefined);
+ await expect(b,'decision',{peerId:a.id,accept:true});assert.equal((await expect(b,'state',{})).friends[0].bio,'简介');
+ const text='<script>alert(1)</script> 你好';
+ const messages=await Promise.all([api(a,'send',{peerId:b.id,clientId:'repeat_message_1',text}),api(a,'send',{peerId:b.id,clientId:'repeat_message_1',text})]);
+ assert.equal(messages[0].status,200);assert.equal(messages[1].status,200);assert.equal(messages[0].body.message.id,messages[1].body.message.id);passed++;
+ const list=await expect(b,'messages',{peerId:a.id});assert.equal(list.messages.length,1);assert.equal(list.messages[0].text,text);
+ await expect(a,'send',{peerId:b.id,clientId:'repeat_message_1',text:'changed'},409);
+ const notifyFriend=(await expect(b,'state',{})).friends[0];assert.equal(notifyFriend.avatarId,'fox');assert.equal(notifyFriend.unread,1);assert.equal(notifyFriend.lastIncomingText,text);assert.equal(notifyFriend.lastIncomingKind,'text');assert.match(notifyFriend.lastIncomingSeq,/^\d+$/);assert.equal((await expect(a,'state',{})).friends[0].lastIncomingSeq,'0');
+ await expect(b,'read',{peerId:a.id,seq:'999999999'},400);
+ await expect(b,'read',{peerId:a.id,seq:list.messages[0].seq});assert.equal((await expect(b,'state',{})).friends[0].unread,0);
+ await expect(c,'messages',{peerId:a.id},403);
+ await expect(a,'profile',{peerId:b.id,action:'remark',remark:'同事'});assert.equal((await expect(a,'state',{})).friends[0].remark,'同事');assert.equal((await expect(b,'state',{})).friends[0].remark,'');
+ await expect(b,'profile',{peerId:a.id,action:'block',blocked:true});
+ await expect(a,'send',{peerId:b.id,clientId:'blocked_message_1',text:'blocked'},403);
+ await expect(a,'messages',{peerId:b.id},403);
+ await expect(b,'profile',{peerId:a.id,action:'block',blocked:false});
+ for(let i=0;i<51;i++) await expect(a,'send',{peerId:b.id,clientId:`pagination_${i}`,text:`message ${i}`});
+ const latest=await expect(b,'messages',{peerId:a.id});assert.equal(latest.messages.length,50);assert.equal(latest.hasMore,true);
+ const older=await expect(b,'messages',{peerId:a.id,before:latest.messages[0].seq});assert.equal(older.messages.length,2);assert.equal(older.hasMore,false);
+ const incremental=await expect(b,'messages',{peerId:a.id,after:list.messages[0].seq});assert.equal(incremental.messages.length,50);assert.equal(incremental.hasMore,true);assert.equal(incremental.messages[0].text,'message 0');
+ const tail=await expect(b,'messages',{peerId:a.id,after:incremental.messages.at(-1).seq});assert.equal(tail.messages.length,1);assert.equal(tail.hasMore,false);
+ const reopened=await db.query('SELECT count(*)::int AS total FROM chat_messages');assert.equal(reopened[0].total,52);
+ await db.closeDatabase();await db.openDatabase();assert.equal((await expect(a,'state',{})).me.avatarId,'fox');const durable=await expect(b,'messages',{peerId:a.id});assert.equal(durable.messages.length,50);
+ await expect(a,'profile',{peerId:b.id,action:'remove'});
+ assert.equal((await expect(b,'state',{})).friends.length,0);
+ await expect(b,'send',{peerId:a.id,clientId:'removed_message_1',text:'no'},403);
+ console.log(`好友与私聊 PostgreSQL 集成检查通过：${passed} 项（含并发幂等、分页、未读和越权）`);
+} finally {
+ await db?.closeDatabase();
+ await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+ await admin.end();
+}

@@ -1,0 +1,14 @@
+# Opt-in update service: docker compose -f docker-compose.yml -f docker-compose.updates.yml up -d
+services:
+  device-service:
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      UPDATE_PACKAGE_DIR: /data/update-packages
+      UPDATE_SIGNING_KEY_FILE: /run/update-secrets/update-signing-private.pem
+      UPDATE_ADMIN_TOKEN_FILE: /run/update-secrets/update-admin-token
+    volumes:
+      - update_packages:/data/update-packages
+      - ${UPDATE_SECRETS_DIR:?Set UPDATE_SECRETS_DIR}:/run/update-secrets:ro
+volumes:
+  update_packages:

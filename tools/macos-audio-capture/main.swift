@@ -10,6 +10,15 @@
 
 import CoreMedia
 import Foundation
+import AppKit
+import Darwin
+
+NSApplication.shared.setActivationPolicy(.prohibited)
+let hostPid = getppid()
+let parentWatchdog = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+parentWatchdog.schedule(deadline: .now() + 1, repeating: 1)
+parentWatchdog.setEventHandler { if getppid() != hostPid || hostPid == 1 { exit(0) } }
+parentWatchdog.resume()
 import ScreenCaptureKit
 
 /// 全局保活：SCStream/delegate 是局部变量的话，Task 结束就会被释放，

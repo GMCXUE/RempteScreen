@@ -1,0 +1,12 @@
+[
+  {"name":"稳定网络升到1080p", "maximum":3, "steps":[{"repeat":7,"bandwidth":5000000,"loss":0,"fps":30,"tier":2},{"repeat":1,"bandwidth":5000000,"loss":0,"fps":30,"tier":3}]},
+  {"name":"720p设备不放大冒充1080p", "maximum":2, "steps":[{"repeat":30,"bandwidth":5000000,"loss":0,"fps":30,"tier":2}]},
+  {"name":"下行严重卡顿立即降档", "maximum":3, "steps":[{"repeat":1,"bandwidth":5000000,"loss":0,"fps":10,"tier":1},{"repeat":1,"bandwidth":5000000,"loss":0,"fps":10,"tier":0}]},
+  {"name":"上行不足两次采样后降档", "maximum":3, "steps":[{"repeat":1,"bandwidth":500000,"loss":0,"fps":30,"tier":2},{"repeat":1,"bandwidth":500000,"loss":0,"fps":30,"tier":0}]},
+  {"name":"丢包恢复需冷却避免反复升降", "maximum":3, "steps":[{"repeat":2,"bandwidth":5000000,"loss":0.05,"fps":30,"tier":1},{"repeat":21,"bandwidth":5000000,"loss":0,"fps":30,"tier":1},{"repeat":1,"bandwidth":5000000,"loss":0,"fps":30,"tier":2},{"repeat":8,"bandwidth":5000000,"loss":0,"fps":30,"tier":3}]},
+  {"name":"瞬间带宽波动不降档", "maximum":3, "steps":[{"repeat":1,"bandwidth":500000,"loss":0,"fps":30,"tier":2},{"repeat":1,"bandwidth":5000000,"loss":0,"fps":30,"tier":2}]},
+  {"name":"编码限速后允许谨慎探测上档", "maximum":3, "steps":[{"repeat":7,"bandwidth":2700000,"loss":0,"fps":30,"tier":2},{"repeat":1,"bandwidth":2700000,"loss":0,"fps":30,"tier":3},{"repeat":4,"bandwidth":2700000,"loss":0,"fps":30,"tier":3},{"repeat":2,"bandwidth":2700000,"loss":0,"fps":30,"tier":2}]},
+  {"name":"编码器CPU受限也降档", "maximum":3, "steps":[{"repeat":2,"bandwidth":5000000,"loss":0,"fps":30,"cpu":true,"tier":1}]},
+  {"name":"未知带宽有健康下行仍可恢复", "maximum":3, "steps":[{"repeat":8,"loss":0,"fps":30,"tier":3}]},
+  {"name":"下行反馈缺失时不盲目上档", "maximum":3, "steps":[{"repeat":40,"bandwidth":5000000,"tier":2}]}
+]

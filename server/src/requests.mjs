@@ -13,11 +13,12 @@ const TTL_SEC = 60;
 
 const now = () => Date.now();
 
-export function createRequest({ deviceId, viewerName, viewerAddress }) {
+export function createRequest({ deviceId, viewerName, viewerAddress, purpose = 'screen' }) {
   prune();
   const request = {
     id: randomBytes(16).toString('hex'),
     deviceId,
+    purpose,
     viewerName: viewerName || '未知设备',
     viewerAddress: viewerAddress || '',
     status: 'pending',
@@ -45,6 +46,7 @@ export function listPendingForDevice(deviceId) {
     .filter((request) => request.deviceId === deviceId && request.status === 'pending')
     .map((request) => ({
       requestId: request.id,
+      purpose: request.purpose,
       viewerName: request.viewerName,
       viewerAddress: request.viewerAddress,
       createdAt: request.createdAt,

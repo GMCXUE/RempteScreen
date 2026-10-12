@@ -33,6 +33,8 @@ public interface StateProvider {
 
   PeerConnectionFactory getPeerConnectionFactory();
 
+  PeerConnectionFactory getFriendCallPeerConnectionFactory();
+
   PeerConnectionObserver getPeerConnectionObserver(String peerConnectionId);
 
   @Nullable

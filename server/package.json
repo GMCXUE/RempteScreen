@@ -8,10 +8,19 @@
     "node": ">=20"
   },
   "dependencies": {
-    "pg": "^8.16.0"
+    "pg": "^8.16.0",
+    "sharp": "^0.35.5"
   },
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node test/e2e.mjs"
+    "test": "node test/e2e.mjs",
+    "test:chat-video": "node test/chat_video.mjs",
+    "test:chat-media": "node test/chat_media.mjs",
+    "test:social": "node test/social.mjs",
+    "test:account-ids": "node test/account_ids.mjs",
+    "test:calls": "node test/calls.mjs",
+    "test:profile-http": "node test/profile_http.mjs",
+    "test:updates": "node test/updates.mjs",
+    "test:chat-history": "node test/chat_history.mjs"
   }
 }

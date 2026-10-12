@@ -3,11 +3,19 @@
   "description": "主窗口默认权限",
   "windows": [
     "main",
-    "viewer"
+    "viewer",
+    "call-video",
+    "friend-call",
+    "friend-call-mini",
+    "chat-history",
+    "chat-image",
+    "chat-video"
   ],
   "permissions": [
     "core:default",
+    "clipboard-manager:allow-write-text",
     "core:window:allow-set-fullscreen",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "core:window:allow-start-dragging"
   ]
 }

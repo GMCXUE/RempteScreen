@@ -1,17 +1,31 @@
-# remotescreen
+# RemoteScreen Flutter 客户端
 
-A new Flutter project.
+Android 客户端支持设备注册、远程观看、屏幕投送、文件传输及会话内语音/视频通话。
 
-## Getting Started
+好友聊天支持图片发送与预览、长按复制及选择文字、两分钟内撤回本人发送的文字和图片，行为与主桌面客户端一致。服务端与客户端需同步升级，具体接口和图片限制见 [聊天改动说明](../../docs/changes/2026-10-11-chat-images-copy-recall.md)。
 
-This project is a starting point for a Flutter application.
+首页采用紧凑头像区域、优先连接表单、并排文件传输与设备入口，以及本机投屏状态；进行中的观看会话显示在前面。连接输入支持 9 位设备代码和最长 64 位自定义密码，详见 [首页布局改动](../../docs/changes/2026-10-11-mobile-home-layout.md)。
 
-A few resources to get you started if this is your first Flutter project:
+文件传输与桌面客户端使用相同的 LiveKit 数据通道协议：从首页进入独立文件传输页面，选择设备并发送文件，不打开屏幕观看页面。本机注册后通过独立数据房间接收，不依赖屏幕采集，保存到系统的 `下载/RemoteScreen-Files` 目录；重名文件会自动添加序号，传输进度和失败原因在文件传输页面显示。
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+当前原生文件选择和公共下载目录写入由 Android MethodChannel 实现。
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+主界面底部固定为“首页、投屏、我的设备、我的”四个 Tab。观看页面底部控制栏只负责麦克风、摄像头和通话声音；对方摄像头画面显示在右上角小窗，屏幕共享始终保留为主画面。投送页面也提供麦克风和摄像头开关。
+
+独立文件传输要求服务端返回 `fileToken`，双方均升级后重新登录。发送完成以对端保存回执为准；支持取消、超时清理与本次运行传输记录，重试需重新选择文件。
+
+
+聊天消息、好友申请和好友语音/视频来电由 Android 原生消息前台服务在普通后台状态下接收，不依赖 Flutter 页面定时器。当前未接入进程被清理后的厂商推送；未来接入沿用 NativeMessaging 封装和现有通知点击流程，见 [通知接收设计](../../docs/design/notification-delivery.md)。新通知改动已通过代码检查，尚待覆盖安装后的实机验证。
+
+观看页面使用直播式沉浸布局：控制栏支持手动收起，正常观看 4 秒无操作自动隐藏，轻点画面或右下角按钮可以恢复；收起不关闭音频或摄像头。全屏隐藏系统栏，横向画面请求横屏，返回键先退出全屏；离开页面仍保留观看会话。桌面端同步采用悬浮控制栏与快捷全屏入口，详见 [观看页改动](../../docs/changes/2026-10-11-viewer-live-layout.md)。
+
+
+## 热更新发行构建
+
+正式 Android 基础版本须在本目录使用 Shorebird 构建，否则普通 `flutter build` 不包含热更新引擎：
+
+```sh
+shorebird release android --artifact apk --target-platform android-arm64 --public-key-path ../../config/shorebird-public.pem
+```
+
+`shorebird.yaml` 中 `auto_update: false` 保留用户选择下载，客户端从本站签名接口获取更新内容。补丁需要真实进程冷启动，不会通过切换前后台打断当前通话。APK 保留现有包名和证书，应用内整包更新用于原生改动。新增 assets/原生插件必须发布新 APK。管理流程与签名密钥说明见 ../../docs/changes/2026-10-12-hot-updates.md。

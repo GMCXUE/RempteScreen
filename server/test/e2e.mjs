@@ -230,8 +230,10 @@ try {
     `房间 ${response.body.roomName}`);
 
   const ownerGrants = decodePayload(response.body.token).video;
-  check('观看令牌禁止发布轨道',
-    ownerGrants.canPublish === false && ownerGrants.canPublishData === false);
+  check('观看令牌仅允许发布通话轨和文件数据',
+    ownerGrants.canPublish === true &&
+      ownerGrants.canPublishData === true &&
+      ownerGrants.canPublishSources?.join(',') === 'camera,microphone');
 
   response = await api('POST', '/v1/connect', {
     token: bobToken,

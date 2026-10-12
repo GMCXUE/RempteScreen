@@ -112,6 +112,8 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
   private final Context context;
   private final TextureRegistry textures;
   private PeerConnectionFactory mFactory;
+  private PeerConnectionFactory friendCallFactory;
+  private JavaAudioDeviceModule friendCallAudioDeviceModule;
   private final Map<String, MediaStream> localStreams = new HashMap<>();
   private final Map<String, LocalTrack> localTracks = new HashMap<>();
   private final LongSparseArray<FlutterRTCVideoRenderer> renders = new LongSparseArray<>();
@@ -237,6 +239,8 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
       }
     }
     mPeerConnectionObservers.clear();
+    if (friendCallFactory != null) { friendCallFactory.dispose(); friendCallFactory = null; }
+    if (friendCallAudioDeviceModule != null) { friendCallAudioDeviceModule.release(); friendCallAudioDeviceModule = null; }
   }
   private void initialize(boolean bypassVoiceProcessing, boolean androidUseHardwareAudioProcessing, int networkIgnoreMask, boolean forceSWCodec, List<String> forceSWCodecList,
   @Nullable ConstraintsMap androidAudioConfiguration, Severity logSeverity, @Nullable Integer audioSampleRate, @Nullable Integer audioOutputSampleRate, boolean enableWARP, boolean zeroPlayoutDelay) {
@@ -1226,6 +1230,17 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
         });
         break;
       }
+      case "setScreenCallMicrophone": {
+        try {
+          Boolean enabled = call.argument("enabled");
+          if (enabled == null) throw new IllegalArgumentException("缺少麦克风状态");
+          getUserMediaImpl.playbackAudioCapture.setMicrophoneEnabled(enabled);
+          result.success(null);
+        } catch (RuntimeException error) {
+          resultError("setScreenCallMicrophone", "打开麦克风失败：" + error.getMessage(), result);
+        }
+        break;
+      }
       case "setMicrophoneMuted": {
         Boolean muted = call.argument("muted");
         if (muted == null) {
@@ -1606,8 +1621,11 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     String peerConnectionId = getNextStreamUUID();
     RTCConfiguration conf = parseRTCConfiguration(configuration);
     PeerConnectionObserver observer = new PeerConnectionObserver(conf, this, messenger, peerConnectionId);
+    PeerConnectionFactory factory = configuration.hasKey("friendCallAudio")
+            && configuration.getType("friendCallAudio") == ObjectType.Boolean
+            && configuration.getBoolean("friendCallAudio") ? getFriendCallPeerConnectionFactory() : mFactory;
     PeerConnection peerConnection
-            = mFactory.createPeerConnection(
+            = factory.createPeerConnection(
             conf,
             parseMediaConstraints(constraints),
             observer);
@@ -1645,10 +1663,17 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     }
     final String trackId = track.id();
     mainHandler.post(() -> {
+      PeerConnectionObserver peer = mPeerConnectionObservers.get(peerConnectionId);
+      if (peer == null || peer.getRemoteTrack(trackId) != track) return;
       for (int i = 0; i < renders.size(); i++) {
         FlutterRTCVideoRenderer renderer = renders.valueAt(i);
         if (renderer.checkVideoTrack(trackId, peerConnectionId)) {
-          renderer.setTrack((VideoTrack) track, streamId, peerConnectionId);
+          try {
+            renderer.setTrack((VideoTrack) track, streamId, peerConnectionId);
+          } catch (IllegalStateException error) {
+            Log.w(TAG, "Remote track expired before renderer binding", error);
+            renderer.setVideoTrack(null);
+          }
         }
       }
     });
@@ -1658,9 +1683,8 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
     for (Entry<String, PeerConnectionObserver> entry : mPeerConnectionObservers.entrySet()) {
       PeerConnectionObserver pco = entry.getValue();
       MediaStreamTrack track = pco.getRemoteTrack(trackId);
-      if (track == null) {
-        track = pco.getTransceiversTrack(trackId);
-      }
+      // Overlay lookup must not refresh/dispose WebRTC transceiver wrappers.
+      // onAddTrack/onAddStream register the current callback-owned track.
       if (track != null) {
         return track;
       }
@@ -1693,6 +1717,25 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
   @Override
   public PeerConnectionFactory getPeerConnectionFactory() {
     return mFactory;
+  }
+
+  @Override
+  public synchronized PeerConnectionFactory getFriendCallPeerConnectionFactory() {
+    if (friendCallFactory == null) {
+      // A separate ADM prevents projection PCM from replacing the chat microphone.
+      friendCallAudioDeviceModule = JavaAudioDeviceModule.builder(context)
+          .setInputSampleRate(48000).setUseStereoInput(false)
+          .setUseHardwareAcousticEchoCanceler(true).setUseHardwareNoiseSuppressor(true)
+          .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+          .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+              .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+          .createAudioDeviceModule();
+      friendCallFactory = PeerConnectionFactory.builder()
+          .setAudioDeviceModule(friendCallAudioDeviceModule)
+          .setVideoEncoderFactory(videoEncoderFactory).setVideoDecoderFactory(videoDecoderFactory)
+          .createPeerConnectionFactory();
+    }
+    return friendCallFactory;
   }
 
   @Nullable
@@ -1760,9 +1803,8 @@ public class MethodCallHandlerImpl implements MethodCallHandler, StateProvider {
         PeerConnectionObserver pco = entry.getValue();
         mediaStreamTrack = pco.getRemoteTrack(trackId);
 
-        if (mediaStreamTrack == null) {
-          mediaStreamTrack = pco.getTransceiversTrack(trackId);
-        }
+        // Looking up a renderer/audio track or a fresh UUID must be read-only.
+        // Refreshing transceivers here invalidates wrappers used by the SDK.
 
         if (mediaStreamTrack != null) {
           break;

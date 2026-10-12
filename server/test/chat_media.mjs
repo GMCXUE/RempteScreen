@@ -1,0 +1,103 @@
+// Isolated database only; no account changes or messages on the production service.
+import assert from 'node:assert/strict';
+import pg from 'pg';
+import sharp from 'sharp';
+import {spawn} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
+import net from 'node:net';
+const url=new URL(process.env.TEST_DATABASE_URL ?? 'postgres://remotescreen:remotescreen@127.0.0.1:54329/remotescreen_test');
+const database=`rs_chat_media_${process.pid}_${Date.now()}`;
+const admin=new pg.Pool({connectionString:url.toString()});let db,child;
+try {
+ await admin.query(`CREATE DATABASE "${database}"`);url.pathname=`/${database}`;process.env.DATABASE_URL=url.toString();
+ db=await import('../src/db.mjs');await db.openDatabase();
+ const users=await import('../src/users.mjs');const {createSocialHandler}=await import('../src/social.mjs');
+ const people=[];
+ for(const name of ['Alice','Bob','Carol']){const {user}=await users.createUser({email:`${name}@example.test`,name,password:'chat-test-secret'});const session=await users.createSession(user.id);people.push({...user,token:session.token});}
+ const [a,b,c]=people;let passed=0;
+ const api=(actor,op,body={})=>createSocialHandler(op)({request:{headers:{authorization:actor?`Bearer ${actor.token}`:''}},body});
+ const expect=async(actor,op,body,status=200)=>{const result=await api(actor,op,body);assert.equal(result.status,status,`${op}: ${JSON.stringify(result.body)}`);passed++;return result.body;};
+ const photo=await sharp({create:{width:640,height:360,channels:3,background:'#3478ef'}}).jpeg().toBuffer();
+ const image='data:image/jpeg;base64,'+photo.toString('base64');
+ await expect(null,'send-image',{peerId:b.id,clientId:'image_0001',image},401);
+ await expect(a,'send-image',{peerId:b.id,clientId:'image_0001',image},403);
+ await expect(a,'request',{peerId:b.id});await expect(b,'decision',{peerId:a.id,accept:true});
+ const body={peerId:b.id,clientId:'image_0001',image};
+ const sent=await Promise.all([expect(a,'send-image',body),expect(a,'send-image',body)]);
+ assert.equal(sent[0].message.clientId,'image_0001');assert.equal(sent[0].message.id,sent[1].message.id);assert.equal(sent[0].message.kind,'image');assert.equal(sent[0].message.text,'[图片]');
+ assert.equal(sent[0].message.image.width,640);assert.equal(sent[0].message.image.height,360);assert.match(sent[0].message.image.thumbnail,/^data:image\/jpeg;base64,/);
+ assert.equal((await db.query('SELECT count(*)::int AS total FROM chat_images'))[0].total,1);
+ const retrieved=await expect(b,'message-image',{peerId:a.id,messageId:sent[0].message.id});
+ const info=await sharp(Buffer.from(retrieved.image.split(',')[1],'base64')).metadata();assert.equal(info.width,640);assert.equal(info.exif,undefined);
+ await expect(c,'message-image',{peerId:a.id,messageId:sent[0].message.id},403);
+ const friend=(await expect(b,'state')).friends[0];assert.equal(friend.lastText,'[图片]');assert.equal(friend.lastIncomingKind,'image');assert.equal(friend.unread,1);
+ const snapshot=await expect(b,'messages',{peerId:a.id});assert.equal(snapshot.messages[0].clientId,'image_0001');assert.equal(snapshot.messages[0].image.width,640);assert.equal(snapshot.syncCursor,'0');
+ await expect(b,'recall',{peerId:a.id,messageId:sent[0].message.id},403);
+ const recalled=await expect(a,'recall',{peerId:b.id,messageId:sent[0].message.id});assert.equal(recalled.message.kind,'recalled');assert.equal(recalled.message.image,null);assert.ok(recalled.message.recalledAt);
+ await expect(a,'recall',{peerId:b.id,messageId:sent[0].message.id});
+ await expect(a,'message-image',{peerId:b.id,messageId:sent[0].message.id},410);
+ await expect(b,'message-image',{peerId:a.id,messageId:sent[0].message.id},410);
+ assert.equal((await db.query('SELECT count(*)::int AS total FROM chat_images'))[0].total,0);
+ assert.equal((await expect(a,'send-image',body)).message.kind,'recalled');
+ assert.equal((await expect(b,'state')).friends[0].unread,0);
+ const changes=await expect(b,'messages',{peerId:a.id,after:snapshot.messages[0].seq,syncCursor:snapshot.syncCursor,loadedFrom:snapshot.messages[0].seq});
+ assert.equal(changes.messages.length,0);assert.equal(changes.updates.length,1);assert.equal(changes.updates[0].kind,'recalled');assert.notEqual(changes.syncCursor,'0');
+ assert.equal((await expect(b,'messages',{peerId:a.id,after:snapshot.messages[0].seq,syncCursor:changes.syncCursor})).updates.length,0);
+ assert.equal((await expect(b,'messages',{peerId:a.id})).messages[0].kind,'recalled');
+ const text=(await expect(a,'send',{peerId:b.id,clientId:'text_00001',text:' line one\nline two '})).message;
+ assert.equal(text.clientId,'text_00001');
+ await expect(a,'recall',{peerId:b.id,messageId:text.id});
+ assert.equal((await expect(a,'send',{peerId:b.id,clientId:'text_00001',text:'line one\nline two'})).message.kind,'recalled');
+ await expect(a,'send',{peerId:b.id,clientId:'text_00001',text:'changed'},409);
+ await expect(a,'send-image',{...body,clientId:'text_00001'},409);
+ const expired=(await expect(a,'send',{peerId:b.id,clientId:'expired_01',text:'old message'})).message;
+ await db.query('UPDATE chat_messages SET created_at=$2 WHERE id=$1',[expired.id,Date.now()-120001]);
+ await expect(a,'recall',{peerId:b.id,messageId:expired.id},409);
+ assert.equal((await expect(b,'messages',{peerId:a.id})).messages.find(m=>m.id===expired.id).text,'old message');
+ const callId=crypto.randomUUID();
+ await db.query("INSERT INTO chat_messages(id,sender_id,recipient_id,client_id,text,created_at,kind,metadata) VALUES($1,$2,$3,$4,'已取消', $5,'call',$6)",[callId,a.id,b.id,'call_0001',Date.now(),{kind:'voice'}]);
+ await expect(a,'recall',{peerId:b.id,messageId:callId},400);
+ for(const bad of ['data:image/svg+xml;base64,YmFk','data:image/jpeg;base64,YmFk','data:image/png;base64,'+'A'.repeat(11200000)])await expect(a,'send-image',{...body,clientId:'bad_image_01',image:bad},400);
+ await expect(a,'send-image',{...body,clientId:'bad'},400);
+ await expect(a,'messages',{peerId:b.id,syncCursor:'bad'},400);
+ await expect(a,'messages',{peerId:b.id,loadedFrom:'bad'},400);
+ await expect(b,'profile',{peerId:a.id,action:'block',blocked:true});
+ await expect(a,'send-image',{...body,clientId:'blocked_image'},403);
+ await expect(a,'message-image',{peerId:b.id,messageId:sent[0].message.id},403);
+ await expect(a,'recall',{peerId:b.id,messageId:expired.id},403);
+ await expect(b,'profile',{peerId:a.id,action:'block',blocked:false});
+ // Re-run migrations to verify an existing database upgrades idempotently.
+ await db.closeDatabase();await db.openDatabase();
+ const durable=await expect(b,'messages',{peerId:a.id});assert.equal(durable.messages.filter(m=>m.kind==='recalled').length,2);
+ // Older clients created text rows without a payload hash. Recall still preserves retry identity.
+ const legacyId=crypto.randomUUID();
+ await db.query("INSERT INTO chat_messages(id,sender_id,recipient_id,client_id,text,created_at) VALUES($1,$2,$3,'legacy_text_01','旧版文字',$4)",[legacyId,a.id,b.id,Date.now()]);
+ await expect(a,'recall',{peerId:b.id,messageId:legacyId});
+ assert.equal((await expect(a,'send',{peerId:b.id,clientId:'legacy_text_01',text:'旧版文字'})).message.kind,'recalled');
+ // More than one page of recall updates must not skip a change.
+ const batch=[];
+ for(let i=0;i<51;i++)batch.push((await db.query("INSERT INTO chat_messages(id,sender_id,recipient_id,client_id,text,created_at) VALUES($1,$2,$3,$4,'批量同步检查',$5) RETURNING id,seq::text",[crypto.randomUUID(),a.id,b.id,`sync_batch_${i}`,Date.now()]))[0]);
+ const baseline=await expect(b,'messages',{peerId:a.id});
+ for(const message of batch)await expect(a,'recall',{peerId:b.id,messageId:message.id});
+ const first=await expect(b,'messages',{peerId:a.id,after:batch.at(-1).seq,syncCursor:baseline.syncCursor});
+ const second=await expect(b,'messages',{peerId:a.id,after:batch.at(-1).seq,syncCursor:first.syncCursor});
+ assert.equal(first.updates.length,50);assert.equal(second.updates.length,1);
+ assert.equal(new Set([...first.updates,...second.updates].map(m=>m.id)).size,51);
+ // Exercise the real router and body limit, not only the in-process handler.
+ const listener=net.createServer();await new Promise(resolve=>listener.listen(0,'127.0.0.1',resolve));const port=listener.address().port;await new Promise(resolve=>listener.close(resolve));
+ child=spawn(process.execPath,[new URL('../src/index.mjs',import.meta.url).pathname],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1'},stdio:['ignore','pipe','pipe']});
+ let logs='';child.stdout.on('data',data=>logs+=data);child.stderr.on('data',data=>logs+=data);
+ const base=`http://127.0.0.1:${port}`;let ready=false;
+ for(let i=0;i<100;i++){try{ready=(await fetch(base+'/v1/health')).ok;if(ready)break;}catch{}await new Promise(resolve=>setTimeout(resolve,50));}
+ assert.ok(ready,logs);
+ const post=async(actor,op,body,status=200)=>{const result=await fetch(base+'/v1/social/'+op,{method:'POST',headers:{'content-type':'application/json',...(actor?{authorization:`Bearer ${actor.token}`}:{})},body:JSON.stringify(body)});const value=await result.json();assert.equal(result.status,status,JSON.stringify(value));passed++;return value;};
+ const large=await sharp(randomBytes(320*320*3),{raw:{width:320,height:320,channels:3}}).png().toBuffer();
+ const largeBody={peerId:b.id,clientId:'http_image_01',image:'data:image/png;base64,'+large.toString('base64')};assert.ok(JSON.stringify(largeBody).length>16*1024);
+ const uploaded=await post(a,'send-image',largeBody);assert.equal(uploaded.message.kind,'image');assert.equal(uploaded.message.clientId,'http_image_01');
+ assert.ok((await post(b,'message-image',{peerId:a.id,messageId:uploaded.message.id})).image.length>16*1024);
+ await post(null,'send-image',largeBody,401);
+ await post(a,'send',{peerId:b.id,clientId:'http_text_01',text:'ok',padding:'a'.repeat(20000)},413);
+ await post(a,'recall',{peerId:b.id,messageId:uploaded.message.id});
+ await post(b,'message-image',{peerId:a.id,messageId:uploaded.message.id},410);
+ console.log(`聊天图片和撤回 PostgreSQL 检查通过：${passed} 项`);
+}finally{if(child){child.kill('SIGTERM');await new Promise(resolve=>{child.once('exit',resolve);setTimeout(resolve,4000).unref();});}await db?.closeDatabase();await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);await admin.end();}

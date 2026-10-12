@@ -30,6 +30,19 @@ body {
 }
 #screen.stretch { width: 100%; height: 100%; }
 #screen.pixel { image-rendering: pixelated; }
+.camera-view {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: min(22vw, 220px);
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .24);
+  background: #111827;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  z-index: 4;
+}
 
 .status {
   position: absolute;
@@ -82,6 +95,7 @@ body.pinned .controls { background: rgba(8, 12, 20, .92); }
   white-space: nowrap;
 }
 .ctl:hover { background: rgba(255, 255, 255, .14); }
+.ctl:disabled { opacity: .5; cursor: wait; }
 .ctl.on {
   border-color: #3b82f6;
   background: rgba(59, 130, 246, .22);
@@ -126,3 +140,66 @@ body.pinned .controls { background: rgba(8, 12, 20, .92); }
   gap: 8px;
   margin-top: 18px;
 }
+
+.controls { gap: 12px; padding: 14px 16px; flex-wrap: wrap; }
+.right { flex-wrap: wrap; justify-content: flex-end; }
+.ctl { min-height: 38px; border-radius: 10px; }
+.ctl:focus-visible { outline: 2px solid #93c5fd; outline-offset: 3px; }
+.camera { border-radius: 16px; }
+@media (max-width: 720px) {
+  .controls { justify-content: center; }
+  .left { width: 100%; justify-content: center; }
+  .right { justify-content: center; gap: 6px; }
+  .ctl { padding: 7px 9px; }
+  .camera { width: min(30vw, 160px); top: 12px; right: 12px; }
+}
+
+/* Live viewing chrome: compact device chip, floating toolbar, explicit restore. */
+body { background: #080a0e; }
+.controls {
+  left: 50%; right: auto; bottom: 18px; transform: translateX(-50%);
+  width: max-content; max-width: calc(100% - 32px);
+  padding: 8px; border-radius: 22px;
+  background: rgba(26, 29, 36, .86);
+  border: 1px solid rgba(255, 255, 255, .1);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+  backdrop-filter: blur(16px);
+  z-index: 8;
+}
+.controls-visible .controls { opacity: 1; pointer-events: auto; }
+.right { justify-content: center; gap: 4px; }
+.ctl { border-color: transparent; background: transparent; border-radius: 14px; min-height: 40px; padding: 8px 10px; }
+.ctl.on { border-color: transparent; background: rgba(59, 130, 246, .15); color: #8cbaff; }
+.ctl.danger { border-color: transparent; color: #fda4af; }
+.volume { width: 72px; margin: 0 6px; }
+.viewer-heading {
+  position: absolute; top: 18px; left: 18px; z-index: 6;
+  display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 270px); padding: 8px 12px 8px 8px;
+  border-radius: 24px; background: rgba(26, 29, 36, .72);
+  backdrop-filter: blur(12px); opacity: 0; pointer-events: none;
+  transition: opacity .2s ease;
+}
+.controls-visible .viewer-heading { opacity: 1; }
+.viewer-heading .left { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+.device { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.meta { font-size: 10px; max-width: 290px; overflow: hidden; text-overflow: ellipsis; }
+.device-mark { width: 34px; height: 34px; border-radius: 50%; background: #303a4a; display: grid; place-items: center; flex-shrink: 0; }
+.device-mark svg { width: 19px; height: 19px; fill: none; stroke: #b4ccf4; stroke-width: 1.5; }
+.viewing-badge { display: flex; gap: 5px; align-items: center; font-size: 10px; color: #b7c6be; margin-left: 6px; white-space: nowrap; }
+.viewing-badge i { width: 5px; height: 5px; border-radius: 50%; background: #4ade80; }
+.compact-controls { position: absolute; right: 18px; bottom: 18px; z-index: 9; display: flex; padding: 3px; border-radius: 24px; background: rgba(26, 29, 36, .65); }
+.controls-visible .compact-controls { display: none; }
+.compact-controls .ctl { width: 44px; height: 44px; justify-content: center; }
+.camera-view { border-radius: 16px; width: min(20vw, 180px); }
+@media (max-width: 720px) {
+  .controls { padding: 6px; bottom: 12px; }
+  .ctl { padding: 7px 8px; }
+  .viewer-heading { top: 12px; left: 12px; max-width: calc(100% - 155px); gap: 8px; }
+  .viewer-heading .left { width: auto; }
+  .device { max-width: 170px; }
+  .viewing-badge { display: none; }
+  .camera-view { width: 120px; top: 12px; right: 12px; }
+  .compact-controls { right: 12px; bottom: 12px; }
+}
+body.waiting .viewing-badge i { background: #8993a4; }

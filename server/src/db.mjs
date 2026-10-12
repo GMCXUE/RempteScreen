@@ -8,7 +8,11 @@
 // 旧数据用 scripts/migrate-sqlite-to-pg.mjs 一次性搬过来。
 
 import pg from 'pg';
+import { callSchema } from './calls.mjs';
+import { accountSchema } from './account_schema.mjs';
+import { socialSchema } from './social_schema.mjs';
 import { config } from './config.mjs';
+import { updateSchema } from './update_schema.mjs';
 
 let pool = null;
 
@@ -52,6 +56,13 @@ CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
  * 这里做可逆保存；校验仍走 password_hash，不依赖明文比较。
  */
 const MIGRATIONS = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_id TEXT NOT NULL DEFAULT 'cat';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_revision TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_image BYTEA;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS region TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS birthday TEXT NOT NULL DEFAULT '';
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS password_plain TEXT NOT NULL DEFAULT '';
 `;
 
@@ -80,6 +91,10 @@ export async function openDatabase() {
 
   await pool.query(SCHEMA);
   await pool.query(MIGRATIONS);
+  await pool.query(accountSchema);
+  await pool.query(socialSchema);
+  await pool.query(callSchema);
+  await pool.query(updateSchema);
   return pool;
 }
 

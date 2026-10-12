@@ -12,9 +12,23 @@ import java.util.Map;
  */
 final class RemoteTrackRegistry<T> {
   private final Map<String, T> tracks = new HashMap<>();
+  private final Map<String, String> owners = new HashMap<>();
 
   synchronized void put(String trackId, T track) {
     tracks.put(trackId, track);
+    owners.remove(trackId);
+  }
+
+  synchronized void put(String trackId, T track, String receiverId) {
+    tracks.put(trackId, track);
+    owners.put(trackId, receiverId);
+  }
+
+  synchronized boolean removeOwned(String trackId, String receiverId) {
+    if (!receiverId.equals(owners.get(trackId))) return false;
+    tracks.remove(trackId);
+    owners.remove(trackId);
+    return true;
   }
 
   synchronized T get(String trackId) {
@@ -26,10 +40,12 @@ final class RemoteTrackRegistry<T> {
       return false;
     }
     tracks.remove(trackId);
+    owners.remove(trackId);
     return true;
   }
 
   synchronized void clear() {
     tracks.clear();
+    owners.clear();
   }
 }

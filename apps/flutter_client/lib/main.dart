@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:livekit_client/livekit_client.dart';
 import 'api.dart';
+import 'app_updates.dart';
 import 'home_screen.dart';
 import 'login_screen.dart';
 import 'session_manager.dart';
-
-/// 生产服务器地址。换成域名后这里要一并改，并同时改成 https。
-const kServerUrl = 'http://121.43.102.154';
-
-final ApiService api = ApiService(baseUrl: kServerUrl);
+import 'app_theme.dart';
+import 'friend_calls.dart';
 
 /// 应用级会话管理器：投送与观看连接都由它持有，与页面生命周期无关。
 final SessionManager sessionManager = SessionManager(api: api);
@@ -34,6 +32,12 @@ void main() async {
   };
   ErrorWidget.builder = (details) => AppErrorCard(details);
 
+  appUpdates.beforeInstall = () async {
+    if (friendCalls.busy) throw StateError('通话操作正在进行，请稍后重试');
+    await friendCalls.hangup();
+    if (friendCalls.current != null) throw StateError('请先结束当前通话');
+    await sessionManager.prepareForUpdate();
+  };
   runApp(const RemoteScreenApp());
 }
 
@@ -57,7 +61,8 @@ class AppErrorCard extends StatelessWidget {
             children: [
               const Row(
                 children: [
-                  Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 20),
+                  Icon(Icons.warning_amber_rounded,
+                      color: Colors.amber, size: 20),
                   SizedBox(width: 8),
                   Text('界面出错了',
                       style: TextStyle(
@@ -78,7 +83,9 @@ class AppErrorCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: SelectableText(
-                  message.length > 600 ? '${message.substring(0, 600)}…' : message,
+                  message.length > 600
+                      ? '${message.substring(0, 600)}…'
+                      : message,
                   style: const TextStyle(
                       color: Color(0xFFFFB4A9),
                       fontSize: 11.5,
@@ -101,15 +108,9 @@ class RemoteScreenApp extends StatelessWidget {
     return MaterialApp(
       title: 'RemoteScreen',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.light,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4080FF),
-          brightness: Brightness.light,
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF4F6FA),
-      ),
+      theme: AppTheme.light,
+      navigatorKey: appNavigatorKey,
+      builder: (context, child) => AppUpdateHost(child: FriendCallOverlay(child: child!)),
       home: const BootGate(),
     );
   }
@@ -134,6 +135,7 @@ class _BootGateState extends State<BootGate> {
   }
 
   Future<void> _restore() async {
+    await appUpdates.ready;
     try {
       _account = await api.me();
     } catch (_) {

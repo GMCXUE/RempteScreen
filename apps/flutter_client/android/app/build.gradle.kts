@@ -44,3 +44,11 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // 原生视频悬浮窗与补丁版 flutter_webrtc 使用完全相同的 WebRTC 构建。
+    implementation("io.github.webrtc-sdk:android:150.7871.01")
+}
+
+// Native notification policy regression checks.
+dependencies { testImplementation("junit:junit:4.13.2") }

@@ -90,21 +90,24 @@
 
 | 身份 | 令牌权限 | 说明 |
 | --- | --- | --- |
-| `caster` | `canPublish=true`、`canPublishData=true` | 采集端，只有它能推流 |
-| `viewer` | `canPublish=false`、`canPublishData=false` | 接收端，只订阅 |
+| `caster` | `canPublish=true`、`canPublishData=true` | 采集端，发布屏幕、系统声音及可选通话轨 |
+| `viewer` | `canPublish=true`、仅 `CAMERA/MICROPHONE`、`canPublishData=true` | 接收屏幕，同时可发布通话轨和发送文件 |
 
-权限写死在签发的 JWT 里。**接收端 App 即便被改造也无法向房间注入任何内容**——单向投送由架构保证，不依赖界面限制。
+权限写死在签发的 JWT 里。观看端只能发布摄像头与麦克风，不能发布或替换屏幕共享轨；可靠数据通道只承载文件传输协议。
 
 ### 轨道约定
 
 - 画面轨：`trackName = "screen"`，采集屏幕内容
 - 音频轨：`trackName = "system-audio"`，采集系统声音
+- 摄像头轨：`source = CAMERA`，显示在独立小窗
+- 麦克风轨：`source = MICROPHONE`，用于双向语音
 
-接收端按 `trackName` 区分，避免后续加入麦克风时混入人声。
+接收端按 LiveKit `source` 区分屏幕、系统声音、摄像头和麦克风，通话开关不会影响屏幕共享。
 
 ### 为后续的可控能力预留
 
-若之后要加远程控制，**不需要动媒体面**：LiveKit 数据通道已经就绪，只要给 `caster` 令牌打开 `canPublishData`，再补一套输入事件的编解码约定即可。当前 `viewer` 的数据通道权限是关闭的，所以这个口子现在是锁死的。
+若之后要加远程控制，**不需要动媒体面**：LiveKit 数据通道已经用于文件传输，但客户端目前只处理
+`rs-file-ctl` 与 `rs-file-bin` 主题。远程控制仍需单独设计输入事件协议与授权开关。
 
 ## 四、待验证风险
 
@@ -116,3 +119,12 @@
 | 移动网络下 UDP 是否被拦 | 待验证 | 公网环境实测，LiveKit 自带 TCP 回退 |
 | 长期推流的稳定性与内存 | 待验证 | 连续推流 2 小时观察 |
 | 上架审核对屏幕录制类目的要求 | 待验证 | 提交前查 App Store 审核指南 |
+
+### 独立文件房间
+
+文件页面使用 `files-{deviceId}` 数据房间，设备注册时取得 fileToken 并上线接收。观看继续使用 `device-{deviceId}` 媒体房间，两者分别持有连接与生命周期。`purpose` 在密码连接和确认请求中一致传递，界面名称不参与协议决策。发送方验证目标参与者的 ready/saved 回执后推进状态，详见 [双端修整说明](changes/2026-10-10-session-reliability.md)。
+
+
+### 消息与来电后台接收
+
+当前 primary Rust 桌面与 Flutter Android 使用原生后台同步，只覆盖应用/消息服务仍可运行的普通后台接收。用户确认暂不接入进程被清理后的厂商推送；保留现有 NativeMessaging 封装、通知动作路由和服务端事件标识作为后续接入点，详见 [通知接收范围与接入契约](design/notification-delivery.md)。

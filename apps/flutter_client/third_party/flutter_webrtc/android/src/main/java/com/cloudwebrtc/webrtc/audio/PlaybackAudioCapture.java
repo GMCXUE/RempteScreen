@@ -4,6 +4,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioPlaybackCaptureConfiguration;
 import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.os.Build;
 import android.os.Process;
@@ -19,11 +20,42 @@ public final class PlaybackAudioCapture implements JavaAudioDeviceModule.AudioBu
     public static final int SAMPLE_RATE = 48000;
     private static final String TAG = "PlaybackAudioCapture";
     private AudioRecord recorder;
+    private AudioRecord microphone;
     private volatile boolean screenAudio;
     private long nextFrameNs;
     private boolean readErrorReported;
     private int frames;
     private int peak;
+
+    public synchronized void setMicrophoneEnabled(boolean enabled) {
+        if (microphone != null) {
+            try { microphone.stop(); } catch (IllegalStateException ignored) { }
+            microphone.release();
+            microphone = null;
+        }
+        if (!enabled) return;
+        if (recorder == null) throw new IllegalStateException("投屏声音尚未连接");
+        int minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+        AudioRecord input = new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                Math.max(minimum * 2, SAMPLE_RATE / 10 * 2));
+        try {
+            if (input.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("麦克风初始化失败");
+            input.startRecording();
+            if (input.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IllegalStateException("麦克风启动失败");
+            microphone = input;
+        } catch (RuntimeException error) {
+            input.release();
+            throw error;
+        }
+    }
+
+    public synchronized boolean useMicrophoneInput() {
+        if (recorder != null) return false;
+        screenAudio = false;
+        return true;
+    }
 
     @RequiresApi(Build.VERSION_CODES.Q)
     public synchronized void start(MediaProjection projection) {
@@ -63,6 +95,7 @@ public final class PlaybackAudioCapture implements JavaAudioDeviceModule.AudioBu
     }
 
     public synchronized void stop() {
+        setMicrophoneEnabled(false);
         screenAudio = true;
         if (recorder != null) {
             try { recorder.stop(); } catch (IllegalStateException ignored) { }
@@ -96,6 +129,17 @@ public final class PlaybackAudioCapture implements JavaAudioDeviceModule.AudioBu
                 readErrorReported = true;
             }
             buffer.order(ByteOrder.LITTLE_ENDIAN);
+            // Android WebRTC exposes one PCM input for all audio sources. Keep
+            // playback intact and mix voice only after an explicit user toggle.
+            if (microphone != null) {
+                byte[] voice = new byte[buffer.capacity()];
+                int voiceCount = microphone.read(voice, 0, voice.length, AudioRecord.READ_NON_BLOCKING);
+                for (int i = 0; i + 1 < voiceCount; i += 2) {
+                    int sample = (short) ((voice[i] & 255) | (voice[i + 1] << 8));
+                    int mixed = buffer.getShort(i) + sample;
+                    buffer.putShort(i, (short) Math.max(-32768, Math.min(32767, mixed)));
+                }
+            }
             for (int i = 0; i + 1 < count; i += 2) peak = Math.max(peak, Math.abs((int) buffer.getShort(i)));
             if (++frames % 500 == 0) {
                 Log.i(TAG, "Internal audio: " + frames + " frames, peak=" + peak);

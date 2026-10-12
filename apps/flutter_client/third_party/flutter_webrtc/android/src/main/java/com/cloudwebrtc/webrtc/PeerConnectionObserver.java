@@ -1,6 +1,8 @@
 package com.cloudwebrtc.webrtc;
 
 import android.util.Log;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.annotation.Nullable;
 
@@ -56,6 +58,10 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
   private final BinaryMessenger messenger;
   private final String id;
   private PeerConnection peerConnection;
+  private final Handler trackHandler = new Handler(Looper.getMainLooper());
+  private final PeerConnectionEventDispatcher trackEvents = new PeerConnectionEventDispatcher(
+      command -> trackHandler.post(command),
+      error -> Log.e(TAG, "Remote track callback failed", error));
   private final PeerConnection.RTCConfiguration configuration;
   final Map<String, MediaStream> remoteStreams = new HashMap<>();
   private final RemoteTrackRegistry<MediaStreamTrack> remoteTracks =
@@ -104,6 +110,7 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
   }
 
   void close() {
+    trackEvents.close();
     peerConnection.close();
     remoteStreams.clear();
     remoteTracks.clear();
@@ -414,72 +421,45 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
     return null;
   }
 
+  private Map<String, MediaStreamTrack> streamTracks(MediaStream stream) {
+    Map<String, MediaStreamTrack> tracks = new LinkedHashMap<>();
+    for (MediaStreamTrack track : stream.videoTracks) tracks.put(track.id(), track);
+    for (MediaStreamTrack track : stream.audioTracks) tracks.put(track.id(), track);
+    return tracks;
+  }
+
   @Override
   public void onAddStream(MediaStream mediaStream) {
-    String streamUID = null;
-    String streamId = mediaStream.getId();
-    // The native WebRTC implementation has a special concept of a default
-    // MediaStream instance with the label default that the implementation
-    // reuses.
-    if ("default".equals(streamId)) {
-      for (Map.Entry<String, MediaStream> e
-          : remoteStreams.entrySet()) {
-        if (e.getValue().equals(mediaStream)) {
-          streamUID = e.getKey();
-          break;
-        }
+    trackEvents.snapshot(() -> {
+      final String streamId = mediaStream.getId();
+      final Map<String, MediaStreamTrack> tracks = streamTracks(mediaStream);
+      final ConstraintsMap params = new ConstraintsMap();
+      params.putString("event", "onAddStream");
+      params.putString("streamId", streamId);
+      params.putString("ownerTag", id);
+      ConstraintsArray audioTracks = new ConstraintsArray();
+      ConstraintsArray videoTracks = new ConstraintsArray();
+      for (MediaStreamTrack track : tracks.values()) {
+        Map<String, Object> info = mediaTrackToMap(track);
+        info.put("label", track instanceof VideoTrack ? "Video" : "Audio");
+        info.put("remote", true);
+        if (track instanceof VideoTrack) videoTracks.pushMap(new ConstraintsMap(info));
+        else audioTracks.pushMap(new ConstraintsMap(info));
       }
-    }
-
-    if (streamUID == null) {
-      streamUID = stateProvider.getNextStreamUUID();
-      remoteStreams.put(streamId, mediaStream);
-    }
-
-    ConstraintsMap params = new ConstraintsMap();
-    params.putString("event", "onAddStream");
-    params.putString("streamId", streamId);
-    params.putString("ownerTag", id);
-
-    ConstraintsArray audioTracks = new ConstraintsArray();
-    ConstraintsArray videoTracks = new ConstraintsArray();
-
-    for (int i = 0; i < mediaStream.videoTracks.size(); i++) {
-      VideoTrack track = mediaStream.videoTracks.get(i);
-      String trackId = track.id();
-
-      remoteTracks.put(trackId, track);
-      stateProvider.onRemoteTrackAdded(id, streamId, track);
-
-      ConstraintsMap trackInfo = new ConstraintsMap();
-      trackInfo.putString("id", trackId);
-      trackInfo.putString("label", "Video");
-      trackInfo.putString("kind", track.kind());
-      trackInfo.putBoolean("enabled", track.enabled());
-      trackInfo.putString("readyState", track.state().toString());
-      trackInfo.putBoolean("remote", true);
-      videoTracks.pushMap(trackInfo);
-    }
-    for (int i = 0; i < mediaStream.audioTracks.size(); i++) {
-      AudioTrack track = mediaStream.audioTracks.get(i);
-      String trackId = track.id();
-
-      remoteTracks.put(trackId, track);
-      stateProvider.onRemoteTrackAdded(id, streamId, track);
-
-      ConstraintsMap trackInfo = new ConstraintsMap();
-      trackInfo.putString("id", trackId);
-      trackInfo.putString("label", "Audio");
-      trackInfo.putString("kind", track.kind());
-      trackInfo.putBoolean("enabled", track.enabled());
-      trackInfo.putString("readyState", track.state().toString());
-      trackInfo.putBoolean("remote", true);
-      audioTracks.pushMap(trackInfo);
-    }
-    params.putArray("audioTracks", audioTracks.toArrayList());
-    params.putArray("videoTracks", videoTracks.toArrayList());
-
-    sendEvent(params);
+      params.putArray("audioTracks", audioTracks.toArrayList());
+      params.putArray("videoTracks", videoTracks.toArrayList());
+      return () -> {
+        remoteStreams.put(streamId, mediaStream);
+        for (Map.Entry<String, MediaStreamTrack> entry : tracks.entrySet()) {
+          if (configuration.sdpSemantics != PeerConnection.SdpSemantics.UNIFIED_PLAN
+              || remoteTracks.get(entry.getKey()) == null) {
+            remoteTracks.put(entry.getKey(), entry.getValue());
+            stateProvider.onRemoteTrackAdded(id, streamId, entry.getValue());
+          }
+        }
+        sendEvent(params);
+      };
+    });
   }
 
   void sendEvent(ConstraintsMap event) {
@@ -490,20 +470,20 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
 
   @Override
   public void onRemoveStream(MediaStream mediaStream) {
-
-    String streamId = mediaStream.getId();
-
-    for (VideoTrack track : mediaStream.videoTracks) {
-      this.remoteTracks.remove(track.id(), track);
-    }
-    for (AudioTrack track : mediaStream.audioTracks) {
-      this.remoteTracks.remove(track.id(), track);
-    }
-
-    ConstraintsMap params = new ConstraintsMap();
-    params.putString("event", "onRemoveStream");
-    params.putString("streamId", streamId);
-    sendEvent(params);
+    trackEvents.snapshot(() -> {
+      final String streamId = mediaStream.getId();
+      final Map<String, MediaStreamTrack> tracks = streamTracks(mediaStream);
+      return () -> {
+        if (remoteStreams.get(streamId) == mediaStream) remoteStreams.remove(streamId);
+        for (Map.Entry<String, MediaStreamTrack> entry : tracks.entrySet()) {
+          remoteTracks.remove(entry.getKey(), entry.getValue());
+        }
+        ConstraintsMap params = new ConstraintsMap();
+        params.putString("event", "onRemoveStream");
+        params.putString("streamId", streamId);
+        sendEvent(params);
+      };
+    });
   }
 
   @Override
@@ -512,80 +492,73 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
 
   @Override
   public void onAddTrack(RtpReceiver receiver, MediaStream[] mediaStreams) {
-    Log.d(TAG, "onAddTrack");
-    // for plan-b
-    for (MediaStream stream : mediaStreams) {
-      String streamId = stream.getId();
-      MediaStreamTrack track = receiver.track();
-      ConstraintsMap params = new ConstraintsMap();
-      params.putString("event", "onAddTrack");
-      params.putString("streamId", streamId);
-      params.putString("ownerTag", id);
-      params.putString("trackId", track.id());
-
-      String trackId = track.id();
-      ConstraintsMap trackInfo = new ConstraintsMap();
-      trackInfo.putString("id", trackId);
-      trackInfo.putString("label", track.kind());
-      trackInfo.putString("kind", track.kind());
-      trackInfo.putBoolean("enabled", track.enabled());
-      trackInfo.putString("readyState", track.state().toString());
-      trackInfo.putBoolean("remote", true);
-      params.putMap("track", trackInfo.toMap());
-      sendEvent(params);
-
-      if ("audio".equals(track.kind())) {
-        AudioSwitchManager.instance.start();
+    trackEvents.snapshot(() -> {
+      final MediaStreamTrack track = receiver.track();
+      final String trackId = track.id();
+      final String receiverId = receiver.id();
+      final String streamId = mediaStreams.length == 0 ? "" : mediaStreams[0].getId();
+      final boolean audio = "audio".equals(track.kind());
+      final List<ConstraintsMap> planBEvents = new ArrayList<>();
+      final ConstraintsArray streams = new ConstraintsArray();
+      for (MediaStream stream : mediaStreams) {
+        ConstraintsMap event = new ConstraintsMap();
+        event.putString("event", "onAddTrack");
+        event.putString("streamId", stream.getId());
+        event.putString("ownerTag", id);
+        event.putString("trackId", trackId);
+        Map<String, Object> trackInfo = mediaTrackToMap(track);
+        trackInfo.put("label", track.kind());
+        trackInfo.put("remote", true);
+        event.putMap("track", trackInfo);
+        planBEvents.add(event);
+        streams.pushMap(new ConstraintsMap(mediaStreamToMap(stream)));
       }
-    }
-
-    // For unified-plan
-    ConstraintsMap params = new ConstraintsMap();
-    ConstraintsArray streams = new ConstraintsArray();
-    for (int i = 0; i < mediaStreams.length; i++) {
-      MediaStream stream = mediaStreams[i];
-      streams.pushMap(new ConstraintsMap(mediaStreamToMap(stream)));
-    }
-
-    params.putString("event", "onTrack");
-    params.putArray("streams", streams.toArrayList());
-    params.putMap("track", mediaTrackToMap(receiver.track()));
-    params.putMap("receiver", rtpReceiverToMap(receiver));
-
-    if (this.configuration.sdpSemantics == PeerConnection.SdpSemantics.UNIFIED_PLAN) {
-      List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
-      for (RtpTransceiver transceiver : transceivers) {
-        if (transceiver.getReceiver() != null && receiver.id().equals(transceiver.getReceiver().id())) {
-          String transceiverId = transceiver.getMid();
-          if (null == transceiverId) {
-            transceiverId = stateProvider.getNextStreamUUID();
-            this.transceivers.put(transceiverId,transceiver);
+      final ConstraintsMap params = new ConstraintsMap();
+      params.putString("event", "onTrack");
+      params.putArray("streams", streams.toArrayList());
+      params.putMap("track", mediaTrackToMap(track));
+      params.putMap("receiver", rtpReceiverToMap(receiver));
+      return () -> {
+        // Callback-owned receiver tracks are independent of wrappers returned
+        // by getTransceivers(); overlay lookup never refreshes that list.
+        remoteTracks.put(trackId, track, receiverId);
+        stateProvider.onRemoteTrackAdded(id, streamId, track);
+        for (ConstraintsMap event : planBEvents) sendEvent(event);
+        if (audio) AudioSwitchManager.instance.start();
+        if (configuration.sdpSemantics == PeerConnection.SdpSemantics.UNIFIED_PLAN) {
+          for (RtpTransceiver transceiver : peerConnection.getTransceivers()) {
+            if (receiverId.equals(transceiver.getReceiver().id())) {
+              String transceiverId = transceiver.getMid();
+              if (transceiverId == null) {
+                transceiverId = stateProvider.getNextStreamUUID();
+                transceivers.put(transceiverId, transceiver);
+              }
+              params.putMap("transceiver", transceiverToMap(transceiverId, transceiver));
+              break;
+            }
           }
-          params.putMap("transceiver", transceiverToMap(transceiverId, transceiver));
         }
-      }
-    }
-    sendEvent(params);
+        sendEvent(params);
+      };
+    });
   }
 
   @Override
-  public void onRemoveTrack(RtpReceiver rtpReceiver) {
-    Log.d(TAG, "onRemoveTrack");
-
-    MediaStreamTrack track = rtpReceiver.track();
-    String trackId = track.id();
-    ConstraintsMap trackInfo = new ConstraintsMap();
-    trackInfo.putString("id", trackId);
-    trackInfo.putString("label", track.kind());
-    trackInfo.putString("kind", track.kind());
-    trackInfo.putBoolean("enabled", track.enabled());
-    trackInfo.putString("readyState", track.state().toString());
-    trackInfo.putBoolean("remote", true);
-    ConstraintsMap params = new ConstraintsMap();
-    params.putString("event", "onRemoveTrack");
-    params.putString("trackId", track.id());
-    params.putMap("track", trackInfo.toMap());
-    sendEvent(params);
+  public void onRemoveTrack(RtpReceiver receiver) {
+    trackEvents.snapshot(() -> {
+      final MediaStreamTrack track = receiver.track();
+      if (track == null) return () -> {};
+      final String trackId = track.id();
+      final String receiverId = receiver.id();
+      Map<String, Object> trackInfo = mediaTrackToMap(track);
+      trackInfo.put("label", track.kind());
+      trackInfo.put("remote", true);
+      final ConstraintsMap params = new ConstraintsMap();
+      params.putString("event", "onRemoveTrack");
+      params.putString("trackId", trackId);
+      params.putMap("track", trackInfo);
+      return () -> { remoteTracks.removeOwned(trackId, receiverId); sendEvent(params); };
+    });
   }
 
   @Override
@@ -1242,25 +1215,6 @@ class PeerConnectionObserver implements PeerConnection.Observer, EventChannel.St
     ConstraintsMap params = new ConstraintsMap();
     params.putArray("transceivers", transceiversParams.toArrayList());
     result.success(params.toMap());
-  }
-
-  protected MediaStreamTrack getTransceiversTrack(String trackId) {
-    if (this.configuration.sdpSemantics != PeerConnection.SdpSemantics.UNIFIED_PLAN) {
-      return null;
-    }
-    MediaStreamTrack track = null;
-    List<RtpTransceiver> transceivers = peerConnection.getTransceivers();
-    for (RtpTransceiver transceiver : transceivers) {
-      RtpReceiver receiver = transceiver.getReceiver();
-      if (receiver != null) {
-        MediaStreamTrack receiverTrack = receiver.track();
-        if (receiverTrack != null && receiverTrack.id().equals(trackId)) {
-          track = receiverTrack;
-          break;
-        }
-      }
-    }
-    return track;
   }
 
   MediaStreamTrack getRemoteTrack(String trackId) {

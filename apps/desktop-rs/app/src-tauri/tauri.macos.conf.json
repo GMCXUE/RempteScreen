@@ -1,5 +1,8 @@
 {
   "bundle": {
-    "externalBin": ["binaries/macos-audio-capture"]
+    "externalBin": [
+      "binaries/macos-audio-capture",
+      "binaries/macos-camera-capture"
+    ]
   }
 }

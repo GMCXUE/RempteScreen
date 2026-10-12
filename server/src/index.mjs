@@ -19,12 +19,32 @@
 //   健康   GET    /v1/health
 
 import http from 'node:http';
+import { createSocialHandler, videoHandlers } from './social.mjs';
 import { config } from './config.mjs';
 import { openDatabase, purgeExpiredSessions, closeDatabase } from './db.mjs';
 import * as handlers from './handlers.mjs';
 import { startSweeper } from './requests.mjs';
+import * as updates from './updates.mjs';
+import * as hotUpdates from './hot_updates.mjs';
 
 const routes = [
+  ['PUT','/v1/social/videos/:clientId',videoHandlers.upload],
+  ['GET','/v1/social/videos/:messageId',videoHandlers.download],
+  ['HEAD','/v1/social/videos/:messageId',videoHandlers.download],
+  ['GET','/v1/hot-updates/check',hotUpdates.check],
+  ['POST','/v1/admin/hot-releases',hotUpdates.publish],
+  ['GET','/v1/admin/hot-releases',hotUpdates.list],
+  ['DELETE','/v1/admin/hot-releases/:releaseId',hotUpdates.withdraw],
+  ['GET','/v1/updates/check',updates.checkUpdate],
+  ['GET','/v1/updates/packages/:releaseId',updates.downloadUpdatePackage],
+  ['HEAD','/v1/updates/packages/:releaseId',updates.downloadUpdatePackage],
+  ['PUT','/v1/admin/update-packages/:sha256',updates.uploadUpdatePackage],
+  ['POST','/v1/admin/releases',updates.createRelease],
+  ['GET','/v1/admin/releases',updates.listReleases],
+  ['GET','/v1/admin/releases/:releaseId',updates.getRelease],
+  ['PATCH','/v1/admin/releases/:releaseId',updates.editRelease],
+  ['DELETE','/v1/admin/releases/:releaseId',updates.withdrawRelease],
+  ...['account-profile','avatar-image','avatar','state','search','request','decision','profile','history','message-context','clear-history','messages','send','send-image','message-image','message-video','recall','read','call-start','call-state','call-decision','call-end'].map(operation => [operation === 'state' ? 'GET' : 'POST', `/v1/social/${operation}`, createSocialHandler(operation)]),
   ['POST', '/v1/auth/register', handlers.registerAccount],
   ['POST', '/v1/auth/login', handlers.login],
   ['POST', '/v1/auth/logout', handlers.logout],
@@ -75,7 +95,7 @@ function matchRoute(method, pathname) {
   return null;
 }
 
-function readJsonBody(request) {
+function readJsonBody(request, maxBytes = config.body.maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -84,10 +104,12 @@ function readJsonBody(request) {
     request.on('data', (chunk) => {
       if (settled) return;
       size += chunk.length;
-      if (size > config.body.maxBytes) {
+      if (size > maxBytes) {
         settled = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('请求体过大'), { statusCode: 413 }));
-        request.destroy();
+        // Discard the rest so the JSON 413 response can reach the client.
+        // Destroying this request also closes the socket before it is sent.
         return;
       }
       chunks.push(chunk);
@@ -135,7 +157,7 @@ const server = http.createServer(async (request, response) => {
 
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+  response.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
   response.setHeader('Cache-Control', 'no-store');
 
   if (request.method === 'OPTIONS') {
@@ -152,7 +174,9 @@ const server = http.createServer(async (request, response) => {
 
   try {
     const hasBody = request.method === 'POST' || request.method === 'PUT' || request.method === 'PATCH' || request.method === 'DELETE';
-    const body = hasBody ? await readJsonBody(request) : {};
+    const rawUpload=(pathname.startsWith('/v1/admin/update-packages/')||pathname.startsWith('/v1/social/videos/'))&&request.method==='PUT';
+    if(pathname.startsWith('/v1/admin/'))await updates.requireUpdateAdmin(request);
+    const body = hasBody&&!rawUpload ? await readJsonBody(request, pathname === '/v1/admin/hot-releases'?8*1024*1024:pathname.startsWith('/v1/admin/releases')?64*1024: pathname === '/v1/social/send-image' ? 12 * 1024 * 1024 : pathname === '/v1/social/avatar' ? 512 * 1024 : config.body.maxBytes) : {};
     const result = await route.handler({
       body,
       params: route.params,
@@ -171,6 +195,7 @@ const server = http.createServer(async (request, response) => {
     send(response, result.status, result.body);
   } catch (error) {
     const status = error.statusCode ?? 500;
+    if (status === 413) response.setHeader('Connection', 'close');
     log(request.method, pathname, status, error.message);
     send(response, status, {
       error: { code: status === 500 ? 'internal_error' : 'bad_request', message: error.message },

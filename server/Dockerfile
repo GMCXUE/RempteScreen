@@ -1,6 +1,6 @@
 # 设备目录服务的容器镜像。
 #
-# 持久化：PostgreSQL（docker-compose 里独立容器）。本镜像只需多装 pg 一个纯 JS 依赖。
+# 持久化：PostgreSQL（docker-compose 里独立容器）。头像处理使用 sharp，数据库连接使用 pg。
 
 FROM node:22-alpine
 
@@ -10,8 +10,8 @@ COPY package.json package-lock.json* ./
 COPY src ./src
 COPY scripts ./scripts
 
-# pg 是纯 JS 包，alpine 上无需编译
-RUN npm install --omit=dev
+# sharp 安装对应平台的预编译 libvips，保留 optional dependencies。
+RUN apk add --no-cache ffmpeg && npm install --omit=dev
 
 ENV NODE_ENV=production
 ENV PORT=8787

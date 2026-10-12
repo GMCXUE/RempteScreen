@@ -6,6 +6,13 @@ const num = (value, fallback) => {
 };
 
 export const config = {
+  updates: {
+    packageDir: process.env.UPDATE_PACKAGE_DIR ?? './data/update-packages',
+    privateKeyFile: process.env.UPDATE_SIGNING_KEY_FILE ?? '',
+    adminToken: process.env.UPDATE_ADMIN_TOKEN ?? '',
+    adminTokenFile: process.env.UPDATE_ADMIN_TOKEN_FILE ?? '',
+    maxPackageBytes: 512 * 1024 * 1024,
+  },
   port: num(process.env.PORT, 8787),
   host: process.env.HOST ?? '127.0.0.1',
 

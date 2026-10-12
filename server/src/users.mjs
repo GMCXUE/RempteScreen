@@ -1,7 +1,9 @@
 // 用户账号与会话。
 //
-// 登录名用邮箱；邮箱统一转小写存储，避免 Alice@x.com 与 alice@x.com 被当成两个账号。
+// 登录支持公开数字账号 ID 或邮箱，内部 user ID 保持不变。
 
+import { profileFields } from './account_profile.mjs';
+import { avatarFields } from './avatars.mjs';
 import { getPool, query } from './db.mjs';
 import { config } from './config.mjs';
 import { createPasswordRecord, verifyPassword, randomToken, sha256, newId } from './security.mjs';
@@ -16,6 +18,12 @@ const DECOY_HASH = '00'.repeat(32);
 
 export async function findUserByEmail(email) {
   const rows = await query('SELECT * FROM users WHERE email = $1', [normalizeEmail(email)]);
+  return rows[0] ?? null;
+}
+
+export async function findUserByLogin(login) {
+  const key = normalizeEmail(login);
+  const rows = await query('SELECT * FROM users WHERE account_id = $1 OR email = $1 LIMIT 1', [key]);
   return rows[0] ?? null;
 }
 
@@ -59,7 +67,7 @@ export async function createUser({ email, password, name }) {
 }
 
 export async function authenticate({ email, password }) {
-  const user = await findUserByEmail(email);
+  const user = await findUserByLogin(email);
 
   if (!user) {
     await verifyPassword(password, DECOY_SALT, DECOY_HASH);
@@ -108,5 +116,5 @@ export async function revokeSession(token) {
 
 /** 对外的用户表示，绝不包含密码字段。 */
 export function toPublicUser(user) {
-  return { id: user.id, email: user.email, name: user.name, createdAt: user.created_at };
+  return { id: user.id, accountId: user.account_id, email: user.email, name: user.name, ...avatarFields(user), ...profileFields(user), createdAt: user.created_at };
 }

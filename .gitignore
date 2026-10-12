@@ -49,4 +49,6 @@ ui-preview.png
 **/.env
 !**/.env.example
 *.pem
+!/config/shorebird-public.pem
 *.key
+.local/

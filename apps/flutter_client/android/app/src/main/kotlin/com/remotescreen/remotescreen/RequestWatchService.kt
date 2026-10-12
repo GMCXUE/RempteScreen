@@ -123,6 +123,12 @@ class RequestWatchService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTimeout(startId:Int,fgsType:Int) {
+        // Android limits dataSync standby time. Stop only this watcher so the
+        // independent remoteMessaging service can continue receiving messages.
+        running=false;worker?.interrupt();stopSelf()
+    }
+
     override fun onDestroy() {
         running = false
         worker?.interrupt()
@@ -202,7 +208,7 @@ class RequestWatchService : Service() {
             val requestId = item.optString("requestId")
             if (requestId.isEmpty() || notifiedRequests.contains(requestId)) continue
             notifiedRequests.add(requestId)
-            notifyRequest(requestId, item.optString("viewerName", "未知设备"))
+            notifyRequest(requestId, item.optString("viewerName", "未知设备"), item.optString("purpose") == "files")
         }
     }
 
@@ -251,7 +257,7 @@ class RequestWatchService : Service() {
             .build()
     }
 
-    private fun notifyRequest(requestId: String, viewerName: String) {
+    private fun notifyRequest(requestId: String, viewerName: String, filesOnly: Boolean) {
         val content = PendingIntent.getActivity(
             this,
             0,
@@ -262,8 +268,8 @@ class RequestWatchService : Service() {
         val deny = actionIntent(this, ACTION_DENY, requestId)
 
         val notification = Notification.Builder(this, CHANNEL_REQUESTS)
-            .setContentTitle("收到观看请求")
-            .setContentText("「$viewerName」请求观看本机屏幕")
+            .setContentTitle(if (filesOnly) "收到文件传输请求" else "收到观看请求")
+            .setContentText(if (filesOnly) "「$viewerName」请求传输文件" else "「$viewerName」请求观看本机屏幕")
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentIntent(content)
             .setAutoCancel(true)

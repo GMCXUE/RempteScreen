@@ -7,10 +7,16 @@
 // 但语义一致：应用重启后仍保持登录状态。
 
 import 'dart:convert';
+import 'dart:async';
+import 'dart:io';
+import 'package:crypto/crypto.dart' as digest;
+import 'package:flutter/foundation.dart';
+import 'chat_outbox.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config.dart';
+import 'native_service.dart';
 
 /// 全局唯一实例，各界面直接 import api.dart 使用
 final ApiService api = ApiService(baseUrl: kServerUrl);
@@ -27,13 +33,33 @@ class ApiException implements Exception {
 }
 
 class Account {
-  Account({required this.id, required this.email, required this.name});
+  Account(
+      {required this.id,
+      required this.email,
+      required this.name,
+      this.accountId = '',
+      this.avatarId = 'cat',
+      this.avatarRevision = '',
+      this.bio = '',
+      this.region = '',
+      this.gender = '',
+      this.birthday = ''});
+  final String avatarId;
+  final String avatarRevision, bio, region, gender, birthday;
+  final String accountId;
   final String id;
   final String email;
   final String name;
 
   factory Account.fromJson(Map<String, dynamic> json) => Account(
         id: json['id'] as String,
+        accountId: json['accountId'] as String? ?? '',
+        avatarId: json['avatarId'] as String? ?? 'cat',
+        avatarRevision: json['avatarRevision'] as String? ?? '',
+        bio: json['bio'] as String? ?? '',
+        region: json['region'] as String? ?? '',
+        gender: json['gender'] as String? ?? '',
+        birthday: json['birthday'] as String? ?? '',
         email: json['email'] as String,
         name: json['name'] as String,
       );
@@ -68,6 +94,7 @@ class DeviceRegistration {
     required this.roomName,
     required this.livekitUrl,
     required this.publishToken,
+    this.fileToken = '',
     required this.deviceName,
   });
   final String deviceId;
@@ -76,6 +103,7 @@ class DeviceRegistration {
   final String roomName;
   final String livekitUrl;
   final String publishToken;
+  final String fileToken;
   final String deviceName;
 
   /// 换掉连接密码，其余字段不变。
@@ -86,6 +114,7 @@ class DeviceRegistration {
         roomName: roomName,
         livekitUrl: livekitUrl,
         publishToken: publishToken,
+        fileToken: fileToken,
         deviceName: deviceName,
       );
 
@@ -97,6 +126,7 @@ class DeviceRegistration {
         roomName: json['roomName'] as String,
         livekitUrl: json['livekitUrl'] as String,
         publishToken: json['token'] as String,
+        fileToken: json['fileToken'] as String? ?? '',
         deviceName: json['deviceName'] as String? ?? '未命名设备',
       );
 }
@@ -149,16 +179,19 @@ class ConnectRequestHandle {
 class ConnectRequestInfo {
   ConnectRequestInfo({
     required this.requestId,
+    this.purpose = 'screen',
     required this.viewerName,
     required this.expiresInSec,
   });
 
   final String requestId;
+  final String purpose;
   final String viewerName;
   final int expiresInSec;
 
   factory ConnectRequestInfo.fromJson(Map<String, dynamic> json) {
     return ConnectRequestInfo(
+      purpose: json['purpose'] as String? ?? 'screen',
       requestId: json['requestId'] as String? ?? '',
       viewerName: json['viewerName'] as String? ?? '未知设备',
       expiresInSec: (json['expiresInSec'] as num?)?.toInt() ?? 60,
@@ -170,6 +203,59 @@ class ApiService {
   ApiService({required this.baseUrl});
 
   final String baseUrl;
+  Future<ChatSender> captureChatSender() async {
+    final token = await _token();
+    if (token == null) throw ApiException('unauthorized', '请先登录');
+    return (operation, body) => operation == 'send-video'
+        ? _uploadChatVideo(body, token)
+        : _request('POST', '/v1/social/$operation',
+            body: body,
+            timeoutSeconds: operation == 'send-image' ? 45 : 15,
+            expectedToken: token);
+  }
+
+  Future<void> startAccountNotifications(Account account) async {
+    final token = await _token();
+    if (token != null) await NativeMessaging.start(baseUrl, token, account.id);
+  }
+
+  Future<Map<String, dynamic>> social(String operation,
+      [Map<String, dynamic>? body]) {
+    if (!const {
+      'account-profile',
+      'avatar-image',
+      'avatar',
+      'state',
+      'search',
+      'request',
+      'decision',
+      'profile',
+      'history',
+      'message-context',
+      'clear-history',
+      'messages',
+      'send',
+      'send-image',
+      'message-image',
+      'message-video',
+      'recall',
+      'read',
+      'call-start',
+      'call-state',
+      'call-decision',
+      'call-end'
+    }.contains(operation)) {
+      throw ArgumentError('不支持的好友操作');
+    }
+    return _request(
+        operation == 'state' ? 'GET' : 'POST', '/v1/social/$operation',
+        body: body,
+        timeoutSeconds:
+            operation == 'send-image' || operation == 'message-image'
+                ? 45
+                : 15);
+  }
+
   static const _tokenKey = 'remotescreen.accountToken';
 
   Future<String?> _token() async {
@@ -179,6 +265,7 @@ class ApiService {
 
   Future<void> _saveToken(String? token) async {
     final prefs = await SharedPreferences.getInstance();
+    if (prefs.getString(_tokenKey) != token) chatOutbox.reset();
     if (token == null) {
       await prefs.remove(_tokenKey);
     } else {
@@ -192,27 +279,41 @@ class ApiService {
     Map<String, dynamic>? body,
     bool auth = true,
     int timeoutSeconds = 15,
+    String? expectedToken,
   }) async {
     final headers = <String, String>{};
     if (body != null) headers['Content-Type'] = 'application/json';
 
-    if (auth) {
-      final token = await _token();
-      if (token != null) headers['Authorization'] = 'Bearer $token';
+    final token = auth ? await _token() : null;
+    if (expectedToken != null && token != expectedToken) {
+      throw ApiException('session_changed', '账号已变化，请重新发送');
     }
+    if (token != null) headers['Authorization'] = 'Bearer $token';
 
     http.Response response;
     try {
       final request = http.Request(method, Uri.parse('$baseUrl$path'))
         ..headers.addAll(headers);
-      if (body != null) request.body = jsonEncode(body);
+      if (body != null) {
+        request.body = path == '/v1/social/send-image' &&
+                (body['image'] as String? ?? '').length > 1024 * 1024
+            ? await compute(jsonEncode, body)
+            : jsonEncode(body);
+      }
 
-      final streamed = await request.send().timeout(Duration(seconds: timeoutSeconds));
-      response = await http.Response.fromStream(streamed);
+      final streamed =
+          await request.send().timeout(Duration(seconds: timeoutSeconds));
+      response = await http.Response.fromStream(streamed)
+          .timeout(Duration(seconds: timeoutSeconds));
     } catch (cause) {
       throw ApiException('network', '连不上服务器，请检查网络或服务器地址');
     }
 
+    return _parseResponse(response, token, auth);
+  }
+
+  Future<Map<String, dynamic>> _parseResponse(
+      http.Response response, String? token, bool auth) async {
     final text = response.body;
     Map<String, dynamic> parsed = {};
     try {
@@ -224,7 +325,9 @@ class ApiService {
     if (response.statusCode >= 400) {
       final error = parsed['error'] as Map<String, dynamic>?;
       // 令牌失效就地清掉，避免界面一直拿着坏令牌重试
-      if (response.statusCode == 401 && auth) await _saveToken(null);
+      if (response.statusCode == 401 && auth && await _token() == token) {
+        await _saveToken(null);
+      }
       throw ApiException(
         error?['code'] as String? ?? 'unknown',
         error?['message'] as String? ?? '请求失败（HTTP ${response.statusCode}）',
@@ -235,11 +338,108 @@ class ApiService {
     return parsed;
   }
 
+  Future<Map<String, dynamic>> _uploadChatVideo(
+      Map<String, dynamic> body, String token) async {
+    if (await _token() != token) {
+      throw ApiException('session_changed', '账号已变化，请重新发送');
+    }
+    final file = File(body['videoPath'] as String);
+    int size;
+    try {
+      size = await file.length();
+    } on FileSystemException {
+      throw ApiException('video_missing', '视频文件不可用，请重新选择');
+    }
+    if (size > 50 * 1024 * 1024) {
+      throw ApiException('too_large', '视频过大，请选择 50 MB 以内的视频');
+    }
+    final url = Uri.parse(
+            '$baseUrl/v1/social/videos/${Uri.encodeComponent(body['clientId'])}')
+        .replace(queryParameters: {'peerId': body['peerId']});
+    final request = http.StreamedRequest('PUT', url)
+      ..headers.addAll({
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/octet-stream'
+      })
+      ..contentLength = size;
+    try {
+      final reply = request.send().timeout(const Duration(seconds: 240));
+      unawaited(reply.then<void>((_) {}, onError: (Object _) {}));
+      await request.sink
+          .addStream(file.openRead())
+          .timeout(const Duration(seconds: 240));
+      await request.sink.close();
+      final response = await http.Response.fromStream(await reply)
+          .timeout(const Duration(seconds: 240));
+      return await _parseResponse(response, token, true);
+    } on ApiException {
+      rethrow;
+    } catch (_) {
+      throw ApiException('network', '连不上服务器，请检查网络或服务器地址');
+    }
+  }
+
+  Future<File> downloadChatVideo(String peerId, String messageId) async {
+    final token = await _token();
+    if (token == null) throw ApiException('unauthorized', '请先登录');
+    final result = await _request('POST', '/v1/social/message-video',
+        body: {'peerId': peerId, 'messageId': messageId}, expectedToken: token);
+    final meta = result['message']?['video'] as Map<String, dynamic>?;
+    final size = (meta?['bytes'] as num?)?.toInt() ?? 0, sha = meta?['sha256'];
+    if (size < 1 ||
+        size > 50 * 1024 * 1024 ||
+        sha is! String ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(sha)) {
+      throw ApiException('video', '视频信息无效');
+    }
+    final dir = await Directory.systemTemp.createTemp('rs-chat-video-');
+    final file = File('${dir.path}/video.mp4');
+    try {
+      final request = http.Request(
+          'GET',
+          Uri.parse(
+                  '$baseUrl/v1/social/videos/${Uri.encodeComponent(messageId)}')
+              .replace(queryParameters: {'peerId': peerId}))
+        ..headers['Authorization'] = 'Bearer $token';
+      final response =
+          await request.send().timeout(const Duration(seconds: 30));
+      if (response.statusCode != 200) {
+        await _parseResponse(
+            await http.Response.fromStream(response), token, true);
+        throw ApiException('video', '视频下载失败，请重试');
+      }
+      final sink = file.openWrite();
+      var bytes = 0;
+      try {
+        await for (final chunk
+            in response.stream.timeout(const Duration(seconds: 30))) {
+          bytes += chunk.length;
+          if (bytes > size) throw ApiException('video', '视频下载校验失败，请重试');
+          sink.add(chunk);
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+      if (bytes != size || await compute(_chatVideoDigest, file.path) != sha) {
+        throw ApiException('video', '视频下载校验失败，请重试');
+      }
+      if (await _token() != token) {
+        throw ApiException('session_changed', '账号已变化，请重新打开视频');
+      }
+      return file;
+    } catch (error) {
+      await dir.delete(recursive: true);
+      rethrow;
+    }
+  }
+
   /// 设备凭据的持久化。
   ///
   /// 服务端靠它识别「这是同一台设备」—— 不存的话每次启动都会被当作新设备，
   /// 账号下会堆一堆离线设备。桌面端对应的是 device-store.js（0600 权限的 JSON）。
-  Future<({String? deviceId, String? sessionToken})> loadDeviceCredentials() async {
+  Future<({String? deviceId, String? sessionToken})>
+      loadDeviceCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     return (
       deviceId: prefs.getString('remotescreen.deviceId'),
@@ -261,11 +461,13 @@ class ApiService {
     required String password,
     required String name,
   }) async {
-    final result = await _request('POST', '/v1/auth/register', body: {
-      'email': email,
-      'password': password,
-      'name': name,
-    }, auth: false);
+    final result = await _request('POST', '/v1/auth/register',
+        body: {
+          'email': email,
+          'password': password,
+          'name': name,
+        },
+        auth: false);
     await _saveToken(result['token'] as String);
     return Account.fromJson(result['user'] as Map<String, dynamic>);
   }
@@ -274,10 +476,12 @@ class ApiService {
     required String email,
     required String password,
   }) async {
-    final result = await _request('POST', '/v1/auth/login', body: {
-      'email': email,
-      'password': password,
-    }, auth: false);
+    final result = await _request('POST', '/v1/auth/login',
+        body: {
+          'email': email,
+          'password': password,
+        },
+        auth: false);
     await _saveToken(result['token'] as String);
     return Account.fromJson(result['user'] as Map<String, dynamic>);
   }
@@ -371,10 +575,12 @@ class ApiService {
   Future<ConnectRequestHandle> createConnectRequest({
     required String deviceId,
     String viewerName = 'Flutter 观看端',
+    String purpose = 'screen',
   }) async {
     final result = await _request('POST', '/v1/connect-requests', body: {
       'deviceId': deviceId,
       'viewerName': viewerName,
+      'purpose': purpose,
     });
     return ConnectRequestHandle(
       requestId: result['requestId'] as String? ?? '',
@@ -386,7 +592,8 @@ class ApiService {
 
   /// 轮询观看请求：还在等待返回 null；同意则直接返回可连接的会话；
   /// 被拒绝或过期抛出带原因的异常。
-  Future<ViewerSession?> pollConnectRequest(String requestId, {int waitSec = 0}) async {
+  Future<ViewerSession?> pollConnectRequest(String requestId,
+      {int waitSec = 0}) async {
     final path = waitSec > 0
         ? '/v1/connect-requests/$requestId?wait=$waitSec'
         : '/v1/connect-requests/$requestId';
@@ -396,6 +603,8 @@ class ApiService {
         return ViewerSession.fromJson({...result, 'via': 'approval'});
       case 'denied':
         throw ApiException('denied', '对方拒绝了这次观看请求');
+      case 'cancelled':
+        throw ApiException('cancelled', '连接请求已取消');
       case 'expired':
         throw ApiException('expired', '对方没有在有效期内确认，请求已过期');
       default:
@@ -410,7 +619,8 @@ class ApiService {
     required String sessionToken,
     String? password,
   }) async {
-    final result = await _request('POST', '/v1/devices/$deviceId/password', body: {
+    final result =
+        await _request('POST', '/v1/devices/$deviceId/password', body: {
       'sessionToken': sessionToken,
       if (password != null) 'password': password,
     });
@@ -439,12 +649,18 @@ class ApiService {
   Future<ViewerSession> connect({
     required String deviceId,
     String? password,
+    String viewerName = 'Flutter 观看端',
+    String purpose = 'screen',
   }) async {
     final result = await _request('POST', '/v1/connect', body: {
       'deviceId': deviceId,
       if (password != null && password.isNotEmpty) 'password': password,
-      'viewerName': 'Flutter 观看端',
+      'viewerName': viewerName,
+      'purpose': purpose,
     });
     return ViewerSession.fromJson(result);
   }
 }
+
+Future<String> _chatVideoDigest(String path) async =>
+    (await digest.sha256.bind(File(path).openRead()).first).toString();

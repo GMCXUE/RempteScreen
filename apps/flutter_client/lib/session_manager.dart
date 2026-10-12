@@ -17,6 +17,8 @@ import 'package:livekit_client/livekit_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'call_controller.dart';
+import 'file_transfer.dart';
 import 'native_service.dart';
 
 /// 投屏质量设置（持久化到 SharedPreferences）。
@@ -58,11 +60,23 @@ class ScreenShareSettings {
   VideoEncoding toEncoding() {
     final int maxBitrate;
     if (height == 0) {
-      maxBitrate = switch (fps) { 60 => 12 * 1000 * 1000, 30 => 8 * 1000 * 1000, _ => 5 * 1000 * 1000 };
+      maxBitrate = switch (fps) {
+        60 => 12 * 1000 * 1000,
+        30 => 8 * 1000 * 1000,
+        _ => 5 * 1000 * 1000
+      };
     } else if (height <= 720) {
-      maxBitrate = switch (fps) { 60 => 4 * 1000 * 1000, 30 => 2500 * 1000, _ => 1500 * 1000 };
+      maxBitrate = switch (fps) {
+        60 => 4 * 1000 * 1000,
+        30 => 2500 * 1000,
+        _ => 1500 * 1000
+      };
     } else {
-      maxBitrate = switch (fps) { 60 => 6 * 1000 * 1000, 30 => 3800 * 1000, _ => 2500 * 1000 };
+      maxBitrate = switch (fps) {
+        60 => 6 * 1000 * 1000,
+        30 => 3800 * 1000,
+        _ => 2500 * 1000
+      };
     }
     return VideoEncoding(maxBitrate: maxBitrate, maxFramerate: fps);
   }
@@ -88,11 +102,11 @@ class ScreenShareSettings {
 /// 一个观看会话的状态。
 enum ViewingSessionState {
   connecting, // 正在连接
-  waiting,    // 已连上但对方还没开始投送
-  live,       // 画面正常
+  waiting, // 已连上但对方还没开始投送
+  live, // 画面正常
   reconnecting, // 网络波动重连中
-  peerEnded,  // 对端停止了投送（会话保留，对方恢复后自动回到 live）
-  ended,      // 已断开
+  peerEnded, // 对端停止投送，清理连接并自动结束观看
+  ended, // 已断开
 }
 
 /// 进行中的一路观看会话。
@@ -102,15 +116,47 @@ class ViewingSession extends ChangeNotifier {
     required this.deviceId,
     required this.deviceName,
     required this.room,
+    required this.fileTransfer,
+    required this.call,
+    this.fileOnly = false,
   }) {
     // livekit_client 的 Room 是 ChangeNotifier，轨道与状态变化都会通知
+    _peerEvents = room.createListener()
+      ..on<ParticipantDisconnectedEvent>((event) {
+        if (event.participant.identity == 'caster-$deviceId') _endByPeer();
+      })
+      ..on<TrackUnpublishedEvent>((event) {
+        if (!fileOnly &&
+            event.participant.identity == 'caster-$deviceId' &&
+            (event.publication.source == TrackSource.screenShareVideo ||
+                (event.publication.source == TrackSource.unknown &&
+                    event.publication.name == 'screen'))) {
+          _endByPeer();
+        }
+      });
     room.addListener(_syncFromRoom);
+    fileTransfer.addListener(_syncFileTransfer);
+    call.addListener(_syncCall);
+    _syncFromRoom();
   }
 
   final String id;
   final String deviceId;
   final String deviceName;
   final Room room;
+  final FileTransferController fileTransfer;
+  final CallController call;
+  final bool fileOnly;
+
+  late final EventsListener<RoomEvent> _peerEvents;
+  Timer? _reconnectTimer;
+  bool endedByPeer = false;
+
+  void _endByPeer() {
+    if (endedByPeer || state == ViewingSessionState.ended) return;
+    endedByPeer = true;
+    unawaited(disconnect());
+  }
 
   final DateTime startedAt = DateTime.now();
 
@@ -124,37 +170,46 @@ class ViewingSession extends ChangeNotifier {
   /// 注意房间事件是异步到达的：即使本会话已被手动断开，
   /// 迟到的回调也可能触发这里 —— 所以断开后要摘掉监听。
   void _syncFromRoom() {
+    if (state == ViewingSessionState.ended) return;
     // 对端画面
     RemoteVideoTrack? found;
     for (final participant in room.remoteParticipants.values) {
+      if (participant.identity != 'caster-$deviceId') continue;
       for (final publication in participant.videoTrackPublications) {
         final track = publication.track;
-        if (track is RemoteVideoTrack && publication.subscribed) {
+        if (track is RemoteVideoTrack &&
+            publication.subscribed &&
+            (publication.source == TrackSource.screenShareVideo ||
+                (publication.source == TrackSource.unknown &&
+                    publication.name == 'screen'))) {
           found ??= track;
         }
       }
     }
-    final hadVideo = videoTrack != null;
     videoTrack = found;
 
     // 连接状态映射
     switch (room.connectionState) {
       case ConnectionState.connected:
-        state = videoTrack != null
+        _reconnectTimer?.cancel();
+        _reconnectTimer = null;
+        state = fileOnly || videoTrack != null
             ? ViewingSessionState.live
-            : (hadVideo ? ViewingSessionState.live : ViewingSessionState.waiting);
+            : ViewingSessionState.waiting;
       case ConnectionState.reconnecting:
+        _reconnectTimer ??= Timer(const Duration(seconds: 30), _endByPeer);
         state = ViewingSessionState.reconnecting;
       case ConnectionState.disconnected:
         // 房间被服务端断开（对端把房间关了）→ 视为对端结束
-        state = ViewingSessionState.peerEnded;
+        _endByPeer();
+        return;
       default:
         state = ViewingSessionState.connecting;
     }
 
     // 音频轨订阅状态变化时记一条日志（排障用：确认远端音频有没有被订阅）
-    final hasAudioNow = room.remoteParticipants.values
-        .any((participant) => participant.audioTrackPublications.any((pub) => pub.subscribed));
+    final hasAudioNow = room.remoteParticipants.values.any((participant) =>
+        participant.audioTrackPublications.any((pub) => pub.subscribed));
     if (hasAudioNow != _lastAudioSubscribed) {
       _lastAudioSubscribed = hasAudioNow;
       debugPrint('RemoteScreen 音频轨订阅: $hasAudioNow');
@@ -166,15 +221,26 @@ class ViewingSession extends ChangeNotifier {
   /// 上一次的音频订阅状态（用于变化检测，避免刷日志）。
   bool _lastAudioSubscribed = false;
 
+  void _syncFileTransfer() => notifyListeners();
+  void _syncCall() => notifyListeners();
+
   /// 用户主动断开。
   ///
   /// 顺序很重要：**先标记结束并通知界面**，界面据此撤掉视频渲染器（否则会短暂渲染
   /// 已被销毁的轨道，触发原生层异常 → 真机上就是满屏红），然后再拆房间连接。
   /// 拆连接本身的异常不向用户抛：连接已经在断开了，这里失败不该影响体验。
   Future<void> disconnect() async {
+    if (state == ViewingSessionState.ended) return;
+    _reconnectTimer?.cancel();
+    _peerEvents.dispose();
+    videoTrack = null;
     room.removeListener(_syncFromRoom);
+    fileTransfer.removeListener(_syncFileTransfer);
+    call.removeListener(_syncCall);
     state = ViewingSessionState.ended;
     notifyListeners();
+    await fileTransfer.close();
+    call.close();
     try {
       await room.disconnect();
     } catch (error) {
@@ -203,13 +269,18 @@ class SessionManager extends ChangeNotifier {
 
   // ---- 心跳（设备在线）----
   Timer? _heartbeat;
+
   /// 长轮询循环的「代」：递增即让旧循环退出
   int _heartbeatGeneration = 0;
   DeviceRegistration? registration;
 
   // ---- 投送 ----
   Room? _publishRoom;
+  FileTransferController? _publishFileTransfer;
+  CallController? _publishCall;
   bool get publishing => _publishRoom != null;
+  FileTransferController? get publishFileTransfer => _publishFileTransfer;
+  CallController? get publishCall => _publishCall;
 
   /// 当前投屏质量设置（启动时加载，界面可改）
   ScreenShareSettings shareSettings = ScreenShareSettings.defaults;
@@ -221,9 +292,104 @@ class SessionManager extends ChangeNotifier {
 
   // ---- 观看会话 ----
   final Map<String, ViewingSession> _sessions = {};
+
   /// 进行中的观看会话（不含已断开的）
-  List<ViewingSession> get activeSessions =>
-      _sessions.values.where((s) => s.state != ViewingSessionState.ended).toList();
+  List<ViewingSession> get activeSessions => _sessions.values
+      .where((s) =>
+          !s.fileOnly &&
+          s.state != ViewingSessionState.ended &&
+          s.state != ViewingSessionState.peerEnded)
+      .toList();
+
+  List<ViewingSession> get fileSessions => _sessions.values
+      .where((s) =>
+          s.fileOnly &&
+          s.state != ViewingSessionState.ended &&
+          s.state != ViewingSessionState.peerEnded)
+      .toList();
+  Room? _fileHostRoom;
+  FileTransferController? fileHost;
+  String? fileHostError;
+  Timer? _fileHostReconnect;
+  int _fileHostGeneration = 0;
+  bool get fileReceivingReady =>
+      _fileHostRoom?.connectionState == ConnectionState.connected;
+  List<FileTransferProgress> get fileHistory => [
+        ...?fileHost?.history,
+        for (final session in _sessions.values.where((s) => s.fileOnly))
+          ...session.fileTransfer.history,
+      ]..sort((a, b) => b.id.compareTo(a.id));
+  int _connectionGeneration = 0;
+
+  Future<void> _startFileHost(DeviceRegistration reg) async {
+    _fileHostReconnect?.cancel();
+    _fileHostReconnect = null;
+    final attempt = ++_fileHostGeneration;
+    final previousRoom = _fileHostRoom;
+    final previousController = fileHost;
+    _fileHostRoom = null;
+    fileHost = null;
+    previousRoom?.removeListener(_fileHostRoomChanged);
+    if (previousController != null) await previousController.close();
+    await previousRoom?.disconnect();
+    await previousRoom?.dispose();
+    fileHostError = null;
+    if (reg.fileToken.isEmpty) {
+      fileHostError = '服务端尚未支持独立文件传输，请先更新服务端';
+      notifyListeners();
+      return;
+    }
+    final room = Room();
+    final controller = FileTransferController(room: room, receiveEnabled: true);
+    try {
+      await room.connect(reg.livekitUrl, reg.fileToken,
+          connectOptions: const ConnectOptions(autoSubscribe: false));
+      if (attempt != _fileHostGeneration ||
+          registration?.deviceId != reg.deviceId) {
+        await controller.close();
+        await room.disconnect();
+        await room.dispose();
+        return;
+      }
+      _fileHostRoom = room;
+      room.addListener(_fileHostRoomChanged);
+      fileHost = controller;
+      controller.addListener(notifyListeners);
+      fileHostError = null;
+      notifyListeners();
+    } catch (error) {
+      await controller.close();
+      await room.disconnect();
+      await room.dispose();
+      if (attempt == _fileHostGeneration &&
+          registration?.deviceId == reg.deviceId) {
+        fileHostError = '文件接收连接失败，正在重连：$error';
+        notifyListeners();
+        _scheduleFileHostReconnect(reg);
+      }
+    }
+  }
+
+  void _fileHostRoomChanged() {
+    final room = _fileHostRoom;
+    if (room == null || room.connectionState != ConnectionState.disconnected) {
+      notifyListeners();
+      return;
+    }
+    fileHostError = '文件接收连接已断开，正在重连…';
+    notifyListeners();
+    final reg = registration;
+    if (reg != null) _scheduleFileHostReconnect(reg);
+  }
+
+  void _scheduleFileHostReconnect(DeviceRegistration reg) {
+    _fileHostReconnect?.cancel();
+    _fileHostReconnect = Timer(const Duration(seconds: 3), () {
+      if (registration?.deviceId == reg.deviceId) {
+        unawaited(_startFileHost(reg));
+      }
+    });
+  }
 
   ViewingSession? sessionById(String id) => _sessions[id];
 
@@ -240,6 +406,7 @@ class SessionManager extends ChangeNotifier {
       deviceName: deviceName,
     );
     startHeartbeat(reg);
+    await _startFileHost(reg);
     // 让原生待命服务接管后台：MIUI 冻结应用后仍能收到观看请求
     await NativeWatchService.start(
       baseUrl: api.baseUrl,
@@ -296,7 +463,8 @@ class SessionManager extends ChangeNotifier {
       try {
         final request = http.Request(
           'GET',
-          Uri.parse('${api.baseUrl}/v1/devices/${reg.deviceId}/notifications/stream'),
+          Uri.parse(
+              '${api.baseUrl}/v1/devices/${reg.deviceId}/notifications/stream'),
         );
         request.headers['X-Device-Token'] = reg.sessionToken;
         request.headers['Accept'] = 'text/event-stream';
@@ -383,10 +551,8 @@ class SessionManager extends ChangeNotifier {
     final fresh = incoming
         .where((request) => !_handledRequestIds.contains(request.requestId))
         .toList();
-    if (fresh.isNotEmpty) {
-      pendingRequests = [...pendingRequests, ...fresh];
-      notifyListeners();
-    }
+    pendingRequests = fresh;
+    notifyListeners();
   }
 
   /// 待用户处理的观看请求（界面据此弹窗）。
@@ -417,7 +583,7 @@ class SessionManager extends ChangeNotifier {
 
     // 同意观看后自动开启投送（等价于手动打开「允许远程观看本设备」），
     // 否则对方连上了也看不到画面。
-    if (approve && !publishing) {
+    if (approve && request.purpose != 'files' && !publishing) {
       try {
         await startPublishing(reg);
       } catch (error) {
@@ -428,6 +594,9 @@ class SessionManager extends ChangeNotifier {
 
   void stopHeartbeat() {
     _heartbeatGeneration += 1; // 让长轮询循环自行退出
+    _fileHostGeneration += 1;
+    _fileHostReconnect?.cancel();
+    _fileHostReconnect = null;
     _heartbeat?.cancel();
     _heartbeat = null;
     registration = null;
@@ -443,7 +612,8 @@ class SessionManager extends ChangeNotifier {
 
     final room = Room(
       roomOptions: RoomOptions(
-        adaptiveStream: true,
+        // 原生悬浮窗仍在渲染时，Flutter 页面不可见不能暂停订阅。
+        adaptiveStream: false,
         dynacast: true,
         // 发布端编码上限：默认的 screenShareEncoding 是 1080p@15fps，
         // 不覆盖它，采集帧率再高也会被编码器钳到 15
@@ -458,14 +628,34 @@ class SessionManager extends ChangeNotifier {
     );
     _publishRoom = room;
 
+    void ensureCurrent() {
+      if (_publishRoom != room) throw StateError('投屏启动已取消');
+    }
+
     List<LocalTrack> tracks = [];
     try {
       await room.connect(reg.livekitUrl, reg.publishToken);
+      ensureCurrent();
+      try {
+        await AudioManager.instance.setSpeakerOutputPreferred(true);
+      } catch (_) {
+        // 扬声器路由失败不阻断屏幕投送。
+      }
+      final fileTransfer = FileTransferController(
+        room: room,
+        receiveEnabled: true,
+      );
+      fileTransfer.addListener(_onPublishFileTransferChanged);
+      _publishFileTransfer = fileTransfer;
+      final call = CallController(room, showFloatingVideo: true);
+      call.addListener(_onPublishCallChanged);
+      _publishCall = call;
       // Create audio/video together so they share one MediaProjection grant.
       tracks = await LocalVideoTrack.createScreenShareTracksWithAudio(
         shareSettings.toCaptureOptions(),
       );
       for (final track in tracks) {
+        ensureCurrent();
         if (track is LocalAudioTrack) {
           // Screen audio is music/media, not a voice call. Configure this before
           // publish starts the native audio engine so voice suppression stays off.
@@ -482,7 +672,17 @@ class SessionManager extends ChangeNotifier {
         }
       }
     } catch (_) {
-      _publishRoom = null;
+      if (_publishRoom == room) {
+        _publishRoom = null;
+        final fileTransfer = _publishFileTransfer;
+        _publishFileTransfer = null;
+        fileTransfer?.removeListener(_onPublishFileTransferChanged);
+        if (fileTransfer != null) await fileTransfer.close();
+        final call = _publishCall;
+        _publishCall = null;
+        call?.removeListener(_onPublishCallChanged);
+        call?.close();
+      }
       // Also release tracks that were created but not published when setup failed.
       for (final track in tracks) {
         await track.stop();
@@ -499,10 +699,21 @@ class SessionManager extends ChangeNotifier {
   Future<void> stopPublishing() async {
     final room = _publishRoom;
     _publishRoom = null;
+    final fileTransfer = _publishFileTransfer;
+    _publishFileTransfer = null;
+    fileTransfer?.removeListener(_onPublishFileTransferChanged);
+    if (fileTransfer != null) await fileTransfer.close();
+    final call = _publishCall;
+    _publishCall = null;
+    call?.removeListener(_onPublishCallChanged);
+    call?.close();
     await room?.disconnect();
     await room?.dispose();
     notifyListeners();
   }
+
+  void _onPublishFileTransferChanged() => notifyListeners();
+  void _onPublishCallChanged() => notifyListeners();
 
   // MARK: - 观看会话
 
@@ -510,9 +721,22 @@ class SessionManager extends ChangeNotifier {
   Future<ViewingSession> connectToDevice({
     required String deviceId,
     String? password,
+    String viewerName = 'RemoteScreen 移动端',
+    bool fileOnly = false,
+    WatchRequestToken? cancellation,
   }) async {
-    final session = await api.connect(deviceId: deviceId, password: password);
-    return _attachSession(session);
+    final generation = _connectionGeneration;
+    if (fileOnly && (registration?.fileToken.isEmpty ?? true)) {
+      throw ApiException('upgrade_required', '服务端尚未支持独立文件传输，请先更新服务端并重新登录');
+    }
+    final session = await api.connect(
+      deviceId: deviceId,
+      password: password,
+      viewerName: viewerName,
+      purpose: fileOnly ? 'files' : 'screen',
+    );
+    return _attachSession(session,
+        fileOnly: fileOnly, token: cancellation, generation: generation);
   }
 
   /// 观看一台设备：
@@ -521,14 +745,37 @@ class SessionManager extends ChangeNotifier {
   Future<ViewingSession> watchDevice({
     required String deviceId,
     String? password,
+    String viewerName = 'RemoteScreen 移动端',
+    bool fileOnly = false,
     void Function(String status)? onStatus,
     WatchRequestToken? token,
   }) async {
+    final generation = _connectionGeneration;
+    if (fileOnly && (registration?.fileToken.isEmpty ?? true)) {
+      throw ApiException('upgrade_required', '服务端尚未支持独立文件传输，请先更新服务端并重新登录');
+    }
     if (password != null && password.isNotEmpty) {
-      return connectToDevice(deviceId: deviceId, password: password);
+      return connectToDevice(
+        deviceId: deviceId,
+        password: password,
+        viewerName: viewerName,
+        fileOnly: fileOnly,
+        cancellation: token,
+      );
     }
 
-    final handle = await api.createConnectRequest(deviceId: deviceId);
+    final handle = await api.createConnectRequest(
+      deviceId: deviceId,
+      viewerName: viewerName,
+      purpose: fileOnly ? 'files' : 'screen',
+    );
+    if (handle.owned) {
+      return connectToDevice(
+          deviceId: deviceId,
+          viewerName: viewerName,
+          fileOnly: fileOnly,
+          cancellation: token);
+    }
     token?.requestId = handle.requestId;
 
     // 发起后立刻检查一次：用户可能在请求刚建好时就点了取消
@@ -537,7 +784,8 @@ class SessionManager extends ChangeNotifier {
       throw ApiException('cancelled', '已取消等待');
     }
 
-    onStatus?.call('已向「${handle.deviceName}」发送观看请求，等待对方同意…');
+    final requestKind = fileOnly ? '文件传输请求' : '观看请求';
+    onStatus?.call('已向「${handle.deviceName}」发送$requestKind，等待对方同意…');
 
     final deadline = DateTime.now().add(Duration(seconds: handle.expiresInSec));
     while (DateTime.now().isBefore(deadline)) {
@@ -547,32 +795,69 @@ class SessionManager extends ChangeNotifier {
       }
 
       // 长轮询：服务端挂住最多 20 秒，对方一决策就立刻返回
-      final granted = await api.pollConnectRequest(handle.requestId, waitSec: 20);
+      final granted =
+          await api.pollConnectRequest(handle.requestId, waitSec: 20);
+      if ((token?.cancelled ?? false) || generation != _connectionGeneration) {
+        await api.cancelConnectRequest(handle.requestId);
+        throw ApiException('cancelled', '已取消等待');
+      }
       if (granted != null) {
         onStatus?.call('对方已同意，正在连接…');
-        return _attachSession(granted);
+        return _attachSession(granted,
+            fileOnly: fileOnly, token: token, generation: generation);
       }
     }
     throw ApiException('timeout', '等待对方同意超时，请重试');
   }
 
-  Future<ViewingSession> _attachSession(ViewerSession session) async {
+  Future<ViewingSession> _attachSession(ViewerSession session,
+      {bool fileOnly = false,
+      WatchRequestToken? token,
+      required int generation}) async {
+    void checkCancelled() {
+      if ((token?.cancelled ?? false) || generation != _connectionGeneration) {
+        throw ApiException('cancelled', '连接已取消');
+      }
+    }
+
+    checkCancelled();
+    if (fileOnly && session.roomName != 'files-${session.deviceId}') {
+      throw ApiException('upgrade_required', '服务端未返回独立文件连接，请更新服务端');
+    }
     // Android 默认走「通信模式」，远端音频路由到**听筒**——音量小到像没有声音。
     // 观看投屏必须走扬声器。
     try {
-      await AudioManager.instance.setSpeakerOutputPreferred(true);
+      if (!fileOnly) {
+        await AudioManager.instance.setSpeakerOutputPreferred(true);
+      }
     } catch (_) {
       // 路由设置失败不影响连接
     }
 
-    final room = Room(roomOptions: const RoomOptions(adaptiveStream: true));
-    await room.connect(session.livekitUrl, session.subscribeToken);
+    final room = Room(
+        roomOptions: const RoomOptions(adaptiveStream: true, dynacast: true));
+    try {
+      await room.connect(session.livekitUrl, session.subscribeToken,
+          connectOptions: ConnectOptions(autoSubscribe: !fileOnly));
+      checkCancelled();
+    } catch (_) {
+      await room.disconnect();
+      rethrow;
+    }
 
     final viewing = ViewingSession(
-      id: 'view-${DateTime.now().millisecondsSinceEpoch}',
+      id: '${fileOnly ? 'file' : 'view'}-${DateTime.now().microsecondsSinceEpoch}',
+      fileOnly: fileOnly,
       deviceId: session.deviceId,
       deviceName: session.deviceName,
       room: room,
+      fileTransfer: FileTransferController(
+        room: room,
+        receiveEnabled: true,
+        destinationIdentity:
+            '${fileOnly ? 'file-host' : 'caster'}-${session.deviceId}',
+      ),
+      call: CallController(room, peerIdentity: 'caster-${session.deviceId}'),
     );
     viewing.addListener(notifyListeners);
     _sessions[viewing.id] = viewing;
@@ -592,8 +877,41 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<bool> sendFile(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null || session.state == ViewingSessionState.ended) {
+      throw StateError('观看会话已经断开');
+    }
+    return session.fileTransfer.sendSelectedFile();
+  }
+
   /// 退出登录：断开全部会话与投送，清空心跳。
+  /// End active work for an installer without logging the device out. If the
+  /// system installer is cancelled, idle presence and file reception still work.
+  Future<void> prepareForUpdate() async {
+    await stopPublishing();
+    for (final session in _sessions.values.toList()) {
+      await session.disconnect();
+    }
+    _sessions.clear();
+    final reg = registration;
+    if (reg != null) await _startFileHost(reg);
+    notifyListeners();
+  }
+
   Future<void> disconnectAll() async {
+    _connectionGeneration++;
+    _fileHostGeneration++;
+    _fileHostReconnect?.cancel();
+    _fileHostReconnect = null;
+    final room = _fileHostRoom;
+    final controller = fileHost;
+    fileHost = null;
+    _fileHostRoom = null;
+    room?.removeListener(_fileHostRoomChanged);
+    if (controller != null) await controller.close();
+    await room?.disconnect();
+    await room?.dispose();
     for (final session in _sessions.values) {
       await session.disconnect();
     }

@@ -16,12 +16,28 @@ const base64url = (input) => Buffer.from(input).toString('base64url');
  * @param {object} options
  * @param {string} options.identity     参与者标识，同一房间内必须唯一
  * @param {string} options.room         房间名
- * @param {boolean} options.canPublish  是否允许发布轨道（采集端 true，接收端 false）
+ * @param {boolean} options.canPublish      是否允许发布媒体轨道；可再用 canPublishSources 限制来源
+ * @param {boolean} [options.canPublishData] 是否允许发送数据消息；默认与 canPublish 一致
+ * @param {string[]} [options.canPublishSources] 允许发布的轨道来源，例如 camera、microphone
  * @param {string} [options.name]       展示用名称
  * @param {number} [options.ttlSec]     有效期
  */
-export function signLiveKitToken({ identity, room, canPublish, name, ttlSec }) {
+export function signLiveKitToken({
+  identity,
+  room,
+  canPublish,
+  canPublishData = canPublish,
+  canSubscribe = true,
+  canPublishSources,
+  name,
+  ttlSec,
+}) {
   const now = Math.floor(Date.now() / 1000);
+  const sources = canPublishSources?.map(source => String(source).toLowerCase());
+  if (sources && (!sources.length || sources.some(source =>
+    !['camera', 'microphone', 'screen_share', 'screen_share_audio'].includes(source)))) {
+    throw new TypeError('Invalid LiveKit publish sources');
+  }
 
   const header = { alg: 'HS256', typ: 'JWT' };
   const payload = {
@@ -33,9 +49,10 @@ export function signLiveKitToken({ identity, room, canPublish, name, ttlSec }) {
       room,
       roomJoin: true,
       canPublish,
-      canSubscribe: true,
-      // 接收端连数据通道也不给，彻底断掉反向操作的可能
-      canPublishData: canPublish,
+      canSubscribe,
+      // 数据发送与媒体来源分别授权；观看端只获得 CAMERA/MICROPHONE 来源。
+      canPublishData,
+      ...(sources ? { canPublishSources: sources } : {}),
     },
   };
   if (name) payload.name = name;

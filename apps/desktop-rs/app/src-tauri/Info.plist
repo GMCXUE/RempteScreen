@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>RemoteScreen uses the system audio engine to play remote sound and transmit screen audio. Screen sharing does not include microphone audio.</string>
+  <string>RemoteScreen uses the microphone when you enable voice chat during a remote session.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>RemoteScreen uses the camera when you enable video chat during a remote session.</string>
 </dict>
 </plist>
