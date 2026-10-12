@@ -27,3 +27,13 @@ Flutter 在 Mac 上通过 18 项声音控制、迟到音轨、快速操作、好
 静音可节省该接收方的音频下行媒体流量；发送端上行、仍有其他接收方的流量、协议心跳及转发中的视频不会因此消失。
 
 协议依据：[LiveKit UpdateTrackSettings](https://github.com/livekit/protocol/blob/main/protobufs/livekit_rtc.proto)，服务端静音缓冲行为：[DownTrack](https://github.com/livekit/livekit/blob/master/pkg/sfu/downtrack.go)。
+
+## 第二项：两端直连传输基础与独立验证
+
+新增 Rust / Flutter 对应的 DirectTransport：固定 microphone、camera、screen、screen_audio 四个 Unified Plan 槽位，摄像头优先 H264 constrained baseline、屏幕采用 VP8；同一发送器复制现有码率、帧率及缩放参数，保留 active、RID 和事务标识。协商有大小和超时限制；STUN 参数只允许 stun:，不配置 TURN 媒体中继。原生侧收集 ICE 候选后组成 SDP，避免 SDK 的 current_local_description 在 offer 待确认期间为空。
+
+所有媒体发送器在协商期间保持 inactive，只有 PeerConnection 已连接才允许 activate。独立测试发现，如果协商完成之前就启动编码器，会在等待连接期间触发带宽降级，导致连上后仍长时间保持低分辨率；连接就绪后再启动解决了该问题。媒体工厂保留到链路销毁，避免测试采集轨的工厂过早释放。
+
+Mac 原生两个端点直接连接，解码 440 Hz 连续测试声音正确；1080p、720p、360p、180p、再次 1080p 均收到目标尺寸，同一个连接的短窗口帧率约 30fps（最近一次分别为 30.0、30.5、30.3、31.0、30.5，窗口边界会有少量计数误差）。没有 TURN 候选。同机现有 LiveKit SFU 对照测试仍通过全部四档及接收端反馈自动升降档检查。
+
+Flutter 3 项协议/参数/配置回归测试通过，相关文件静态分析无问题。此项是接入前的传输基础检查点；尚未接入正式通话或投屏，不代表当前应用已自动切换直连或已节省这部分带宽。下一项将接入媒体接收、发送暂停和 SFU 回退后，再验证流量及切换行为。
