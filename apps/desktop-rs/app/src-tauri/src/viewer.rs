@@ -202,6 +202,7 @@ async fn run_watch(
         .map_err(|error| format!("连接失败: {error}"))?;
     let peer_identity = format!("caster-{}", room.name().trim_start_matches("device-"));
     let _quality = crate::call_quality::start(&room, stop.clone(), Some(peer_identity.clone()));
+    let _audio_reception = crate::audio_reception::start(&room, stop.clone(), Some(voice_volume.clone()), Some(volume.clone()), Some(peer_identity.clone()));
     let local = room.local_participant();
     *local_out.lock().unwrap() = Some(local.clone());
 

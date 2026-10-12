@@ -155,6 +155,7 @@ async fn run_session(
 
     let ft_local = room.local_participant();
     let _quality = crate::call_quality::start(&room, stop.clone(), None);
+    let _audio_reception = crate::audio_reception::start(&room, stop.clone(), Some(volume.clone()), Some(volume.clone()), None);
     *local_out.lock().unwrap() = Some(ft_local.clone());
     // 数据通道、远端麦克风与摄像头监听。
     let ft_recv = ft_recv.clone();

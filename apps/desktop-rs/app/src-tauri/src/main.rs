@@ -9,6 +9,7 @@ mod updates;
 mod hot_updates;
 mod call;
 mod call_quality;
+mod audio_reception;
 mod friend_call;
 mod friend_call_window;
 mod chat_history_window;
@@ -1078,11 +1079,15 @@ fn set_viewer_fullscreen(app: tauri::AppHandle, fullscreen: bool) -> Result<(), 
 #[tauri::command]
 fn set_audio_enabled(enabled: bool, state: tauri::State<AppState>) -> Result<bool, String> {
     match state.audio.lock().unwrap().as_ref() {
-        Some(track) => {
+        Some(_) => {
+            // The playout gain mutes immediately; the reception task also pauses
+            // SFU forwarding. Directly disabling the track would hide this change
+            // from the publication and leave the SFU sending packets.
             if enabled {
-                track.enable();
+                let _ = state.volume.compare_exchange(0, 100,
+                    std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
             } else {
-                track.disable();
+                state.volume.store(0, std::sync::atomic::Ordering::Relaxed);
             }
             Ok(true)
         }

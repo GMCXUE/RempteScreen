@@ -281,45 +281,66 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> toggleSpeaker() async {
+    if (_closed) return;
     speakerEnabled = !speakerEnabled;
-    for (final participant in room.remoteParticipants.values) {
-      if (peerIdentity != null && participant.identity != peerIdentity) {
-        continue;
-      }
-      for (final publication in participant.audioTrackPublications) {
-        if (publication.source != TrackSource.microphone) continue;
-        final track = publication.track;
-        if (track is! RemoteAudioTrack) continue;
-        if (speakerEnabled) {
-          await track.enable();
-        } else {
-          await track.disable();
-        }
-      }
-    }
+    await _syncAudioReception();
     if (!_closed) notifyListeners();
   }
 
   Future<void> toggleScreenAudio() async {
     if (_closed) return;
     screenAudioEnabled = !screenAudioEnabled;
-    for (final participant in room.remoteParticipants.values) {
-      if (peerIdentity != null && participant.identity != peerIdentity) {
-        continue;
-      }
-      for (final publication in participant.audioTrackPublications) {
-        if (publication.source != TrackSource.screenShareAudio) continue;
-        final track = publication.track;
-        if (track is RemoteAudioTrack) {
-          if (screenAudioEnabled) {
-            await track.enable();
-          } else {
-            await track.disable();
+    await _syncAudioReception();
+    if (!_closed) notifyListeners();
+  }
+
+  Future<void>? _audioReceptionQueue;
+  bool _audioReceptionDirty = false;
+
+  Future<void> _syncAudioReception() {
+    if (_closed) return Future.value();
+    _audioReceptionDirty = true;
+    return _audioReceptionQueue ??= Future<void>(() async {
+      try {
+        while (_audioReceptionDirty && !_closed) {
+          _audioReceptionDirty = false;
+          for (final participant in room.remoteParticipants.values.toList()) {
+            if (peerIdentity != null && participant.identity != peerIdentity) {
+              continue;
+            }
+            for (final publication in participant.audioTrackPublications) {
+              final enabled = switch (publication.source) {
+                TrackSource.microphone => speakerEnabled,
+                TrackSource.screenShareAudio ||
+                TrackSource.unknown => screenAudioEnabled,
+                _ => null,
+              };
+              if (enabled == null || _closed) continue;
+              // Keep the subscription and its SID. Local mute takes effect
+              // immediately; publication settings stop the server's RTP too.
+              if (publication.enabled != enabled) {
+                if (enabled) {
+                  await publication.enable();
+                } else {
+                  await publication.disable();
+                }
+              }
+              final track = publication.track;
+              if (track is RemoteAudioTrack &&
+                  track.mediaStreamTrack.enabled != enabled) {
+                if (enabled) {
+                  await track.enable();
+                } else {
+                  await track.disable();
+                }
+              }
+            }
           }
         }
+      } finally {
+        _audioReceptionQueue = null;
       }
-    }
-    if (!_closed) notifyListeners();
+    });
   }
 
   Future<void> _updateProtection({bool? microphone, bool? camera}) =>
@@ -381,23 +402,11 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _roomChanged() {
     _syncFloatingVideo();
-    if (!speakerEnabled || !screenAudioEnabled) {
-      for (final participant in room.remoteParticipants.values) {
-        if (peerIdentity != null && participant.identity != peerIdentity) {
-          continue;
-        }
-        for (final publication in participant.audioTrackPublications) {
-          final track = publication.track;
-          if (((publication.source == TrackSource.microphone &&
-                      !speakerEnabled) ||
-                  (publication.source == TrackSource.screenShareAudio &&
-                      !screenAudioEnabled)) &&
-              track is RemoteAudioTrack) {
-            unawaited(track.disable());
-          }
-        }
-      }
-    }
+    unawaited(
+      _syncAudioReception().catchError((Object error) {
+        debugPrint('恢复接收声音失败：$error');
+      }),
+    );
     if (!_closed) notifyListeners();
   }
 

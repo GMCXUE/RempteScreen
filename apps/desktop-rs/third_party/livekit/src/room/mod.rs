@@ -1513,10 +1513,15 @@ impl RoomSession {
         };
 
         let mut track_sids = Vec::new();
+        let mut track_sids_disabled = Vec::new();
         for (_, participant) in self.remote_participants.read().clone() {
             for (track_sid, track) in participant.track_publications() {
                 if track.is_desired() != auto_subscribe {
                     track_sids.push(track_sid.to_string());
+                }
+                // Preserve receiver pause settings when resuming signalling.
+                if track.is_subscribed() && !track.is_enabled() {
+                    track_sids_disabled.push(track_sid.to_string());
                 }
             }
         }
@@ -1577,7 +1582,7 @@ impl RoomSession {
                 id: 0,
                 mid_to_track_id: Default::default(),
             }),
-            track_sids_disabled: Vec::default(), // TODO: New protocol version
+            track_sids_disabled,
             subscription: Some(proto::UpdateSubscription {
                 track_sids,
                 subscribe: !auto_subscribe,

@@ -33,7 +33,7 @@ pub fn call_room_options() -> RoomOptions {
     options
 }
 
-fn camera_publish_options(_width: u32, _height: u32) -> TrackPublishOptions {
+pub(crate) fn camera_publish_options(_width: u32, _height: u32) -> TrackPublishOptions {
     TrackPublishOptions {
         source: TrackSource::Camera,
         video_codec: VideoCodec::H264,
