@@ -13,8 +13,8 @@ fn acquire(state: &UpdateState) -> Result<Busy<'_>, String> {
     if state.busy.swap(true, Ordering::SeqCst) { return Err("更新操作正在进行".into()); } Ok(Busy(&state.busy))
 }
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
-fn version() -> Value { serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../config/client-version.json"))).unwrap() }
-fn public_key() -> Value { serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../config/update-public-key.json"))).unwrap() }
+pub(crate) fn version() -> Value { serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../config/client-version.json"))).unwrap() }
+pub(crate) fn public_key() -> Value { serde_json::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../config/update-public-key.json"))).unwrap() }
 fn platform() -> &'static str { if cfg!(target_os="windows") { "windows" } else { "macos" } }
 fn arch() -> &'static str { if cfg!(target_arch="aarch64") { "arm64" } else { "x64" } }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 }

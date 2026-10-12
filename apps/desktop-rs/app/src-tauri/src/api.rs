@@ -599,7 +599,7 @@ fn poll_connect_request_inner(request_id: &str, wait_sec: Option<u64>) -> Result
 
 /// Authenticated account-level social operations; credentials never enter the webview.
 pub fn social(operation: &str, token: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    if !["account-profile", "avatar-image", "avatar", "state", "search", "request", "decision", "profile", "messages", "send", "send-image", "message-image", "recall", "read", "call-start", "call-state", "call-decision", "call-end"].contains(&operation) {
+    if !["account-profile", "avatar-image", "avatar", "state", "search", "request", "decision", "profile", "history", "message-context", "clear-history", "messages", "send", "send-image", "message-image", "recall", "read", "call-start", "call-state", "call-decision", "call-end"].contains(&operation) {
         return Err("不支持的好友操作".into());
     }
     let request = ureq::request(if operation == "state" { "GET" } else { "POST" }, &format!("{SERVER_URL}/v1/social/{operation}"))

@@ -8,7 +8,7 @@ const fs=require('fs'),assert=require('assert'),path=require('path');
   const errors=[];page.on('pageerror',e=>errors.push(String(e)));
   const source=fs.readFileSync(root+'index.html','utf8');
   const scripts=[...source.matchAll(/<script src="([^"]+)"/g)].map(match=>match[1]);
-  for(const file of ['avatars.js','profile.js','chat-messages.js','social.js','app.js','friend-calls.js'])assert.ok(scripts.indexOf('feedback.js')>=0&&scripts.indexOf('feedback.js')<scripts.indexOf(file));
+  for(const file of ['avatars.js','profile.js','chat-messages.js','chat-settings.js','chat-outbox.js','social.js','app.js','friend-calls.js'])assert.ok(scripts.indexOf('feedback.js')>=0&&scripts.indexOf('feedback.js')<scripts.indexOf(file));
   const html=source.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');
   await page.route('http://local.test/**',route=>{
    const url=new URL(route.request().url());
@@ -36,7 +36,7 @@ const fs=require('fs'),assert=require('assert'),path=require('path');
     }
    }}};
   });
-  for(const file of scripts.filter(file=>['ui-icons.js','feedback.js','avatar-crop.js','avatars.js','profile.js','chat-messages.js','social.js'].includes(file)))await page.addScriptTag({content:fs.readFileSync(root+file,'utf8')});
+  for(const file of scripts.filter(file=>['ui-icons.js','feedback.js','avatar-crop.js','avatars.js','profile.js','chat-messages.js','chat-settings.js','chat-outbox.js','social.js'].includes(file)))await page.addScriptTag({content:fs.readFileSync(root+file,'utf8')});
   assert.equal(await page.evaluate(()=>typeof window.toast),'undefined');
   await page.locator('[data-page="messages"]').click();
   await page.waitForFunction(()=>document.querySelector('#account-avatar img'));

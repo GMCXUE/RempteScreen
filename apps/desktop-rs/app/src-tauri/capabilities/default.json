@@ -6,7 +6,9 @@
     "viewer",
     "call-video",
     "friend-call",
-    "friend-call-mini"
+    "friend-call-mini",
+    "chat-history",
+    "chat-image"
   ],
   "permissions": [
     "core:default",

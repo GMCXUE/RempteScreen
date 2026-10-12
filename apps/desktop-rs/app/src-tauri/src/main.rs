@@ -6,9 +6,12 @@
 // 前端只是个壳，通过 invoke 调命令、轮询状态渲染界面。
 mod api;
 mod updates;
+mod hot_updates;
 mod call;
 mod friend_call;
 mod friend_call_window;
+mod chat_history_window;
+mod chat_image_window;
 mod notifications;
 mod notification_policy;
 mod microphone;
@@ -297,8 +300,20 @@ async fn copy_chat_image(app: tauri::AppHandle, image: String) -> Result<(), Str
     }).await.map_err(|_| "复制失败，请重试".to_owned())?
 }
 #[tauri::command]
-async fn social_api(operation: String, body: Option<serde_json::Value>, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+fn chat_send_session(state: tauri::State<AppState>) -> Result<String, String> {
+    use sha2::Digest;
     let token = state.creds.lock().unwrap().account_token.clone().ok_or("请先登录")?;
+    Ok(format!("{:x}", sha2::Sha256::digest(token.as_bytes())))
+}
+#[tauri::command]
+async fn social_api(operation: String, body: Option<serde_json::Value>, send_session: Option<String>, state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let token = state.creds.lock().unwrap().account_token.clone().ok_or("请先登录")?;
+    if let Some(expected) = send_session {
+        use sha2::Digest;
+        if expected != format!("{:x}", sha2::Sha256::digest(token.as_bytes())) {
+            return Err("账号已变化，请重新发送".into());
+        }
+    }
     let saved_token=token.clone();let saved_operation=operation.clone();
     let value=tauri::async_runtime::spawn_blocking(move || api::social(&operation, &token, body.unwrap_or_else(|| serde_json::json!({}))))
         .await.map_err(|error| error.to_string())??;
@@ -316,7 +331,9 @@ async fn social_api(operation: String, body: Option<serde_json::Value>, state: t
 
 /// 退出登录：停掉心跳、投送与观看，清空账号与设备凭据（画质设置保留）。
 #[tauri::command]
-fn logout(state: tauri::State<AppState>) -> Result<(), String> {
+fn logout(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    chat_history_window::close(&app);
+    chat_image_window::close(&app);
     if let Some(stop) = state.heartbeat_stop.lock().unwrap().take() {
         stop.store(true, Ordering::Relaxed);
     }
@@ -1749,12 +1766,17 @@ fn main() {
     let publish_camera_frames_for_protocol = Arc::new(Mutex::new(None::<Vec<u8>>));
     let publish_camera_frames = publish_camera_frames_for_protocol.clone();
 
+    let mut context=tauri::generate_context!();
+    let hot_state=hot_updates::install(&mut context);
     tauri::Builder::default()
+        .manage(hot_state)
         .manage(updates::UpdateState::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(notifications::NotificationContext::default())
         .manage(friend_call_window::CallWindowState::default())
+        .manage(chat_history_window::HistoryWindowState::default())
+        .manage(chat_image_window::ImageWindowState::default())
         .manage(AppState {
             audio_gate: tokio::sync::Mutex::new(()),
             friend: Mutex::new(None),
@@ -1949,7 +1971,10 @@ fn main() {
                 .body(frame.unwrap_or_default()).unwrap());
         })
         .invoke_handler(tauri::generate_handler![
+            chat_history_window::open_chat_history, chat_history_window::close_chat_history, chat_history_window::get_chat_history_context, chat_history_window::chat_history_api, chat_history_window::locate_chat_message,
+            chat_image_window::open_chat_image, chat_image_window::close_chat_image, chat_image_window::get_chat_image, chat_image_window::copy_viewed_chat_image,
             updates::update_info, updates::update_check, updates::update_download, updates::update_install,
+            hot_updates::hot_update_ready, hot_updates::hot_update_check, hot_updates::hot_update_stage, hot_updates::hot_update_restart,
             friend_call_window::set_friend_call_window_state,
             friend_call_window::close_friend_call_window,
             friend_call_window::dock_friend_call_mini,
@@ -1971,6 +1996,7 @@ fn main() {
             pick_chat_image,
             read_chat_image,
             copy_chat_image,
+            chat_send_session,
             get_state,
             login,
             register_device,
@@ -2013,6 +2039,6 @@ fn main() {
             clear_history,
             forget_device
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("tauri 应用启动失败");
 }

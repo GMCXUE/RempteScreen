@@ -3,7 +3,9 @@
   const el=id=>document.getElementById(id);
   const api=(operation,body={})=>window.__TAURI__.core.invoke('social_api',{operation,body});
   let state=null,peer=null,messages=[],hasMore=false,polling=false,loading=false,mutating=false,generation=0;
-  let retry=null,readSeq=null,accountGeneration=0,friendsTab=false,syncCursor=null;
+  let clearedThrough="0";
+  let readSeq=null,accountGeneration=0,friendsTab=false,syncCursor=null;
+  let outbox=null,seenConfirmed=new Set();const outboxes=new Map();
   const node=(tag,text='',cls='')=>{const e=document.createElement(tag);e.textContent=text;e.className=cls;return e;};
   const error=e=>window.showAppToast(String(e),2200);
   const syncFailures=new Map();
@@ -22,6 +24,14 @@
     context:()=>({accountId:state?.me.id,peerId:peer?.id,generation}),canCompose:()=>!mutating,
     onDraftChanged:()=>renderComposer(),focusDraft:()=>el('social-draft').focus({preventScroll:true})});
   function composeError(text=''){el('social-compose-error').textContent=text;el('social-compose-error').classList.toggle('hidden',!text);}
+  function resizeDraft(){
+    const draft=el('social-draft');
+    draft.style.height='42px';
+    if(!draft.clientWidth)return;
+    const height=Math.max(42,Math.min(108,draft.scrollHeight));
+    draft.style.height=`${height}px`;
+    draft.style.overflowY=draft.scrollHeight>108?'auto':'hidden';
+  }
   function renderComposer(){
     const busy=mutating||chatUi.picking,root=el('social-draft-images');root.replaceChildren();root.classList.toggle('hidden',!chatUi.draftImages.length);
     for(const [index,draft] of chatUi.draftImages.entries()){
@@ -31,8 +41,24 @@
       remove.onclick=()=>{chatUi.removeDraftImage(draft.id);composeError();el('social-draft').focus({preventScroll:true});};item.append(photo,remove);root.append(item);
     }
     el('social-image').disabled=busy||!peer;el('social-send').disabled=busy||!peer||(!el('social-draft').value.trim()&&!chatUi.draftImages.length);el('social-send').textContent=mutating?'发送中…':'发送';el('social-draft').readOnly=mutating;
+    resizeDraft();
   }
-  function renderMessages(){chatUi.invalidate(messages);el('social-messages').replaceChildren(...messages.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();})));}
+  function renderMessages(){if(!state||!peer)return;chatUi.invalidate(messages);const rows=[...messages,...(outbox?.records()||[])];el('social-messages').replaceChildren(...rows.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();},id=>outbox?.retry(id))));}
+  function outboxChanged(queue){
+    if(queue!==outbox||state?.me.id!==queue.accountId||peer?.id!==queue.peerId)return;
+    const box=el('social-messages'),bottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
+    for(const row of queue.confirmed){if(seenConfirmed.has(row.id))continue;seenConfirmed.add(row.id);if(BigInt(row.seq)<=BigInt(clearedThrough))continue;if(!messages.some(m=>m.id===row.id))messages.push(row);}
+    messages.sort((a,b)=>BigInt(a.seq)<BigInt(b.seq)?-1:BigInt(a.seq)>BigInt(b.seq)?1:0);
+    renderMessages();if(bottom)box.scrollTop=box.scrollHeight;
+  }
+  function bindOutbox(){
+    const key=`${state.me.id}:${peer.id}`;
+    if(!outboxes.has(key)){
+      const session=window.__TAURI__.core.invoke('chat_send_session');let queue;
+      queue=new window.ChatSendQueue({accountId:state.me.id,peerId:peer.id,sender:session.then(sendSession=>(operation,body)=>window.__TAURI__.core.invoke('social_api',{operation,body,sendSession})),onChange:()=>outboxChanged(queue)});outboxes.set(key,queue);
+    }
+    outbox=outboxes.get(key);seenConfirmed=new Set(outbox.confirmed.map(m=>m.id));
+  }
   async function change(operation,body) {
     if(mutating)return;mutating=true;
     try{await api(operation,body);await refresh();}
@@ -40,9 +66,10 @@
   }
   function resetChat() {
     recovered('messages');recovered('read');
-    ++generation;peer=null;messages=[];retry=null;readSeq=null;syncCursor=null;hasMore=false;chatUi.close();chatUi.clearDraft();composeError();
+    followBottom=true;settings.close();clearedThrough="0";++generation;loading=false;peer=null;messages=[];outbox=null;seenConfirmed=new Set();readSeq=null;syncCursor=null;hasMore=false;chatUi.close();chatUi.clearDraft();composeError();
     const empty=node('div','','social-empty');empty.append(node('span','···','social-empty-symbol'),node('strong','选择好友，开始聊天'),node('span','在好友列表选择联系人，即可打开会话'));el('social-messages').replaceChildren(empty);el('social-actions').replaceChildren();
     el('social-chat-title').textContent='聊天';el('social-compose').classList.add('hidden');el('social-older').classList.add('hidden');el('social-draft').value='';
+    resizeDraft();
   }
   function renderChatTitle(friend){const title=el('social-chat-title'),avatar=node('span','','chat-avatar');window.accountAvatars?.render(avatar,friend);title.replaceChildren(avatar,document.createTextNode(name(friend)));}
   async function refresh() {
@@ -88,7 +115,7 @@
       const card=node('div','','social-request');const avatar=node('span','','chat-avatar');window.accountAvatars?.render(avatar,request);card.append(avatar,node('strong',request.name),node('p',request.note||'希望添加你为好友'));
       const actions=node('div','','social-request-actions');actions.append(button('拒绝',()=>change('decision',{peerId:request.id,accept:false})),button('同意',()=>change('decision',{peerId:request.id,accept:true}),'primary'));card.append(actions);root.append(card);
     }
-    const friends=friendsTab?state.friends:state.friends.filter(friend=>!friend.blocked&&(friend.lastText||friend.unread));
+    const friends=friendsTab?state.friends:state.friends.filter(friend=>!friend.blocked&&(friend.lastText||friend.unread||friend.pinned));
     root.append(node('p',friendsTab?`全部好友 · ${state.friends.length}`:'最近会话','social-section'));
     if(!friends.length) {
       root.append(node('div',friendsTab?'还没有好友，点击 + 添加':'还没有会话','social-list-empty'));
@@ -97,6 +124,7 @@
       const row=node('button','','social-contact'+(peer?.id===friend.id?' selected':''));row.type='button';row.disabled=friend.blocked;
       const avatar=node('span','','social-avatar');window.accountAvatars?.render(avatar,friend);const presence=node('span','','social-presence'+(friend.online?' online':''));presence.title=friend.online?'在线':'离线';presence.setAttribute('role','img');presence.setAttribute('aria-label',presence.title);avatar.append(presence);row.append(avatar);
       const info=node('div','','social-contact-info');info.append(node('strong',name(friend)),node('span',friend.blocked?'已拉黑':friendsTab?`账号 ID：${friend.accountId||'待分配'}`:friend.lastText));row.append(info);
+      if(friend.pinned&&!friendsTab)row.append(node('span','置顶','chat-pinned-label'));
       if(friend.unread && !friend.blocked  )row.append(node('span',friend.unread>99?'99+':String(friend.unread),'social-count'));
       row.onclick=()=>select(friend);root.append(row);
     }
@@ -109,36 +137,36 @@
       for(const friend of state.blocked) {const row=node('div','','social-request');const avatar=node('span','','chat-avatar');window.accountAvatars?.render(avatar,friend);row.append(avatar,node('span',friend.name),button('解除拉黑',()=>change('profile',{peerId:friend.id,action:'block',blocked:false})));details.append(row);}root.append(details);
     }
   }
+  const settings=new window.ChatSettings({root:el('social-chat-settings'),context:()=>({me:state?.me,peer}),
+    invoke:(command,args)=>window.__TAURI__.core.invoke(command,args),error,notice:text=>window.showAppToast(text,1400),canChange:()=>!mutating&&!outbox?.running,
+    change,profile:friend=>window.showFriendProfile(friend),
+    remark:async friend=>{const value=await askDialog({title:'好友备注',defaultValue:friend.remark||''});if(value!==null)await change('profile',{peerId:friend.id,action:'remark',remark:value});},
+    block:async friend=>{if(await askDialog({title:'拉黑好友？',message:'拉黑后双方不能发送消息。',danger:true}))await change('profile',{peerId:friend.id,action:'block',blocked:true});},
+    remove:async friend=>{if(await askDialog({title:'删除好友？',message:'删除后需要重新申请才能聊天。',danger:true}))await change('profile',{peerId:friend.id,action:'remove'});},
+    clear:async friend=>{const v=generation;mutating=true;renderComposer();try{const result=await api('clear-history',{peerId:friend.id});if(v!==generation)return;++generation;loading=false;clearedThrough=result.clearedThrough;outbox?.discardFailures();messages=[];readSeq=null;syncCursor=null;hasMore=false;chatUi.close();renderMessages();el('social-older').classList.add('hidden');await window.__TAURI__.core.invoke('close_chat_history');await refresh();window.showAppToast('聊天记录已清空',1400);}finally{mutating=false;renderComposer();}await load();}
+  });
   function renderActions() {
-    const root=el('social-actions');const wasOpen=root.querySelector('details')?.open;root.replaceChildren();if(!peer)return;
-    const current=peer,accountId=state?.me.id;
+    const root=el('social-actions');root.replaceChildren();if(!peer)return;
+    const current=peer;
     const voice=button('语音',()=>window.friendCalls.start(current,'voice'),'social-call-button'),video=button('视频',()=>window.friendCalls.start(current,'video'),'social-call-button');
     window.uiIcons.button(voice,'call','语音通话');window.uiIcons.button(video,'video','视频通话');root.append(voice,video);
-    const menu=node('details','','social-menu');menu.open=!!wasOpen;const toggle=node('summary','•••');toggle.setAttribute('aria-label','好友管理');menu.append(toggle);
-    const items=node('div','','social-menu-items');menu.append(items);root.append(menu);
-    const muteButton=button('免打扰',async()=>{
-      const value=await window.__TAURI__.core.invoke('notification_settings',{accountId:state?.me.id,value:null});
-      const muted=new Set(value.mutedPeers||[]);const wasMuted=muted.delete(current.id);if(!wasMuted)muted.add(current.id);
-      await window.__TAURI__.core.invoke('notification_settings',{accountId,value:{...value,mutedPeers:[...muted]}});
-      muteButton.textContent=wasMuted?'开启免打扰':'关闭免打扰';toast(wasMuted?'已关闭好友免打扰':'已开启好友免打扰，消息保留未读，来电静音');
-    });menu.ontoggle=async()=>{if(!menu.open)return;try{const value=await window.__TAURI__.core.invoke('notification_settings',{accountId:state?.me.id,value:null});muteButton.textContent=value.mutedPeers?.includes(current.id)?'关闭免打扰':'开启免打扰';}catch(e){error(e);}};
-    items.append(button('好友资料',()=>window.showFriendProfile(current)),muteButton,button('备注' ,async()=>{
-      const value=await askDialog({title:'好友备注',defaultValue:current.remark||''});
-      if(value!==null)await change('profile',{peerId:current.id,action:'remark',remark:value});
-    }),button('拉黑',async()=>{
-      if(await askDialog({title:'拉黑好友？',message:'拉黑后双方不能发送消息。',danger:true}))await change('profile',{peerId:current.id,action:'block',blocked:true});
-    }),button('删除',async()=>{
-      if(await askDialog({title:'删除好友？',message:'删除后需要重新申请才能聊天。',danger:true}))await change('profile',{peerId:current.id,action:'remove'});
-    }));
+    const more=button('•••',()=>settings.toggle(),'social-call-button');more.setAttribute('aria-label','聊天信息');more.title='聊天信息';more.setAttribute('aria-expanded',String(settings.open));root.append(more);settings.refresh();
+  }
+  async function locateMessage(messageId) {
+    if(mutating||!peer)throw '消息正在同步，请稍后再试';
+    loading=true;const current=peer,v=++generation;
+    try{const data=await api('message-context',{peerId:current.id,messageId});if(v!==generation)return;messages=data.messages;syncCursor=data.syncCursor;clearedThrough=data.clearedThrough;hasMore=data.hasMore;chatUi.close();renderMessages();el('social-older').classList.toggle('hidden',!hasMore);settings.close();
+      const row=[...el('social-messages').children].find(e=>e.dataset.messageId===messageId);if(row){row.scrollIntoView({block:'center'});row.classList.add('chat-message-highlight');setTimeout(()=>row.classList.remove('chat-message-highlight'),2200);}
+    }finally{if(v===generation)loading=false;}
   }
   async function select(friend) {
     if(mutating)return;
     if(peer?.id===friend.id)return;
     if((el('social-draft').value.trim()||chatUi.draftImages.length) && !(await askDialog({title:'切换会话？',message:'当前未发送的草稿将被清空。'})))return;
-    resetChat();peer=friend;syncNotificationContext();renderChatTitle(friend);el('social-compose').classList.remove('hidden');renderComposer();renderContacts();renderActions();await load();
+    resetChat();peer=friend;bindOutbox();syncNotificationContext();renderChatTitle(friend);el('social-compose').classList.remove('hidden');renderComposer();renderContacts();renderActions();await load();
   }
   async function load(older=false) {
-    if(loading || !peer || document.hidden || el('page-messages').classList.contains('hidden'))return;
+    if(loading || !peer || (document.hidden && !chatUi.nativeImage) || el('page-messages').classList.contains('hidden'))return;
     loading=true;const current=peer,version=generation;
     try {
       const data=await api('messages',{peerId:current.id,...(syncCursor!==null?{syncCursor,loadedFrom:messages[0]?.seq}:{}),...(messages.length?(older?{before:messages[0].seq}:{after:messages.at(-1).seq}):{})});
@@ -146,15 +174,17 @@
       recovered('messages');
       const container=el('social-messages'),atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<80;
       const oldHeight=container.scrollHeight,oldTop=container.scrollTop,initial=messages.length===0;
-      const map=new Map(messages.map(m=>[m.id,m]));let changed=false;
+      const boundary=data.clearedThrough||'0';const cleared=BigInt(boundary)>BigInt(clearedThrough);if(cleared){clearedThrough=boundary;messages=messages.filter(m=>BigInt(m.seq)>BigInt(boundary));chatUi.close();window.__TAURI__.core.invoke('close_chat_history').catch(()=>{});}
+      const map=new Map(messages.map(m=>[m.id,m]));let changed=cleared;
       for(const m of [...data.messages,...(data.updates||[])]){const old=map.get(m.id);if(!old&&!(data.messages||[]).some(row=>row.id===m.id))continue;if(old?.kind==='recalled'&&m.kind!=='recalled')continue;if(!old||old.kind!==m.kind||old.text!==m.text||old.recalledAt!==m.recalledAt){map.set(m.id,m);changed=true;}}
       if(data.syncCursor!==undefined)syncCursor=data.syncCursor;
       if(data.serverNow)chatUi.clockOffset=Number(data.serverNow)-Date.now();
       messages=[...map.values()].sort((a,b)=>BigInt(a.seq)<BigInt(b.seq)?-1:BigInt(a.seq)>BigInt(b.seq)?1:0);
       if(older||initial)hasMore=data.hasMore;
+      outbox?.reconcile([...data.messages,...(data.updates||[])]);
       if(changed)renderMessages();
-      if(!messages.length){container.replaceChildren();const empty=node('div','','social-empty');empty.append(node('strong','还没有消息'),node('span','发送一条消息，开始聊天'));container.append(empty);}
-      if(older)container.scrollTop=oldTop+container.scrollHeight-oldHeight;else if(atBottom)container.scrollTop=container.scrollHeight;
+      if(!messages.length&&!outbox?.items.length){container.replaceChildren();const empty=node('div','','social-empty');empty.append(node('strong','还没有消息'),node('span','发送一条消息，开始聊天'));container.append(empty);}
+      if(older)container.scrollTop=oldTop+container.scrollHeight-oldHeight;else if(initial||atBottom){followBottom=true;container.scrollTop=container.scrollHeight;}
       el('social-older').classList.toggle('hidden',!hasMore);
       const last=messages.at(-1);
       if(!older && last && last.seq!==readSeq && !document.hidden && document.hasFocus() && !el('page-messages').classList.contains('hidden')) {
@@ -164,10 +194,21 @@
     }catch(e){if(version===generation){syncError('messages',e);
       if(!messages.length){const empty=node('div','','social-empty');empty.append(node('span','消息暂时无法同步'),button('重试',()=>load()));el('social-messages').replaceChildren(empty);}
     }}
-    finally{loading=false;}
+    finally{if(version===generation)loading=false;}
   }
   const toast=text=>window.showAppToast(text);
+  let followBottom=true;
+  const messageViewport=el('social-messages');
+  let viewportHeight=messageViewport.clientHeight;
+  messageViewport.addEventListener('scroll',()=>{
+    // A viewport resize may emit scroll before ResizeObserver; it is not a user leaving the bottom.
+    if(messageViewport.clientHeight!==viewportHeight)return;
+    followBottom=messageViewport.scrollHeight-messageViewport.scrollTop-messageViewport.clientHeight<80;
+  });
+  new ResizeObserver(()=>{viewportHeight=messageViewport.clientHeight;if(followBottom)messageViewport.scrollTop=messageViewport.scrollHeight;}).observe(messageViewport);
   new ResizeObserver(()=>{document.body.style.setProperty('--chat-composer-height',`${Math.ceil(el('social-compose').getBoundingClientRect().height)+12}px`);}).observe(el('social-compose'));
+  let composerWidth=0;
+  new ResizeObserver(entries=>{const width=entries[0].contentRect.width;if(width!==composerWidth){composerWidth=width;resizeDraft();}}).observe(el('social-draft').parentElement);
   el('social-alert-settings').onclick=async()=>{
     try{
       const accountId=state?.me.id;
@@ -203,7 +244,7 @@
   el('social-tab-friends').onclick=()=>{friendsTab=true;renderContacts();};
   el('social-older').onclick=()=>load(true);
   el('social-image').onclick=()=>chatUi.chooseImage().catch(error);
-  el('social-draft').addEventListener('input',()=>{composeError();el('social-send').disabled=mutating||chatUi.picking||!peer||(!el('social-draft').value.trim()&&!chatUi.draftImages.length);});
+  el('social-draft').addEventListener('input',()=>{composeError();resizeDraft();el('social-send').disabled=mutating||chatUi.picking||!peer||(!el('social-draft').value.trim()&&!chatUi.draftImages.length);});
   let pasteFallback=null;
   el('social-draft').addEventListener('keydown',event=>{
     if(event.key.toLowerCase()!=='v'||!(event.metaKey||event.ctrlKey)||event.altKey||event.shiftKey||event.repeat)return;
@@ -215,36 +256,30 @@
     clearTimeout(pasteFallback);
     chatUi.pasteImage(event).catch(error);
   });
-  el('social-compose').onsubmit=async event=>{
-    event.preventDefault();if(!peer || mutating || chatUi.picking)return;
+  el('social-compose').onsubmit=event=>{
+    event.preventDefault();if(!peer||mutating||chatUi.picking||!outbox)return;
     const text=el('social-draft').value.trim(),images=[...chatUi.draftImages];if(!text&&!images.length)return;
-    const current=peer,version=generation;
-    if(text&&(!retry || retry.text!==text || retry.peer!==current.id))retry={text,peer:current.id,id:crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('')};
-    const addSent=data=>{if(data.message&&!messages.some(m=>m.id===data.message.id)){messages.push(data.message);renderMessages();el('social-messages').scrollTop=el('social-messages').scrollHeight;}};
-    mutating=true;composeError();renderComposer();
-    try {
-      for(const image of images){
-        const data=await api('send-image',{peerId:current.id,image:image.image,clientId:image.id});if(version!==generation)return;
-        chatUi.removeDraftImage(image.id);addSent(data);
-      }
-      if(text){const data=await api('send',{peerId:current.id,text,clientId:retry.id});if(version!==generation)return;
-        if(el('social-draft').value.trim()===text)el('social-draft').value='';retry=null;addSent(data);
-      }
-      await load();await refresh();
-    }catch(e){if(version===generation)composeError(String(e));}
-    finally{mutating=false;renderComposer();}
+    const id=()=>crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(24)),b=>b.toString(16).padStart(2,'0')).join('');
+    try{
+      outbox.enqueue([...images.map(image=>({kind:'image',id:image.id,image:image.image})),...(text?[{kind:'text',id:id(),text}]:[])]);
+      el('social-draft').value='';chatUi.clearDraft();composeError();renderComposer();el('social-messages').scrollTop=el('social-messages').scrollHeight;
+    }catch(e){composeError(String(e));}
   };
   window.addEventListener('account-avatar-changed',()=>{refresh().then(()=>{if(state&&peer&&messages.length)renderMessages();return load();});});
   window.addEventListener('account-profile-changed',refresh);
   window.addEventListener('social-account-changed',()=>{
+    window.__TAURI__.core.invoke('close_chat_history').catch(()=>{});
+    for(const queue of outboxes.values())queue.cancel();outboxes.clear();
     ++accountGeneration;for(const source of syncFailures.keys())recovered(source);state=null;resetChat();el('social-account').textContent='';
     el('social-contacts').replaceChildren();el('social-unread').classList.add('hidden');
   });
   const syncNotificationContext=()=>window.__TAURI__.core.invoke('set_notification_context',{peerId:!document.hidden&&document.hasFocus()&&!el('page-messages').classList.contains('hidden')?peer?.id||null:null}).catch(()=>{});
   setInterval(syncNotificationContext,1000);window.addEventListener('focus',syncNotificationContext);window.addEventListener('blur',syncNotificationContext);document.addEventListener('visibilitychange',syncNotificationContext);document.querySelectorAll('.nav-item').forEach(button=>button.addEventListener('click',()=>queueMicrotask(syncNotificationContext)));
   window.__TAURI__.event?.listen('messaging-action',async event=>{const info=event.payload.extra||{};await refresh();if(state?.me.id!==info.accountId)return;document.querySelector('[data-page="messages"]').click();if(info.kind==='call'){await window.friendCalls?.handleNotification(info.callId,event.payload.action);return;}if(info.kind==='friends'){friendsTab=true;renderContacts();return;}const friend=state.friends.find(f=>f.id===info.peerId&&!f.blocked);if(friend)await select(friend);});
+  window.__TAURI__.event?.listen('chat-history-locate',async event=>{try{const info=event.payload;await refresh();if(state?.me.id!==info.accountId)return;const friend=state.friends.find(f=>f.id===info.peerId&&!f.blocked);if(!friend)throw '好友关系已变化';document.querySelector('[data-page="messages"]').click();await select(friend);await locateMessage(info.messageId);}catch(e){error(e);}});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&settings.open)settings.close();});
   setInterval(async()=>{
-    if(el('app').classList.contains('hidden')) { if(state){state=null;resetChat();el('social-contacts').replaceChildren();el('social-unread').classList.add('hidden');}return; }
+    if(el('app').classList.contains('hidden')) { if(state){for(const queue of outboxes.values())queue.cancel();outboxes.clear();state=null;resetChat();el('social-contacts').replaceChildren();el('social-unread').classList.add('hidden');}return; }
     await refresh();await load();
   },4000);
   document.querySelector('[data-page="messages"]').addEventListener('click',async()=>{await refresh();await load();});

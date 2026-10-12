@@ -43,6 +43,7 @@
       if (!forced()) allowStartup();
     } catch (_) { error = '暂时无法检查更新，请检查网络后重试'; if (manual || forced()) show(); if (!forced()) allowStartup(); }
     finally { initializing = false; checking = false; render(); }
+    if (!release && !error && await window.hotUpdates?.check(manual)) dialog.close();
   }
   el('retry').onclick = () => check(true);
   el('primary').onclick = async () => {
@@ -66,7 +67,7 @@
   let focusTimer;
   window.addEventListener('blur', () => { clearTimeout(focusTimer); focusTimer = setTimeout(() => {away = true;}, 700); });
   window.addEventListener('focus', () => { clearTimeout(focusTimer); if (away) {away = false; check();} });
-  window.appUpdates = {ready, check: () => check(true), get required() {return forced();}};
+  window.appUpdates = {ready, check: () => check(true), get required() {return forced();}, get hasRelease() {return release !== null;}};
   notice = '正在检查更新…'; show();
   check();
 })();
