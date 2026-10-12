@@ -53,7 +53,12 @@ pub async fn update_check(app: tauri::AppHandle) -> Result<Value,String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state=app.state::<UpdateState>(); let _busy=acquire(&state)?;
         let cache=directory(&app)?.join("required.json");
-        let fallback=fs::read(&cache).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).and_then(|envelope| validate(&envelope,true).ok()).map(|p| p["release"].clone()).filter(|r| newer(r) && r["forceUpdate"]==true);
+        // A fully written staging file is also a valid fallback if Windows replacement
+        // was interrupted. Only authenticated mandatory records may enforce the gate.
+        let fallback=[cache.clone(),cache.with_extension("tmp")].iter().filter_map(|path|
+            fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|envelope| validate(&envelope,true).ok()).map(|p| p["release"].clone())
+            .filter(|r| newer(r) && r["forceUpdate"]==true)).max_by_key(|r|r["buildCode"].as_u64());
         let mut verified_required=None;
         let result=(|| -> Result<Value,String> {
             let response=agent().get(&format!("{}/v1/updates/check",super::api::SERVER_URL)).query("platform",platform()).query("arch",arch()).query("channel",version()["channel"].as_str().unwrap()).query("buildCode",&version()["buildCode"].to_string()).call().map_err(err)?;
@@ -66,7 +71,7 @@ pub async fn update_check(app: tauri::AppHandle) -> Result<Value,String> {
                 // Windows cannot atomically rename over an existing file; retain the old gate on failure.
                 if cache.exists() { fs::copy(&temporary,&cache).map_err(err)?;let _=fs::remove_file(temporary); }
                 else { fs::rename(temporary,&cache).map_err(err)?; }
-            } else if cache.exists() { fs::remove_file(&cache).map_err(err)?; }
+            } else { for path in [&cache,&cache.with_extension("tmp")] { if path.exists() {fs::remove_file(path).map_err(err)?;} } }
             Ok(if newer(&release) { release } else { Value::Null })
         })();
         let (release,error)=match result { Ok(r)=>(r,String::new()),Err(_)=>(verified_required.or(fallback).unwrap_or(Value::Null),"暂时无法检查更新，请检查网络后重试".into()) };
