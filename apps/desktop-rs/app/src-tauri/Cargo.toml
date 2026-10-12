@@ -1,12 +1,14 @@
 [package]
 name = "remotescreen-desktop"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+ring = "0.17.14"
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 tauri-plugin-notification = "2"
 tauri-plugin-clipboard-manager = "2"
 arboard = "=3.6.1"

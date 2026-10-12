@@ -9,6 +9,8 @@ on:
       - 'tools/prepare-windows-webrtc.ps1'
       - 'tools/save-windows-build-log.ps1'
       - 'apps/desktop-rs/**'
+      - 'config/client-version.json'
+      - 'config/update-public-key.json'
 
 permissions:
   # Diagnostics only: append to build-logs/windows, never overwrite source branches.

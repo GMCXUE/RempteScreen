@@ -5,6 +5,7 @@
 // 架构：Rust 侧持有全部业务（服务端 API、心跳、原生采集推流），
 // 前端只是个壳，通过 invoke 调命令、轮询状态渲染界面。
 mod api;
+mod updates;
 mod call;
 mod friend_call;
 mod friend_call_window;
@@ -1749,6 +1750,7 @@ fn main() {
     let publish_camera_frames = publish_camera_frames_for_protocol.clone();
 
     tauri::Builder::default()
+        .manage(updates::UpdateState::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(notifications::NotificationContext::default())
@@ -1947,6 +1949,7 @@ fn main() {
                 .body(frame.unwrap_or_default()).unwrap());
         })
         .invoke_handler(tauri::generate_handler![
+            updates::update_info, updates::update_check, updates::update_download, updates::update_install,
             friend_call_window::set_friend_call_window_state,
             friend_call_window::close_friend_call_window,
             friend_call_window::dock_friend_call_mini,

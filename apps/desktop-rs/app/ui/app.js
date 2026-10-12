@@ -930,6 +930,7 @@ $("logout-btn").addEventListener("click", async () => {
   refreshDevices();
 });
 
+(window.appUpdates?.ready || Promise.resolve()).then(() => {
 refresh();
 refreshWatch();
 refreshHistory();
@@ -942,6 +943,7 @@ setInterval(refreshDevices, 10000);
 setInterval(refreshIncoming, 3000);
 refreshTransfer();
 setInterval(refreshTransfer, 1500);
+});
 
 
 // 文件传输：接收进度提示（本机作为投送端时接收对方发来的文件）
