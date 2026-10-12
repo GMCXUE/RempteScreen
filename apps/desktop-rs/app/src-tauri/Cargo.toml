@@ -39,3 +39,6 @@ nokhwa = { version = "0.10.11", default-features = false, features = ["input-msm
 wasapi = "0.25.0"
 # scap 0.0.8 uses the 1.4 Settings constructor; 1.5 changed that API incompatibly.
 windows-capture = "=1.4.2"
+
+[patch.crates-io]
+libwebrtc = { path = "../../third_party/libwebrtc" }

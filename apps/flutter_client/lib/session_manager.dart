@@ -135,6 +135,7 @@ class ViewingSession extends ChangeNotifier {
         }
       });
     room.addListener(_syncFromRoom);
+    call.mediaRoute.addListener(_syncFromRoom);
     fileTransfer.addListener(_syncFileTransfer);
     call.addListener(_syncCall);
     _syncFromRoom();
@@ -176,7 +177,7 @@ class ViewingSession extends ChangeNotifier {
     for (final participant in room.remoteParticipants.values) {
       if (participant.identity != 'caster-$deviceId') continue;
       for (final publication in participant.videoTrackPublications) {
-        final track = publication.track;
+        final track = call.mediaRoute.resolve(publication);
         if (track is RemoteVideoTrack &&
             publication.subscribed &&
             (publication.source == TrackSource.screenShareVideo ||
@@ -235,6 +236,7 @@ class ViewingSession extends ChangeNotifier {
     _peerEvents.dispose();
     videoTrack = null;
     room.removeListener(_syncFromRoom);
+    call.mediaRoute.removeListener(_syncFromRoom);
     fileTransfer.removeListener(_syncFileTransfer);
     call.removeListener(_syncCall);
     state = ViewingSessionState.ended;

@@ -667,7 +667,7 @@ impl LocalParticipant {
             let track = publication.track().unwrap();
             let remove_result = {
                 let sender = track.transceiver().unwrap().sender();
-                self.inner.rtc_engine.remove_track(sender)
+                self.inner.rtc_engine.remove_track(sender, track.rtc_track().id())
             };
 
             // The peer connection may already be closed after a server-initiated

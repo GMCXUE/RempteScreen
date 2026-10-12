@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
+import 'direct_media.dart';
 
 const callQualityTopic = 'rs-call-video-quality-v1';
 const callQualityHeights = [180, 360, 720, 1080];
@@ -34,7 +35,23 @@ Future<bool> applyCallVideoTier(
 class CallQualityPolicy {
   CallQualityPolicy(this.maximum) : tier = math.min(2, maximum);
   final int maximum;
+  CallQualityPolicy copy() {
+    final next = CallQualityPolicy(maximum);
+    next.tier = tier;
+    next._bad = _bad;
+    next._good = _good;
+    next._grace = _grace;
+    next._cooldown = _cooldown;
+    return next;
+  }
+
   int tier, _bad = 0, _good = 0, _grace = 0, _cooldown = 0;
+  void routeChanged() {
+    _bad = 0;
+    _good = 0;
+    _grace = 4;
+  }
+
   void sample(
       {double? bandwidth, double? loss, double? fps, bool cpuLimited = false}) {
     final bad =
@@ -82,13 +99,15 @@ class CallQualityPolicy {
 }
 
 class _Reception {
-  _Reception(this.received, this.lost, this.decoded, this.time);
+  _Reception(this.received, this.lost, this.decoded, this.time, this.direct);
+  final bool direct;
   final int received, lost, decoded;
   final DateTime time;
 }
 
 class _Feedback {
-  _Feedback(this.sequence, this.loss, this.fps, this.time);
+  _Feedback(this.sequence, this.loss, this.fps, this.time, this.direct);
+  final bool direct;
   final int sequence;
   final double loss, fps;
   final DateTime time;
@@ -98,7 +117,7 @@ class _Feedback {
 /// Receiver reports cover downlink loss and decoding load, which the sender's
 /// bandwidth estimate (client to SFU only) cannot measure.
 class CallVideoQuality {
-  CallVideoQuality(this.room, {this.peerIdentity}) {
+  CallVideoQuality(this.room, {this.peerIdentity, this.mediaRoute}) {
     _events = room.createListener()..on<DataReceivedEvent>(_receive);
     _timer =
         Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_tick()));
@@ -106,9 +125,11 @@ class CallVideoQuality {
   }
   final Room room;
   final String? peerIdentity;
+  final DirectMedia? mediaRoute;
   late final EventsListener<RoomEvent> _events;
   late final Timer _timer;
   final _policies = <String, CallQualityPolicy>{};
+  final _senderRoutes = <String, bool>{};
   final _receptions = <String, _Reception>{};
   final _feedback = <String, Map<String, _Feedback>>{};
   final _retry = <String>{};
@@ -136,6 +157,9 @@ class CallVideoQuality {
         return;
       }
       final sid = data['sid'] as String, sequence = data['seq'] as int;
+      if (data.containsKey('direct') && data['direct'] is! bool) return;
+      final direct = data['direct'] == true;
+      if (direct != (mediaRoute?.isSending(sid) ?? false)) return;
       if (room.localParticipant?.getTrackPublicationBySid(sid)?.source !=
           TrackSource.camera) {
         return;
@@ -154,7 +178,7 @@ class CallVideoQuality {
       final peers = _feedback.putIfAbsent(sid, () => {});
       final identity = event.participant!.identity;
       if (sequence <= (peers[identity]?.sequence ?? -1)) return;
-      peers[identity] = _Feedback(sequence, loss, fps, DateTime.now());
+      peers[identity] = _Feedback(sequence, loss, fps, DateTime.now(), direct);
     } catch (_) {/* Ignore unrelated or malformed data packets. */}
   }
 
@@ -177,7 +201,10 @@ class CallVideoQuality {
             track is! LocalVideoTrack) {
           continue;
         }
-        final sender = track.sender;
+        final originalSender = track.sender;
+        final sender = mediaRoute?.senderFor(publication.sid, originalSender) ??
+            originalSender;
+        final direct = mediaRoute?.isSending(publication.sid) ?? false;
         if (sender == null) continue;
         active.add(publication.sid);
         final settings = track.mediaStreamTrack.getSettings();
@@ -189,11 +216,22 @@ class CallVideoQuality {
         final shortEdge = math.min(width, height);
         final maximum = math.max(
             0, callQualityHeights.lastIndexWhere((size) => size <= shortEdge));
-        final policy = _policies.putIfAbsent(
+        var policy = _policies.putIfAbsent(
             publication.sid, () => CallQualityPolicy(maximum));
+        final oldRoute = _senderRoutes[publication.sid];
+        _senderRoutes[publication.sid] = direct;
+        if (oldRoute != null && oldRoute != direct) {
+          policy.routeChanged();
+          _feedback.remove(publication.sid);
+        }
         final stats =
             await sender.getStats().timeout(const Duration(seconds: 2));
-        if (_closed || track.sender != sender || publication.muted) continue;
+        if (_closed ||
+            track.sender != originalSender ||
+            publication.muted ||
+            direct != (mediaRoute?.isSending(publication.sid) ?? false)) {
+          continue;
+        }
         double? bandwidth;
         var cpuLimited = false;
         for (final report in stats) {
@@ -213,13 +251,25 @@ class CallVideoQuality {
             (_, report) => now.difference(report.time).inSeconds > 6);
         double? loss, fps;
         for (final report in peers?.values ?? <_Feedback>[]) {
+          if (report.direct != direct) continue;
           loss = math.max(loss ?? 0, report.loss);
           fps = math.min(fps ?? 120, report.fps);
         }
         final previous = policy.tier;
-        policy.sample(
+        final next = policy.copy();
+        next.sample(
             bandwidth: bandwidth, loss: loss, fps: fps, cpuLimited: cpuLimited);
-        final params = sender.parameters;
+        if (direct &&
+            (next.tier < previous ||
+                cpuLimited ||
+                (loss ?? 0) > .03 ||
+                (fps ?? 30) < 24)) {
+          mediaRoute?.requestFallback();
+          continue;
+        }
+        policy = next;
+        _policies[publication.sid] = next;
+        final params = originalSender!.parameters;
         if (params.encodings?.length != 1) continue;
         final encoding = params.encodings!.single;
         final scale =
@@ -240,16 +290,18 @@ class CallVideoQuality {
         }
       }
       _policies.removeWhere((sid, _) => !active.contains(sid));
+      _senderRoutes.removeWhere((sid, _) => !active.contains(sid));
       _feedback.removeWhere((sid, _) => !active.contains(sid));
       _retry.removeWhere((sid) => !active.contains(sid));
       final receiving = <String>{};
       for (final participant in room.remoteParticipants.values) {
         if (!_accept(participant.identity)) continue;
         for (final publication in participant.videoTrackPublications) {
-          final track = publication.track;
+          final track = mediaRoute?.resolve(publication) ?? publication.track;
+          final direct = mediaRoute?.isReceiving(publication.sid) ?? false;
           if (publication.source != TrackSource.camera ||
               publication.muted ||
-              !publication.enabled ||
+              (!publication.enabled && !direct) ||
               track is! RemoteVideoTrack) {
             continue;
           }
@@ -257,7 +309,11 @@ class CallVideoQuality {
           final stats = await track
               .getReceiverStats()
               .timeout(const Duration(seconds: 2));
-          if (_closed || stats == null) continue;
+          if (_closed ||
+              stats == null ||
+              direct != (mediaRoute?.isReceiving(publication.sid) ?? false)) {
+            continue;
+          }
           final sampleTime = DateTime.now();
           final received = stats.packetsReceived?.toInt(),
               lost = stats.packetsLost?.toInt(),
@@ -265,8 +321,9 @@ class CallVideoQuality {
           if (received == null || lost == null || decoded == null) continue;
           final previous = _receptions[publication.sid];
           _receptions[publication.sid] =
-              _Reception(received, lost, decoded, sampleTime);
+              _Reception(received, lost, decoded, sampleTime, direct);
           if (previous == null ||
+              previous.direct != direct ||
               received < previous.received ||
               decoded < previous.decoded) {
             continue;
@@ -279,13 +336,18 @@ class CallVideoQuality {
           final loss = drops / math.max(1, drops + packets);
           final fps =
               ((decoded - previous.decoded) / seconds).clamp(0.0, 120.0);
+          if (direct && (loss > .03 || fps < 24)) {
+            mediaRoute?.requestFallback();
+            continue;
+          }
           await local?.publishData(
               utf8.encode(jsonEncode({
                 'v': 1,
                 'sid': publication.sid,
                 'seq': ++_sequence,
                 'loss': loss,
-                'fps': fps
+                'fps': fps,
+                'direct': direct
               })),
               reliable: false,
               topic: callQualityTopic,

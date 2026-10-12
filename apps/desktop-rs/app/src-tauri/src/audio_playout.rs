@@ -4,7 +4,7 @@
 use crate::audio_buffer::{self, BufferedPlayout, PacketError, StereoFrame};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use livekit::prelude::RemoteAudioTrack;
-use livekit::webrtc::audio_stream::native::NativeAudioStream;
+
 use rtrb::{Consumer, RingBuffer};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -36,6 +36,7 @@ impl Drop for PlayoutHandle {
 pub fn start(track: &RemoteAudioTrack, volume: Volume) -> Result<PlayoutHandle, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let rtc_track = track.rtc_track();
+    let sid = track.sid().to_string();
     let stop_thread = stop.clone();
     // CPAL streams are not Send on every platform; create/use/drop on this thread.
     let thread = std::thread::Builder::new()
@@ -69,8 +70,8 @@ pub fn start(track: &RemoteAudioTrack, volume: Volume) -> Result<PlayoutHandle, 
                     device.name().unwrap_or_default(), sample_rate, config.sample_format()
                 ));
                 let (mut producer, consumer) = RingBuffer::<StereoFrame>::new(sample_rate as usize / 5);
-                let mut audio_stream = NativeAudioStream::new(
-                    rtc_track, sample_rate as i32, decoded_channels as i32
+                let mut audio_stream = crate::media_route::AudioStream::new(
+                    &sid, rtc_track, sample_rate as i32, decoded_channels as i32
                 );
                 let underruns = Arc::new(AtomicU64::new(0));
                 let stream_config: cpal::StreamConfig = config.clone().into();

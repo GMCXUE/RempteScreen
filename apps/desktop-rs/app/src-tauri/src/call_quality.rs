@@ -14,6 +14,7 @@ pub const HEIGHTS: [u32; 4] = [180, 360, 720, 1080];
 pub const BITRATES: [u64; 4] = [200_000, 650_000, 2_000_000, 3_500_000];
 const TOPIC: &str = "rs-call-video-quality-v1";
 
+#[derive(Clone)]
 pub struct Policy {
     pub tier: usize,
     maximum: usize,
@@ -32,6 +33,11 @@ impl Policy {
             grace: 0,
             cooldown: 0,
         }
+    }
+    fn route_changed(&mut self) {
+        self.bad = 0;
+        self.good = 0;
+        self.grace = 4;
     }
     pub fn sample(
         &mut self,
@@ -89,6 +95,8 @@ struct Feedback {
     seq: u64,
     loss: f64,
     fps: f64,
+    #[serde(default)]
+    direct: bool,
 }
 impl Feedback {
     fn valid(&self) -> bool {
@@ -104,6 +112,7 @@ struct Reception {
     lost: i64,
     decoded: u32,
     time: Instant,
+    direct: bool,
 }
 pub struct QualityTask(tauri::async_runtime::JoinHandle<()>);
 impl Drop for QualityTask {
@@ -119,6 +128,7 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
     let mut connected = room.connection_state() == livekit::ConnectionState::Connected;
     QualityTask(tauri::async_runtime::spawn(async move {
         let mut policies: HashMap<String, Policy> = HashMap::new();
+        let mut sender_routes: HashMap<String,bool>=HashMap::new();
         let mut feedback: HashMap<(String, ParticipantIdentity), (Feedback, Instant)> =
             HashMap::new();
         let mut receptions: HashMap<String, Reception> = HashMap::new();
@@ -133,6 +143,7 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
                         if peer.as_ref().is_some_and(|p| p != participant.identity().as_str()) { continue; }
                         if let Ok(report) = serde_json::from_slice::<Feedback>(&payload) {
                             if !report.valid() { continue; }
+                            if report.direct != crate::media_route::sending_direct(&report.sid) {continue;}
                             if !local.track_publications().values().any(|p| p.sid().as_str() == report.sid && p.source() == TrackSource::Camera) {continue;}
                             let key = (report.sid.clone(), participant.identity());
                             if feedback.get(&key).is_none_or(|(old, _)| report.seq > old.seq) {
@@ -156,6 +167,7 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
                     let now = Instant::now();
                     let publications = local.track_publications();
                     policies.retain(|sid, _| publications.values().any(|p| p.sid().as_str() == sid && !p.is_muted()));
+                    sender_routes.retain(|sid,_|policies.contains_key(sid));
                     feedback.retain(|(sid, _), (_, time)| now.duration_since(*time) <= Duration::from_secs(6)
                         && publications.values().any(|p| p.sid().as_str() == sid));
                     for publication in publications.values() {
@@ -166,8 +178,13 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
                         let maximum = HEIGHTS.iter().rposition(|&h| h <= short_edge).unwrap_or(0);
                         let sid = publication.sid().to_string();
                         let policy = policies.entry(sid.clone()).or_insert_with(|| Policy::new(maximum));
-                        let Ok(Ok(stats)) = tokio::time::timeout(Duration::from_secs(2), track.get_stats()).await else {continue;};
-                        if stop.load(Ordering::Relaxed) || track.is_muted() {continue;}
+                        let direct=crate::media_route::sending_direct(&sid);
+                        if sender_routes.insert(sid.clone(),direct).is_some_and(|old|old!=direct) {
+                            policy.route_changed();
+                            feedback.retain(|(feedback_sid,_),_|feedback_sid!=&sid);
+                        }
+                        let Ok(Ok(stats)) = tokio::time::timeout(Duration::from_secs(2), crate::media_route::sender_stats(&track)).await else {continue;};
+                        if stop.load(Ordering::Relaxed) || track.is_muted() || direct!=crate::media_route::sending_direct(&sid) {continue;}
                         let mut bandwidth = None;
                         let mut cpu = false;
                         for report in stats {
@@ -182,13 +199,18 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
                         let mut loss: Option<f64> = None;
                         let mut fps: Option<f64> = None;
                         for ((feedback_sid, _), (report, _)) in &feedback {
-                            if feedback_sid == &sid {
+                            if feedback_sid == &sid && report.direct == direct {
                                 loss = Some(loss.unwrap_or(0.0).max(report.loss));
                                 fps = Some(fps.unwrap_or(120.0).min(report.fps));
                             }
                         }
                         let previous = policy.tier;
-                        policy.sample(bandwidth, loss, fps, cpu);
+                        let mut next=policy.clone();
+                        next.sample(bandwidth, loss, fps, cpu);
+                        if direct && (next.tier < previous || cpu || loss.is_some_and(|x|x>0.03) || fps.is_some_and(|x|x<24.0)) {
+                            crate::media_route::request_fallback(&sid);continue;
+                        }
+                        *policy=next;
                         let scale = (short_edge as f64 / HEIGHTS[policy.tier] as f64).max(1.0);
                         if let Err(error) = track.set_single_video_encoding(BITRATES[policy.tier], scale, 30.0) {
                             policy.tier = previous;
@@ -204,21 +226,24 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
                             if publication.source() != TrackSource::Camera || publication.is_muted() {continue;}
                             let Some(RemoteTrack::Video(track)) = publication.track() else {continue;};
                             let sid = publication.sid().to_string(); receiving.insert(sid.clone());
-                            let Ok(Ok(stats)) = tokio::time::timeout(Duration::from_secs(2), track.get_stats()).await else {continue;};
+                            let direct=crate::media_route::receiving_direct(&sid);
+                            let Ok(Ok(stats)) = tokio::time::timeout(Duration::from_secs(2), crate::media_route::receiver_stats(&track)).await else {continue;};
                             if stop.load(Ordering::Relaxed) {break;}
+                            if direct!=crate::media_route::receiving_direct(&sid) {continue;}
                             for report in stats {
                                 let RtcStats::InboundRtp(stats) = report else {continue;};
                                 if stats.inbound.frame_width == 0 {continue;}
                                 let next = Reception {received: stats.received.packets_received, lost: stats.received.packets_lost,
-                                    decoded: stats.inbound.frames_decoded, time: Instant::now()};
+                                    decoded: stats.inbound.frames_decoded, time: Instant::now(), direct};
                                 let Some(old) = receptions.insert(sid.clone(), next) else {continue;};
                                 let next = &receptions[&sid]; let elapsed = next.time.duration_since(old.time).as_secs_f64();
-                                if !(0.5..=6.0).contains(&elapsed) || next.received < old.received || next.decoded < old.decoded {continue;}
+                                if next.direct!=old.direct || !(0.5..=6.0).contains(&elapsed) || next.received < old.received || next.decoded < old.decoded {continue;}
                                 let lost = (next.lost - old.lost).max(0) as u64;
                                 let loss = lost as f64 / (lost + next.received - old.received).max(1) as f64;
                                 let fps = ((next.decoded - old.decoded) as f64 / elapsed).clamp(0.0, 120.0);
                                 sequence += 1;
-                                let report = Feedback {v: 1, sid: sid.clone(), seq: sequence, loss, fps};
+                                let report = Feedback {v: 1, sid: sid.clone(), seq: sequence, loss, fps, direct};
+                                if report.direct && (loss>0.03 || fps<24.0) {crate::media_route::request_fallback(&sid);continue;}
                                 let _ = local.publish_data(DataPacket {payload: serde_json::to_vec(&report).unwrap(),
                                     topic: Some(TOPIC.into()), reliable: false,
                                     destination_identities: vec![participant.identity()]}).await;
@@ -235,6 +260,13 @@ pub fn start(room: &livekit::Room, stop: Arc<AtomicBool>, peer: Option<String>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn route_change_ignores_stale_bandwidth_but_not_frame_loss() {
+        let mut policy=Policy::new(3);policy.tier=3;policy.route_changed();
+        for _ in 0..4 {policy.sample(Some(300_000.0),Some(0.0),Some(30.0),false);assert_eq!(policy.tier,3);}
+        policy.route_changed();policy.sample(Some(300_000.0),Some(0.0),Some(10.0),false);assert!(policy.tier<3);
+    }
+
     #[test]
     fn desktop_and_mobile_share_quality_policy_cases() {
         let cases: serde_json::Value = serde_json::from_str(include_str!(
@@ -276,7 +308,8 @@ mod tests {
                 loss,
                 fps,
                 sid: "camera".into(),
-                seq: 1
+                seq: 1,
+                direct: false,
             }
             .valid());
         }

@@ -396,10 +396,10 @@ impl RtcEngine {
         session.add_track(req).await
     }
 
-    pub fn remove_track(&self, sender: RtpSender) -> EngineResult<()> {
+    pub fn remove_track(&self, sender: RtpSender, track_id: String) -> EngineResult<()> {
         // We don't need to wait for the reconnection
         let session = self.inner.running_handle.read().session.clone();
-        session.remove_track(sender) // TODO(theomonnom): Ignore errors where this
+        session.remove_track(sender, track_id) // TODO(theomonnom): Ignore errors where this
                                      // RtpSender is bound to the old session. (Can
                                      // happen on bad timing and it is safe to ignore)
     }

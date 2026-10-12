@@ -47,6 +47,7 @@ async fn run(url:&str,token:&str,peer:&str,video:bool,frames:viewer::FrameStore,
     let (room,mut events)=Room::connect(url,token,crate::call::call_room_options()).await.map_err(|e|format!("连接通话失败：{e}"))?;
     let _quality = crate::call_quality::start(&room, stop.clone(), Some(peer.into()));
     let _audio_reception = crate::audio_reception::start(&room, stop.clone(), Some(volume.clone()), None, Some(peer.into()));
+    let _direct = crate::direct_media::start(&room, stop.clone(), Some(peer.into()));
     if stop.load(Ordering::Relaxed) {let _=room.close().await;return Ok(());}
     let local=room.local_participant();*local_out.lock().unwrap()=Some(local.clone());
 

@@ -11,6 +11,8 @@ mod call;
 mod call_quality;
 mod audio_reception;
 mod direct_transport;
+mod media_route;
+mod direct_media;
 mod friend_call;
 mod friend_call_window;
 mod chat_history_window;

@@ -19,13 +19,17 @@ class _Peer extends Fake implements RemoteParticipant {
   @override
   final List<RemoteTrackPublication<RemoteAudioTrack>> audioTrackPublications;
   @override
-  List<RemoteTrackPublication<RemoteVideoTrack>> get videoTrackPublications => [];
+  List<RemoteTrackPublication<RemoteVideoTrack>> get videoTrackPublications =>
+      [];
 }
 
-class _Publication extends Fake implements RemoteTrackPublication<RemoteAudioTrack> {
+class _Publication extends Fake
+    implements RemoteTrackPublication<RemoteAudioTrack> {
   _Publication(this.source);
   @override
   final TrackSource source;
+  @override
+  String get sid => 'audio-${source.name}';
   @override
   bool enabled = true;
   @override
@@ -53,7 +57,10 @@ void main() {
     final mic = _Publication(TrackSource.microphone);
     final screen = _Publication(TrackSource.screenShareAudio);
     final other = _Publication(TrackSource.microphone);
-    final publications = <RemoteTrackPublication<RemoteAudioTrack>>[mic, screen];
+    final publications = <RemoteTrackPublication<RemoteAudioTrack>>[
+      mic,
+      screen
+    ];
     room.peers['peer'] = _Peer('peer', publications);
     room.peers['other'] = _Peer('other', [other]);
     final controller = CallController(room, peerIdentity: 'peer');

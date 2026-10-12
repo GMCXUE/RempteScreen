@@ -8,6 +8,18 @@ import 'package:remotescreen/call_video_quality.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('切换路径的旧带宽估计保留恢复期，实际低帧率仍立即降档', () {
+    final policy = CallQualityPolicy(3)..tier = 3;
+    policy.routeChanged();
+    for (var i = 0; i < 4; i++) {
+      policy.sample(bandwidth: 300000, loss: 0, fps: 30);
+      expect(policy.tier, 3);
+    }
+    policy.routeChanged();
+    policy.sample(bandwidth: 300000, loss: 0, fps: 10);
+    expect(policy.tier, lessThan(3));
+  });
+
   test('四档都修改同一个RTP发送器，保持30fps，不重新采集或连接', () async {
     const channel = MethodChannel('FlutterWebRTC.Method');
     final calls = <String>[];

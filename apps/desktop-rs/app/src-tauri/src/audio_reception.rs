@@ -60,7 +60,7 @@ pub fn start(
                         _ => None,
                     };
                     if let Some(volume) = volume {
-                        publication.set_enabled(volume.load(Ordering::Relaxed) > 0);
+                        publication.set_enabled(volume.load(Ordering::Relaxed) > 0 && !crate::media_route::receiving_direct(publication.sid().as_str()));
                     }
                 }
             }

@@ -24,7 +24,7 @@ use std::{
 fn direct_transport_preserves_camera_tiers_audio_and_capture() {
     tauri::async_runtime::block_on(async {
         let a = DirectTransport::new(vec![]).unwrap();
-        let mut b = DirectTransport::new(vec![]).unwrap();
+        let mut b = DirectTransport::new_answerer(vec![]).unwrap();
         let video = NativeVideoSource::new(
             VideoResolution {
                 width: 1920,
@@ -33,7 +33,7 @@ fn direct_transport_preserves_camera_tiers_audio_and_capture() {
             false,
         );
         let camera = a._factory.create_video_track("camera", video.clone());
-        a.replace_track(1, Some(MediaStreamTrack::Video(camera)))
+        a.replace_track(1, Some(MediaStreamTrack::Video(camera.clone())))
             .unwrap();
         let audio = NativeAudioSource::new(
             AudioSourceOptions {
@@ -98,7 +98,26 @@ fn direct_transport_preserves_camera_tiers_audio_and_capture() {
         a.copy_encoding(1, &initial).unwrap();
         let offer = a.offer().await.unwrap();
         assert!(offer.contains("H264/90000") && offer.contains("VP8/90000"));
-        let answer = b.answer(&offer).await.unwrap();
+        assert_eq!(
+            offer.matches("a=sendonly").count(),
+            4,
+            "outgoing source slots must keep independent encoder capabilities"
+        );
+        assert_eq!(
+            offer.matches("a=recvonly").count(),
+            4,
+            "same PC must receive all four reverse sources"
+        );
+        assert!(
+            offer.contains("packetization-mode=0"),
+            "directional camera negotiation must keep software H264"
+        );
+        assert!(
+            offer.contains("rtx/90000"),
+            "video repair codec must survive preference selection"
+        );
+        b.prepare_answer(&offer).await.unwrap();
+        let answer = b.finish_answer().await.unwrap();
         a.accept_answer(&answer).await.unwrap();
         tokio::time::timeout(Duration::from_secs(10), async {
             while a.pc.connection_state() != PeerConnectionState::Connected
@@ -208,6 +227,56 @@ fn direct_transport_preserves_camera_tiers_audio_and_capture() {
             assert_eq!(a.pc.connection_state(), PeerConnectionState::Connected);
             assert_eq!(b.pc.connection_state(), PeerConnectionState::Connected);
         }
+        a.replace_track(1, None).unwrap();
+        assert_eq!(a.bound_track_id(1), None);
+        assert!(!a.slots[1].sender().parameters().encodings[0].active);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let paused = a.slots[1]
+            .sender()
+            .get_stats()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|s| match s {
+                RtcStats::OutboundRtp(r) => Some(r.outbound.frames_sent as u64),
+                _ => None,
+            })
+            .sum::<u64>();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let still = a.slots[1]
+            .sender()
+            .get_stats()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|s| match s {
+                RtcStats::OutboundRtp(r) => Some(r.outbound.frames_sent as u64),
+                _ => None,
+            })
+            .sum::<u64>();
+        assert_eq!(
+            paused, still,
+            "empty camera binding must not generate video"
+        );
+        a.replace_track(1, Some(MediaStreamTrack::Video(camera)))
+            .unwrap();
+        assert!(a.slots[1].sender().parameters().encodings[0].active);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let resumed = a.slots[1]
+            .sender()
+            .get_stats()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|s| match s {
+                RtcStats::OutboundRtp(r) => Some(r.outbound.frames_sent as u64),
+                _ => None,
+            })
+            .sum::<u64>();
+        assert!(
+            resumed > still + 45,
+            "source rebind must resume near 30fps without renegotiation"
+        );
         let stats = a.pc.get_stats().await.unwrap();
         assert!(stats
             .iter()
@@ -216,5 +285,56 @@ fn direct_transport_preserves_camera_tiers_audio_and_capture() {
         stop.store(true, Ordering::Relaxed);
         video_capture.abort();
         audio_capture.abort();
+    });
+}
+
+#[test]
+fn remote_sdp_rejects_source_slot_spoofing() {
+    let mut sdp = "v=0\r\n".to_string();
+    for index in 0..8 {
+        let kind = if index % 4 == 1 || index % 4 == 2 {
+            "video"
+        } else {
+            "audio"
+        };
+        sdp.push_str(&format!(
+            "m={kind} 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:{index}\r\n"
+        ));
+    }
+    assert!(validate_remote_sdp(&sdp).is_ok());
+    assert!(validate_remote_sdp(&sdp.replacen("a=mid:1", "a=mid:2", 1)).is_err());
+    assert!(validate_remote_sdp(&sdp.replacen("m=video", "m=audio", 1)).is_err());
+    assert!(validate_remote_sdp(
+        &(sdp.clone() + "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=mid:4\r\n")
+    )
+    .is_err());
+    assert!(validate_remote_sdp(&"x".repeat(MAX_SDP + 1)).is_err());
+}
+
+#[test]
+#[ignore = "native codec direction comparison"]
+fn native_h264_formats_follow_transceiver_direction() {
+    tauri::async_runtime::block_on(async {
+        for receive in [false, true] {
+            let peer = DirectTransport::new(vec![]).unwrap();
+            let offer = peer
+                .pc
+                .create_offer(OfferOptions {
+                    offer_to_receive_audio: receive,
+                    offer_to_receive_video: receive,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .to_string();
+            let section = offer.split("\nm=").nth(2).unwrap();
+            println!("receive={receive} camera codecs:");
+            for line in section
+                .lines()
+                .filter(|l| l.starts_with("a=fmtp:") || l.starts_with("a=send"))
+            {
+                println!("{line}");
+            }
+        }
     });
 }

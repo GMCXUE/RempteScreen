@@ -22,7 +22,31 @@ class _Sender extends Fake implements rtc.RTCRtpSender {
   }
 }
 
+class _Track extends Fake implements rtc.MediaStreamTrack {
+  _Track(this.kind);
+  @override
+  final String kind;
+}
+
+class _Receiver extends Fake implements rtc.RTCRtpReceiver {
+  _Receiver(String kind) : track = _Track(kind);
+  @override
+  final rtc.MediaStreamTrack track;
+}
+
 class _Transceiver extends Fake implements rtc.RTCRtpTransceiver {
+  _Transceiver({this.mid = '', String kind = 'video'})
+      : receiver = _Receiver(kind);
+  @override
+  final String mid;
+  @override
+  final rtc.RTCRtpReceiver receiver;
+  rtc.TransceiverDirection direction = rtc.TransceiverDirection.RecvOnly;
+  @override
+  Future<void> setDirection(rtc.TransceiverDirection value) async {
+    direction = value;
+  }
+
   @override
   final sender = _Sender();
   List<String> codecs = [];
@@ -43,6 +67,9 @@ class _Pc extends Fake implements rtc.RTCPeerConnection {
       rtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected;
   bool closed = false, disposed = false;
   rtc.RTCSessionDescription? local;
+  final negotiated = <_Transceiver>[];
+  @override
+  Future<List<rtc.RTCRtpTransceiver>> getTransceivers() async => negotiated;
   @override
   rtc.RTCIceGatheringState get iceGatheringState =>
       rtc.RTCIceGatheringState.RTCIceGatheringStateComplete;
@@ -52,7 +79,11 @@ class _Pc extends Fake implements rtc.RTCPeerConnection {
       rtc.RTCRtpMediaType? kind,
       rtc.RTCRtpTransceiverInit? init}) async {
     kinds.add(kind!);
-    expect(init!.direction, rtc.TransceiverDirection.SendRecv);
+    expect(
+        init!.direction,
+        created.length < 4
+            ? rtc.TransceiverDirection.SendOnly
+            : rtc.TransceiverDirection.RecvOnly);
     expect(init.sendEncodings!.single.active, false);
     final t = _Transceiver();
     t.sender.parameters.encodings!.single.active = false;
@@ -76,7 +107,16 @@ class _Pc extends Fake implements rtc.RTCPeerConnection {
   @override
   Future<rtc.RTCSessionDescription?> getLocalDescription() async => local;
   @override
-  Future<void> setRemoteDescription(rtc.RTCSessionDescription value) async {}
+  Future<void> setRemoteDescription(rtc.RTCSessionDescription value) async {
+    if (value.type == 'offer') {
+      for (var index = 0; index < 8; index++) {
+        negotiated.add(_Transceiver(
+            mid: '$index',
+            kind: index % 4 == 1 || index % 4 == 2 ? 'video' : 'audio'));
+      }
+    }
+  }
+
   @override
   Future<void> close() async {
     closed = true;
@@ -88,6 +128,17 @@ class _Pc extends Fake implements rtc.RTCPeerConnection {
   }
 }
 
+final validRemoteSdp = [
+  'v=0\r\n',
+  for (var slot = 0; slot < 8; slot++)
+    'm=${slot % 4 == 1 || slot % 4 == 2 ? 'video' : 'audio'} 9 UDP/TLS/RTP/SAVPF 111\r\na=mid:$slot\r\na=${slot < 4 ? 'sendonly' : 'recvonly'}\r\n'
+].join();
+
+final validRemoteAnswer = validRemoteSdp
+    .replaceAll('a=sendonly', 'a=temporary')
+    .replaceAll('a=recvonly', 'a=sendonly')
+    .replaceAll('a=temporary', 'a=recvonly');
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('FlutterWebRTC.Method');
@@ -98,7 +149,10 @@ void main() {
       (call) async => {
             'codecs': [
               {'mimeType': 'video/H264', 'clockRate': 90000},
-              {'mimeType': 'video/VP8', 'clockRate': 90000}
+              {'mimeType': 'video/VP8', 'clockRate': 90000},
+              {'mimeType': 'video/rtx', 'clockRate': 90000},
+              {'mimeType': 'video/red', 'clockRate': 90000},
+              {'mimeType': 'video/ulpfec', 'clockRate': 90000}
             ],
             'headerExtensions': [],
             'fecMechanisms': []
@@ -112,16 +166,39 @@ void main() {
     });
     expect(
         directMediaSources, ['microphone', 'camera', 'screen', 'screen_audio']);
-    expect(pc.created, hasLength(4));
+    expect(pc.created, hasLength(8));
     await link.activate();
-    expect(pc.created[1].codecs, ['video/H264']);
-    expect(pc.created[2].codecs, ['video/VP8']);
+    expect(pc.created[1].codecs,
+        ['video/H264', 'video/rtx', 'video/red', 'video/ulpfec']);
+    expect(pc.created[2].codecs,
+        ['video/VP8', 'video/rtx', 'video/red', 'video/ulpfec']);
     expect(await link.offer(), 'local-offer');
-    expect(await link.answer('remote-offer'), 'local-answer');
-    await link.acceptAnswer('remote-answer');
+
+    await link.acceptAnswer(validRemoteAnswer);
     await link.close();
     await link.close();
     expect(pc.closed && pc.disposed, true);
+  });
+  test('回答端把发送器绑定到 offer 的实际 MID，避免新建未关联槽位', () async {
+    final pc = _Pc();
+    final link =
+        await DirectTransport.create(answerer: true, factory: (_) async => pc);
+    expect(pc.created, isEmpty);
+    await link.prepareAnswer(validRemoteSdp);
+    expect(link.slots, pc.negotiated.skip(4));
+    expect(pc.negotiated.take(4).map((t) => t.direction),
+        everyElement(rtc.TransceiverDirection.RecvOnly));
+    expect(pc.negotiated.skip(4).map((t) => t.direction),
+        everyElement(rtc.TransceiverDirection.SendOnly));
+    expect(link.sourceForMid('0'), 0);
+    expect(link.sourceForMid('4'), null);
+    expect(await link.finishAnswer(), 'local-answer');
+    expect(
+        pc.negotiated
+            .skip(4)
+            .map((t) => t.sender.parameters.encodings!.single.active),
+        everyElement(false));
+    await link.close();
   });
   test('复制四档参数保留直连 active、RID 和 transactionId，单独暂停发送器', () async {
     final pc = _Pc();
@@ -155,6 +232,23 @@ void main() {
     expect(pc.created[1].sender.parameters.encodings!.single.active, true);
     await expectLater(
         link.acceptAnswer('x' * (directMaxSdp + 1)), throwsStateError);
+    await expectLater(
+        link.acceptAnswer(
+            '${validRemoteSdp}m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=mid:4\r\n'),
+        throwsStateError);
+    await expectLater(
+        link.acceptAnswer(validRemoteAnswer.replaceFirst('a=mid:1', 'a=mid:2')),
+        throwsStateError);
+    await link.close();
+  });
+  test('好友通话直连沿用原有独立音频工厂', () async {
+    final pc = _Pc();
+    final link = await DirectTransport.create(
+        friendCallAudio: true,
+        factory: (config) async {
+          expect(config['friendCallAudio'], true);
+          return pc;
+        });
     await link.close();
   });
   test('TURN 配置不会偷偷建立中继直连', () async {

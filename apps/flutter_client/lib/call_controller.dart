@@ -8,6 +8,7 @@ import 'native_service.dart';
 import 'friend_audio_options.dart';
 import 'call_video_options.dart';
 import 'call_video_quality.dart';
+import 'direct_media.dart';
 
 /// 会话内的语音、摄像头通话控制。
 ///
@@ -80,12 +81,17 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
       ..on<TrackUnpublishedEvent>((event) => _refreshAfterTrackEvent());
     room.addListener(_roomChanged);
     WidgetsBinding.instance.addObserver(this);
-    _videoQuality = CallVideoQuality(room, peerIdentity: peerIdentity);
+    mediaRoute = DirectMedia(room,
+        peerIdentity: peerIdentity, friendCallAudio: friendCall);
+    mediaRoute.addListener(_roomChanged);
+    _videoQuality = CallVideoQuality(room,
+        peerIdentity: peerIdentity, mediaRoute: mediaRoute);
     _syncFloatingVideo();
   }
 
   late final EventsListener<RoomEvent> _peerEvents;
   late final CallVideoQuality _videoQuality;
+  late final DirectMedia mediaRoute;
   final Set<String> _departedPeers = {};
 
   void _refreshAfterTrackEvent() {
@@ -203,7 +209,7 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
         continue;
       }
       for (final publication in participant.videoTrackPublications) {
-        final track = publication.track;
+        final track = mediaRoute.resolve(publication);
         if (publication.source == TrackSource.camera &&
             publication.subscribed &&
             !publication.muted &&
@@ -299,6 +305,8 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _syncAudioReception() {
     if (_closed) return Future.value();
+    mediaRoute.speakerEnabled = speakerEnabled;
+    mediaRoute.screenAudioEnabled = screenAudioEnabled;
     _audioReceptionDirty = true;
     return _audioReceptionQueue ??= Future<void>(() async {
       try {
@@ -312,20 +320,23 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
               final enabled = switch (publication.source) {
                 TrackSource.microphone => speakerEnabled,
                 TrackSource.screenShareAudio ||
-                TrackSource.unknown => screenAudioEnabled,
+                TrackSource.unknown =>
+                  screenAudioEnabled,
                 _ => null,
               };
               if (enabled == null || _closed) continue;
               // Keep the subscription and its SID. Local mute takes effect
               // immediately; publication settings stop the server's RTP too.
-              if (publication.enabled != enabled) {
-                if (enabled) {
+              final sfuEnabled =
+                  enabled && !mediaRoute.isReceiving(publication.sid);
+              if (publication.enabled != sfuEnabled) {
+                if (sfuEnabled) {
                   await publication.enable();
                 } else {
                   await publication.disable();
                 }
               }
-              final track = publication.track;
+              final track = mediaRoute.resolve(publication);
               if (track is RemoteAudioTrack &&
                   track.mediaStreamTrack.enabled != enabled) {
                 if (enabled) {
@@ -416,6 +427,8 @@ class CallController extends ChangeNotifier with WidgetsBindingObserver {
     _controllers.remove(this);
     _peerEvents.dispose();
     _videoQuality.close();
+    mediaRoute.removeListener(_roomChanged);
+    unawaited(mediaRoute.close());
     WidgetsBinding.instance.removeObserver(this);
     _syncFloatingVideo(force: true);
     unawaited(_updateProtection().catchError((_) {}));

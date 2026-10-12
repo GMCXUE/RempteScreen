@@ -796,8 +796,8 @@ impl RtcSession {
         self.inner.mid_to_track_id.lock().get(mid).cloned()
     }
 
-    pub fn remove_track(&self, sender: RtpSender) -> EngineResult<()> {
-        self.inner.remove_track(sender)
+    pub fn remove_track(&self, sender: RtpSender, track_id: String) -> EngineResult<()> {
+        self.inner.remove_track(sender, track_id)
     }
 
     pub fn publisher_negotiation_needed(&self) {
@@ -1966,11 +1966,10 @@ impl SessionInner {
         }
     }
 
-    fn remove_track(&self, sender: RtpSender) -> EngineResult<()> {
-        if let Some(track) = sender.track() {
-            let mut pending_tracks = self.pending_tracks.lock();
-            pending_tracks.remove(&track.id());
-        }
+    fn remove_track(&self, sender: RtpSender, track_id: String) -> EngineResult<()> {
+        // A deliberately paused sender can have no RTC track. The publication
+        // still owns its source ID; do not query a nullable native sender track.
+        self.pending_tracks.lock().remove(&track_id);
 
         self.publisher_pc.peer_connection().remove_track(sender)?;
 

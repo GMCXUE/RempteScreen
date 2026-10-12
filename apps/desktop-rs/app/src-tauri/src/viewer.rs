@@ -8,7 +8,7 @@ use tauri::{Manager, Emitter};
 use mozjpeg::{ColorSpace, Compress};
 use livekit::prelude::*;
 use livekit::webrtc::prelude::VideoBuffer;
-use livekit::webrtc::video_stream::native::NativeVideoStream;
+
 use livekit::Room;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -203,6 +203,7 @@ async fn run_watch(
     let peer_identity = format!("caster-{}", room.name().trim_start_matches("device-"));
     let _quality = crate::call_quality::start(&room, stop.clone(), Some(peer_identity.clone()));
     let _audio_reception = crate::audio_reception::start(&room, stop.clone(), Some(voice_volume.clone()), Some(volume.clone()), Some(peer_identity.clone()));
+    let _direct = crate::direct_media::start(&room, stop.clone(), Some(peer_identity.clone()));
     let local = room.local_participant();
     *local_out.lock().unwrap() = Some(local.clone());
 
@@ -384,7 +385,7 @@ async fn run_watch(
         }
     });
 
-    let mut stream = NativeVideoStream::new(track.rtc_track());
+    let mut stream = crate::media_route::VideoStream::new(Some(track.sid().as_str()), track.rtc_track());
     let mut rgb: Vec<u8> = Vec::new();
     let mut jpeg: Vec<u8> = Vec::new();
     let mut window_start = Instant::now();
@@ -475,15 +476,18 @@ async fn run_watch(
 
 /// 把通话摄像头轨独立编码到小窗帧池，绝不覆盖屏幕共享主画面。
 pub fn spawn_camera_decoder(track: RemoteVideoTrack, frames: FrameStore, stop: Arc<AtomicBool>) -> Arc<AtomicBool> {
-    spawn_camera_preview(track.rtc_track(), frames, stop)
+    spawn_camera_preview_with_sid(track.rtc_track(), Some(track.sid().to_string()), frames, stop)
 }
 
 /// Local and remote camera previews share the same bounded frame decoder.
 pub fn spawn_camera_preview(track: livekit::webrtc::video_track::RtcVideoTrack, frames: FrameStore, stop: Arc<AtomicBool>) -> Arc<AtomicBool> {
+    spawn_camera_preview_with_sid(track,None,frames,stop)
+}
+fn spawn_camera_preview_with_sid(track: livekit::webrtc::video_track::RtcVideoTrack, sid:Option<String>, frames: FrameStore, stop: Arc<AtomicBool>) -> Arc<AtomicBool> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancel = cancelled.clone();
     tauri::async_runtime::spawn(async move {
-        let mut stream = NativeVideoStream::new(track);
+        let mut stream = crate::media_route::VideoStream::new(sid.as_deref(), track);
         let mut rgb = Vec::new();
         let mut window_start = Instant::now();
         let mut window_frames = 0u32;

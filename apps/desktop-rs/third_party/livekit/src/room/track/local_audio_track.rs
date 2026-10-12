@@ -145,6 +145,11 @@ impl LocalAudioTrack {
         self.inner.events.lock().unmuted.replace(Box::new(f));
     }
 
+    /// Returns the SFU sender without changing capture or publication ownership.
+    pub fn rtp_sender(&self) -> Option<libwebrtc::rtp_sender::RtpSender> {
+        self.transceiver().map(|t|t.sender())
+    }
+
     pub(crate) fn transceiver(&self) -> Option<RtpTransceiver> {
         self.inner.info.read().transceiver.clone()
     }
