@@ -5,7 +5,17 @@
   let state=null,peer=null,messages=[],hasMore=false,polling=false,loading=false,mutating=false,generation=0;
   let retry=null,readSeq=null,accountGeneration=0,friendsTab=false,syncCursor=null;
   const node=(tag,text='',cls='')=>{const e=document.createElement(tag);e.textContent=text;e.className=cls;return e;};
-  const error=e=>{el('social-error').textContent=String(e);};
+  const error=e=>window.showAppToast(String(e),2200);
+  const syncFailures=new Map();
+  function syncError(source,e) {
+    if(document.hidden||el('page-messages').classList.contains('hidden'))return;
+    const text=String(e),previous=syncFailures.get(source);
+    if(previous?.text===text)return;
+    recovered(source);
+    const duplicate=[...syncFailures.values()].find(f=>f.text===text);
+    syncFailures.set(source,duplicate||{text,dismiss:error(e)});
+  }
+  function recovered(source) {const failure=syncFailures.get(source);syncFailures.delete(source);if(failure&&![...syncFailures.values()].includes(failure))failure.dismiss?.();}
   const button=(text,action,cls='ghost')=>{const b=node('button',text,cls);b.type='button';b.disabled=mutating;b.onclick=()=>Promise.resolve(action()).catch(error);return b;};
   const name=friend=>friend.remark||friend.name;
   const chatUi=new window.ChatMessages({api,invoke:(command,args)=>window.__TAURI__.core.invoke(command,args),notice:text=>window.showAppToast(text,1200),error,
@@ -25,10 +35,11 @@
   function renderMessages(){chatUi.invalidate(messages);el('social-messages').replaceChildren(...messages.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();})));}
   async function change(operation,body) {
     if(mutating)return;mutating=true;
-    try{await api(operation,body);await refresh();el('social-error').textContent='';}
+    try{await api(operation,body);await refresh();}
     finally{mutating=false;renderContacts();renderActions();}
   }
   function resetChat() {
+    recovered('messages');recovered('read');
     ++generation;peer=null;messages=[];retry=null;readSeq=null;syncCursor=null;hasMore=false;chatUi.close();chatUi.clearDraft();composeError();
     const empty=node('div','','social-empty');empty.append(node('span','···','social-empty-symbol'),node('strong','选择好友，开始聊天'),node('span','在好友列表选择联系人，即可打开会话'));el('social-messages').replaceChildren(empty);el('social-actions').replaceChildren();
     el('social-chat-title').textContent='聊天';el('social-compose').classList.add('hidden');el('social-older').classList.add('hidden');el('social-draft').value='';
@@ -40,6 +51,7 @@
     try {
       const data=await api('state');
       if(accountVersion!==accountGeneration || el('app').classList.contains('hidden'))return;
+      recovered('contacts');
       if(state && state.me.id!==data.me.id)resetChat();
       state=data;
       window.accountAvatars?.update(data.me);
@@ -53,7 +65,10 @@
         else {peer=current;renderChatTitle(peer);}
       }
       renderContacts();renderActions();
-    } catch(e){if(!el('page-messages').classList.contains('hidden'))error(e);}
+    } catch(e){if(accountVersion===accountGeneration&&!el('app').classList.contains('hidden')){
+      syncError('contacts',e);
+      if(!state){const empty=node('div','','social-empty');empty.append(node('span','消息暂时无法同步'),button('重试',refresh));el('social-contacts').replaceChildren(empty);}
+    }}
     finally{polling=false;}
   }
   function renderContacts() {
@@ -128,6 +143,7 @@
     try {
       const data=await api('messages',{peerId:current.id,...(syncCursor!==null?{syncCursor,loadedFrom:messages[0]?.seq}:{}),...(messages.length?(older?{before:messages[0].seq}:{after:messages.at(-1).seq}):{})});
       if(version!==generation || peer?.id!==current.id)return;
+      recovered('messages');
       const container=el('social-messages'),atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<80;
       const oldHeight=container.scrollHeight,oldTop=container.scrollTop,initial=messages.length===0;
       const map=new Map(messages.map(m=>[m.id,m]));let changed=false;
@@ -140,11 +156,14 @@
       if(!messages.length){container.replaceChildren();const empty=node('div','','social-empty');empty.append(node('strong','还没有消息'),node('span','发送一条消息，开始聊天'));container.append(empty);}
       if(older)container.scrollTop=oldTop+container.scrollHeight-oldHeight;else if(atBottom)container.scrollTop=container.scrollHeight;
       el('social-older').classList.toggle('hidden',!hasMore);
-      const last=data.messages.at(-1);
+      const last=messages.at(-1);
       if(!older && last && last.seq!==readSeq && !document.hidden && document.hasFocus() && !el('page-messages').classList.contains('hidden')) {
-        await api('read',{peerId:current.id,seq:last.seq});if(version===generation)readSeq=last.seq;
+        try{await api('read',{peerId:current.id,seq:last.seq});if(version===generation){readSeq=last.seq;recovered('read');}}
+        catch(e){if(version===generation)syncError('read',e);}
       }
-    }catch(e){if(version===generation)error(e);}
+    }catch(e){if(version===generation){syncError('messages',e);
+      if(!messages.length){const empty=node('div','','social-empty');empty.append(node('span','消息暂时无法同步'),button('重试',()=>load()));el('social-messages').replaceChildren(empty);}
+    }}
     finally{loading=false;}
   }
   const toast=text=>window.showAppToast(text);
@@ -211,15 +230,15 @@
       if(text){const data=await api('send',{peerId:current.id,text,clientId:retry.id});if(version!==generation)return;
         if(el('social-draft').value.trim()===text)el('social-draft').value='';retry=null;addSent(data);
       }
-      el('social-error').textContent='';await load();await refresh();
+      await load();await refresh();
     }catch(e){if(version===generation)composeError(String(e));}
     finally{mutating=false;renderComposer();}
   };
   window.addEventListener('account-avatar-changed',()=>{refresh().then(()=>{if(state&&peer&&messages.length)renderMessages();return load();});});
   window.addEventListener('account-profile-changed',refresh);
   window.addEventListener('social-account-changed',()=>{
-    ++accountGeneration;state=null;resetChat();el('social-account').textContent='';
-    el('social-contacts').replaceChildren();el('social-error').textContent='';el('social-unread').classList.add('hidden');
+    ++accountGeneration;for(const source of syncFailures.keys())recovered(source);state=null;resetChat();el('social-account').textContent='';
+    el('social-contacts').replaceChildren();el('social-unread').classList.add('hidden');
   });
   const syncNotificationContext=()=>window.__TAURI__.core.invoke('set_notification_context',{peerId:!document.hidden&&document.hasFocus()&&!el('page-messages').classList.contains('hidden')?peer?.id||null:null}).catch(()=>{});
   setInterval(syncNotificationContext,1000);window.addEventListener('focus',syncNotificationContext);window.addEventListener('blur',syncNotificationContext);document.addEventListener('visibilitychange',syncNotificationContext);document.querySelectorAll('.nav-item').forEach(button=>button.addEventListener('click',()=>queueMicrotask(syncNotificationContext)));

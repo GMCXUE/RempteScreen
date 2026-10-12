@@ -596,8 +596,6 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 .social-compose { flex-shrink: 0; }
 .social-compose textarea { resize: none; max-height: 120px; }
 .social-compose button.primary, .social-request-actions button.primary { width: auto; margin-top: 0; padding: 7px 16px; min-height: 32px; flex-shrink: 0; }
-#social-error { margin: 0; padding: 8px 20px; font-size: 12px; flex-shrink: 0; }
-#social-error:empty { display: none; }
 @media(max-width:760px) { .social-layout.card { grid-template-columns: 210px minmax(0,1fr); } }
 .social-bubble { flex-shrink: 0; }
 

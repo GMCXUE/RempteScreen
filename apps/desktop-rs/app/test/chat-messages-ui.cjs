@@ -30,6 +30,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
     if(command==='read_chat_image'){window.clipboardReads=(window.clipboardReads||0)+1;if(window.clipboardError)throw window.clipboardError;if(window.delayClipboard)return new Promise(resolve=>window.resolveClipboard=resolve);return window.clipboardImage||null;}
     if(command!=='social_api')return {};
     window.calls.push({op:args.operation,body:args.body});
+    if(window.failSync?.includes(args.operation))throw '连不上服务器，请检查网络或服务器地址';
     if(args.operation==='state')return {me:window.me,friends:[window.peer],requests:[],outgoing:[],blocked:[]};
     if(args.operation==='messages')return JSON.parse(JSON.stringify({messages:window.rows.filter(m=>!args.body.after||BigInt(m.seq)>BigInt(args.body.after)),hasMore:false,updates:window.changes.filter(m=>Number(m.editSeq)>Number(args.body.syncCursor||0)),syncCursor:String(window.changes.length),serverNow:String(Date.now())}));
     if(args.operation==='send-image'){
@@ -47,7 +48,31 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
    }}};
   });
   for(const file of ['ui-icons.js','feedback.js','avatars.js','chat-messages.js','social.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,file),'utf8')});
+  await page.evaluate(()=>{window.toasts=[];const show=window.showAppToast;window.showAppToast=(text,duration)=>{window.toasts.push({text,duration});return show(text,duration);};});
   await page.locator('[data-page="messages"]').click();await page.waitForSelector('.social-contact');await page.locator('.social-contact').click();await page.waitForSelector('[data-message-id="m1"]');
+  assert.equal(await page.locator('#social-error').count(),0,'no permanent error row in the chat header');
+  await page.locator('#social-draft').fill('保留未发送的草稿');
+  await page.evaluate(()=>{window.failSync=['state','messages'];window.cachedMessage=document.querySelector('[data-message-id="m1"]');});
+  await page.clock.runFor(4100);await page.waitForFunction(()=>window.toasts.length===1);
+  assert.equal(await page.locator('#ft-toast').isVisible(),true);
+  await page.clock.runFor(8200);assert.equal(await page.evaluate(()=>window.toasts.length),1,'polling coalesces identical failures and never repeats them during one outage');
+  assert.equal(await page.locator('#ft-toast').isVisible(),false,'sync feedback expires');
+  assert.equal(await page.locator('#social-draft').inputValue(),'保留未发送的草稿');
+  assert.equal(await page.evaluate(()=>window.cachedMessage===document.querySelector('[data-message-id="m1"]')),true,'failure preserves loaded messages');
+  await page.evaluate(()=>window.failSync=['messages']);await page.clock.runFor(4100);assert.equal(await page.evaluate(()=>window.toasts.length),1,'contact recovery cannot reset the message outage');
+  await page.evaluate(()=>window.failSync=[]);await page.locator('[data-page="messages"]').click();
+  await page.waitForFunction(()=>window.calls.filter(c=>c.op==='messages').length>3);
+  await page.evaluate(()=>window.failSync=['messages']);await page.clock.runFor(4100);await page.waitForFunction(()=>window.toasts.length===2);
+  await page.evaluate(()=>window.showAppToast('保留新的操作提示',2200));await page.evaluate(()=>window.failSync=[]);await page.locator('[data-page="messages"]').click();
+  await page.waitForFunction(()=>!window.failSync.length);
+  assert.equal(await page.locator('#ft-toast').isVisible(),true,'sync recovery must not dismiss newer operation feedback');
+  assert.equal(await page.locator('#ft-toast').textContent(),'保留新的操作提示');
+  await page.evaluate(()=>{window.failSync=['read'];window.rows.push({id:'read-retry',seq:'4',senderId:'peer',kind:'text',text:'重试已读',createdAt:String(Date.now())});});
+  await page.clock.runFor(4100);await page.waitForFunction(()=>window.toasts.at(-1)?.text.includes('连不上服务器'));
+  const readAttempts=await page.evaluate(()=>window.calls.filter(c=>c.op==='read').length);
+  await page.clock.runFor(4100);assert.ok(await page.evaluate(n=>window.calls.filter(c=>c.op==='read').length>n,readAttempts),'read acknowledgement retries even when no new messages arrive');
+  const notices=await page.evaluate(()=>window.toasts.length);await page.clock.runFor(4100);assert.equal(await page.evaluate(()=>window.toasts.length),notices,'successful messages do not repeatedly re-show read errors');
+  await page.evaluate(()=>window.failSync=[]);await page.locator('[data-page="messages"]').click();await page.waitForFunction(()=>document.querySelector('#ft-toast').classList.contains('hidden'));
   // Clipboard images belong inside the composer and never send on paste.
   await page.locator('#social-draft').fill('保留草稿');
   const pasteNative=()=>page.evaluate(()=>{window.clipboardImage=window.photo;document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:new DataTransfer(),bubbles:true,cancelable:true}));});
@@ -61,7 +86,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.evaluate(()=>{const data=new DataTransfer();data.setData('text/plain','正常文字');const event=new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true});document.querySelector('#social-draft').dispatchEvent(event);window.textPastePrevented=event.defaultPrevented;});
   assert.equal(await page.evaluate(()=>window.textPastePrevented),false);assert.equal(await page.locator('.chat-image-dialog').count(),0);assert.equal(await page.evaluate(()=>window.clipboardReads),1);
   await page.evaluate(()=>{window.clipboardImage=null;document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:new DataTransfer(),bubbles:true}));});await page.waitForFunction(()=>window.clipboardReads===2);assert.equal(await page.locator('.chat-draft-image').count(),0);
-  await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File([new Uint8Array(8*1024*1024+1)],'large.png',{type:'image/png'}));document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});await page.waitForFunction(()=>document.querySelector('#social-error').textContent==='图片过大，请选择 8 MB 以内的图片');assert.equal(await page.locator('.chat-draft-image').count(),0);
+  await page.evaluate(()=>{const data=new DataTransfer();data.items.add(new File([new Uint8Array(8*1024*1024+1)],'large.png',{type:'image/png'}));document.querySelector('#social-draft').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));});await page.waitForFunction(()=>document.querySelector('#ft-toast').textContent==='图片过大，请选择 8 MB 以内的图片');assert.equal(await page.locator('.chat-draft-image').count(),0);
   // Cmd+V native fallback also stages its image inside the editor.
   await page.evaluate(()=>window.clipboardImage=window.photo);await page.locator('#social-draft').focus();await page.evaluate(()=>document.querySelector('#social-draft').dispatchEvent(new KeyboardEvent('keydown',{key:'v',metaKey:true,bubbles:true})));await page.clock.runFor(65);await page.waitForSelector('.chat-draft-image');assert.equal(await page.evaluate(()=>window.clipboardReads),3);await page.getByRole('button',{name:'移除图片 1',exact:true}).click();
   // Whole body copy does not include its timestamp. Selecting a substring copies only that selection.
@@ -75,7 +100,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.locator('#social-send').click();await page.waitForSelector('[data-message-id="photo1"]');await page.waitForFunction(()=>!document.querySelector('#social-draft').value);
   assert.equal(await page.evaluate(()=>{const ids=window.calls.filter(c=>c.op==='send-image').map(c=>c.body.clientId);return ids[0]===ids[1];}),true);assert.equal(await page.locator('.chat-draft-image').count(),0);assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.op==='send').at(-1).body.text),'保留草稿');
   await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>window.imageCopy.length===1);assert.equal(await page.evaluate(()=>window.imageCopy[0]===window.photo),true);
-  await page.evaluate(()=>window.failCopy=true);await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#social-error').textContent==='复制失败，请重试');await page.evaluate(()=>window.failCopy=false);
+  await page.evaluate(()=>window.failCopy=true);await page.locator('[data-message-id="photo1"] .social-bubble').click({button:'right'});await page.getByRole('menuitem',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#ft-toast').textContent==='复制失败，请重试');await page.evaluate(()=>window.failCopy=false);
   await page.getByRole('button',{name:'查看图片',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.chat-image-dialog p'));assert.ok(await page.locator('.chat-image-dialog img').getAttribute('src'));await page.locator('.chat-image-dialog').getByRole('button',{name:'复制图片',exact:true}).click();await page.waitForFunction(()=>window.imageCopy.length===2);
   // Another client retracts the image: incremental polling closes the open preview.
   await page.evaluate(()=>{const m=window.rows.find(m=>m.id==='photo1');Object.assign(m,{kind:'recalled',image:null,recalledAt:String(Date.now()),editSeq:String(window.changes.length+1)});window.changes.push({...m});});
@@ -91,7 +116,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   const textId=await page.evaluate(()=>window.calls.filter(c=>c.op==='send').at(-1).body.clientId);await page.locator('#social-send').click();await page.waitForFunction(()=>!document.querySelector('#social-draft').value);assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.op==='send').at(-1).body.clientId),textId);assert.equal(await page.evaluate(()=>window.imageAttempts),previousAttempts+1);
   // Pending media is private to its account/session; late clipboard reads cannot resurrect it.
   for(let i=0;i<9;i++){await page.locator('#social-image').click();await page.waitForFunction(n=>document.querySelectorAll('.chat-draft-image').length===n,i+1);}
-  await page.locator('#social-image').click();await page.waitForFunction(()=>document.querySelector('#social-error').textContent==='最多添加 9 张图片');assert.equal(await page.locator('.chat-draft-image').count(),9);
+  await page.locator('#social-image').click();await page.waitForFunction(()=>document.querySelector('#ft-toast').textContent==='最多添加 9 张图片');assert.equal(await page.locator('.chat-draft-image').count(),9);
   await page.evaluate(()=>window.dispatchEvent(new Event('social-account-changed')));assert.equal(await page.locator('.chat-draft-image').count(),0);assert.equal(await page.locator('#social-draft').inputValue(),'');
   await page.locator('[data-page="messages"]').click();await page.locator('.social-contact').click();await page.locator('#social-draft').fill('未发送');
   await page.evaluate(()=>window.delayClipboard=true);await pasteNative();await page.waitForFunction(()=>!!window.resolveClipboard);await page.evaluate(()=>{window.dispatchEvent(new Event('social-account-changed'));window.resolveClipboard(window.photo);});
