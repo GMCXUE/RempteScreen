@@ -23,9 +23,14 @@ function showLogin(show) {
 
 function switchPage(page) {
   currentPage = page;
+  const pageTitles = {cast:"投送本机",watch:"观看设备",transfer:"文件传输",devices:"我的设备",settings:"设置",messages:"消息"};
+  $("workspace-title").textContent = pageTitles[page] || "RemoteScreen";
+  document.querySelector(".workspace").classList.toggle("messages-workspace", page === "messages");
   document.querySelector(".content").classList.toggle("social-content", page === "messages");
   for (const button of document.querySelectorAll(".nav-item")) {
-    button.classList.toggle("active", button.dataset.page === page);
+    const selected = button.dataset.page === page;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
   }
   for (const section of document.querySelectorAll(".page")) {
     section.classList.toggle("hidden", section.id !== `page-${page}`);
