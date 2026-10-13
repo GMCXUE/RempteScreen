@@ -15,3 +15,7 @@
 全量测试曾发现选图测试在真实时间环境内点击，导致短提示在高负载下先于断言过期；仅将测试点击移回 widget 测试时钟，保留原提示期限和业务断言，定向 11 项及随后完整 120 项回归通过。应用源码没有为测试修改提示行为。
 
 macOS 完整应用严格签名、状态自检、两个采集辅助程序来源及 ZIP 执行权限验证通过。Android 完整 APK 版本和签名证书、SQLite 插件注册、Shorebird 引擎及 auto_update=false 验证通过。构建输入与发布工作区逐字节一致。真实 Android 机型及 macOS WKWebView 的帧时间尚未测量，不宣称所有设备均达到固定帧率。
+
+已发布 macOS 0.2.10（rel_3c003fab392b18c8c1）与 Android 0.2.16（rel_3eb321cf0163c1bcda），buildCode 2026101305，stable 可选完整安装包更新。源码及测试提交 df31165 已推送 codex/server-bandwidth-20261013。macOS ZIP 为 18,528,666 字节，SHA-256 95945feed24f2435a9ae7d56f339ba7f440358ab1969b16de29598db0ce03599；Android APK 为 60,881,338 字节，SHA-256 aac29aa79a4dda774a74941248326b7556833024aef17c6a99250e8408a8eb23。
+
+公网元数据 Ed25519 验签、两端完整下载大小及 SHA-256、当前版本不重复提示升级检查全部通过。27 条既有完整包记录与所有热更新记录保持不变，本次未发布热补丁；Android 使用 Shorebird dry-run 本地构建。安装包、预览图片、测试日志和发布核验收据保存在 dist/motion-2026101305。
