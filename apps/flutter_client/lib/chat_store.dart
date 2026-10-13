@@ -9,7 +9,8 @@ class ChatStore {
   final Database db;
   static Future<ChatStore> open(String path) async {
     final db = await openDatabase(path, version: 2, onConfigure: (d) async {
-      await d.execute('PRAGMA journal_mode=WAL');
+      // journal_mode returns a row; Android's execSQL rejects it.
+      await d.rawQuery('PRAGMA journal_mode=WAL');
       await d.execute('PRAGMA synchronous=FULL');
       await d.execute('PRAGMA foreign_keys=ON');
     }, onCreate: (d, _) async {
