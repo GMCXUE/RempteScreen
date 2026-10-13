@@ -9,3 +9,12 @@ Android 接收文件通过 MediaStore 写入 `Download/RemoteScreen-Files`，但
 验证：Android 四项原生回归覆盖权限拒绝、目录处理器缺失、首选成功和全部失败；Flutter 竖屏用例验证实际保存路径及无法打开时的对话框；桌面浏览器用例验证实际路径和打开失败提示；Flutter 静态检查。尚未在用户手机上复测。
 
 整包版本：macOS 0.2.11、Android 0.2.17，buildCode 2026101306。仅整包，不发布热更新。
+
+## 已发布与校验
+
+源码提交：`5a24c1f`，已推送 `codex/server-bandwidth-20261013`。
+
+- macos 0.2.11，`rel_261788bcb4b5f190bf`，18528306 bytes，SHA256 `2acf4eaa7c622258c5670bb5e4466b793148362cecc5e2414328c5e425c08293`。
+- android 0.2.17，`rel_b6dccdfbd1207067eb`，60881338 bytes，SHA256 `f523f5f1cb282c31d4189c5833de1025543f8beeb298306916f3afb05c34b835`。
+
+两个版本的公共更新清单 Ed25519 签名、完整下载字节数与 SHA256、当前版本不重复提示均通过。Android 证书与上一版一致；macOS 包签名和二进制状态自检通过。旧整包发布记录与热更新记录均未更改。用户手机文件管理器行为仍待真机确认。
