@@ -114,7 +114,7 @@ String chatImageSource(Uint8List bytes) {
   return 'data:image/$mime;base64,${base64Encode(bytes)}';
 }
 
-class ChatMessageBubble extends StatelessWidget {
+class ChatMessageBubble extends StatefulWidget {
   const ChatMessageBubble(
       {super.key,
       required this.message,
@@ -131,7 +131,62 @@ class ChatMessageBubble extends StatelessWidget {
   final VoidCallback? onRetry;
 
   @override
+  State<ChatMessageBubble> createState() => _ChatMessageBubbleState();
+}
+
+class _ChatMessageBubbleState extends State<ChatMessageBubble> {
+  Object? _thumbnailMessageId, _thumbnailKind, _thumbnailSource;
+  Uint8List? _thumbnailBytes;
+  int _thumbnailRevision = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncThumbnail();
+  }
+
+  @override
+  void didUpdateWidget(ChatMessageBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncThumbnail();
+  }
+
+  void _syncThumbnail() {
+    final message = widget.message;
+    final kind = message['kind'];
+    final media = kind == 'video' ? message['video'] : message['image'];
+    final localBytes = message['_localImageBytes'];
+    final thumbnail = media is Map ? media['thumbnail'] : null;
+    final Object? source = kind == 'image' || kind == 'video'
+        ? localBytes is Uint8List
+            ? localBytes
+            : thumbnail is String
+                ? thumbnail
+                : null
+        : null;
+    if (_thumbnailMessageId == message['id'] &&
+        _thumbnailKind == kind &&
+        _thumbnailSource == source) {
+      return;
+    }
+    // MemoryImage keys compare byte-buffer identity. Keep the buffer stable
+    // across typing/polling rebuilds, including cached invalid thumbnails.
+    // Snapshot primitives instead of oldWidget.message: callers may mutate maps.
+    _thumbnailMessageId = message['id'];
+    _thumbnailKind = kind;
+    _thumbnailSource = source;
+    _thumbnailBytes = source is Uint8List ? source : chatImageBytes(source);
+    _thumbnailRevision++;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final message = widget.message;
+    final mine = widget.mine;
+    final timeLabel = widget.timeLabel;
+    final onActions = widget.onActions;
+    final onOpenImage = widget.onOpenImage;
+    final onRetry = widget.onRetry;
     if (message['kind'] == 'recalled') {
       return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -143,10 +198,7 @@ class ChatMessageBubble extends StatelessWidget {
     final video = message['kind'] == 'video';
     final image = message['kind'] == 'image' || video;
     final media = video ? message['video'] : message['image'];
-    final bytes = image
-        ? message['_localImageBytes'] as Uint8List? ??
-            chatImageBytes(media?['thumbnail'])
-        : null;
+    final bytes = _thumbnailBytes;
     final width = math.max(1.0, (media?['width'] as num?)?.toDouble() ?? 240);
     final height = math.max(1.0, (media?['height'] as num?)?.toDouble() ?? 240);
     final scale = math.min(
@@ -199,6 +251,9 @@ class ChatMessageBubble extends StatelessWidget {
                                         width: width * scale,
                                         height: height * scale,
                                         child: Image.memory(bytes,
+                                            // A recycled list row must never
+                                            // display its previous message.
+                                            key: ValueKey(_thumbnailRevision),
                                             cacheWidth: 480,
                                             fit: BoxFit.contain,
                                             gaplessPlayback: true,

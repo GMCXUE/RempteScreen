@@ -308,8 +308,11 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
       await pumpChat(tester);
     }
+    // Dispatch UI actions on the widget test clock. In particular, the media
+    // limit notice creates its expiry timer synchronously during this tap.
+    // Running the tap in runAsync would expire it on wall time under CPU load.
+    await tester.tap(find.text(camera ? '拍照' : '图片与视频'));
     await tester.runAsync(() async {
-      await tester.tap(find.text(camera ? '拍照' : '图片与视频'));
       await Future<void>.delayed(const Duration(milliseconds: 150));
     });
     await pumpChat(tester);

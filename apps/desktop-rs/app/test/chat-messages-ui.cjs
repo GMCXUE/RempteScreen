@@ -11,7 +11,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.route('http://chat.test/**',route=>{
    const pathname=new URL(route.request().url()).pathname;
    if(pathname==='/')return route.fulfill({body:source.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,''),contentType:'text/html'});
-   if(pathname==='/style.css')return route.fulfill({body:fs.readFileSync(path.join(root,'style.css')),contentType:'text/css'});
+   if(['/style.css','/motion.css'].includes(pathname))return route.fulfill({body:fs.readFileSync(path.join(root,pathname.slice(1))),contentType:'text/css'});
    if(/^\/avatars\/[a-z]+\.png$/.test(pathname))return route.fulfill({body:fs.readFileSync(path.join(root,pathname.slice(1))),contentType:'image/png'});
    return route.abort();
   });
@@ -55,7 +55,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
     return {ok:true};
    }}};
   });
-  for(const file of ['ui-icons.js','feedback.js','avatars.js','chat-messages.js','chat-settings.js','chat-outbox.js','social.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,file),'utf8').replace('let followBottom=true;',"let followBottom=true;Object.defineProperty(window,'debugFollow',{get:()=>followBottom});")});
+  for(const file of ['motion.js','ui-icons.js','feedback.js','avatars.js','chat-messages.js','chat-settings.js','chat-outbox.js','social.js'])await page.addScriptTag({content:fs.readFileSync(path.join(root,file),'utf8').replace('let followBottom=true;',"let followBottom=true;Object.defineProperty(window,'debugFollow',{get:()=>followBottom});")});
   await page.evaluate(()=>{window.toasts=[];const show=window.showAppToast;window.showAppToast=(text,duration)=>{window.toasts.push({text,duration});return show(text,duration);};});
   await page.locator('[data-page="messages"]').click();await page.waitForSelector('.social-contact');await page.locator('.social-contact').click();await page.waitForSelector('[data-message-id="m1"]');
   assert.equal(await page.locator('#social-error').count(),0,'no permanent error row in the chat header');
@@ -126,8 +126,9 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.clock.runFor(4100);await page.waitForSelector('.social-recalled[data-message-id="photo1"]');assert.equal(await page.evaluate(()=>window.imageWindow),null);
   await page.evaluate(()=>{delete document.hidden;});
   // Idle polling preserves the actual text node and selection, instead of rebuilding every bubble.
-  await page.evaluate(()=>window.savedTextNode=document.querySelector('[data-message-id="m1"] .chat-message-text'));
+  await page.evaluate(()=>{window.savedTextNode=document.querySelector('[data-message-id="m1"] .chat-message-text');window.savedContact=document.querySelector('.social-contact');window.savedChatAction=document.querySelector('#social-actions button');});
   await page.clock.runFor(4100);assert.equal(await page.evaluate(()=>window.savedTextNode===document.querySelector('[data-message-id="m1"] .chat-message-text')),true);
+  assert.equal(await page.evaluate(()=>window.savedContact===document.querySelector('.social-contact')&&window.savedChatAction===document.querySelector('#social-actions button')),true,'idle contact polling preserves focus and hover targets');
   // A later image can fail after the first succeeds: retry sends only the remaining media.
   await page.locator('#social-draft').fill('图片说明');await page.locator('#social-image').click();await page.waitForSelector('.chat-draft-image');await pasteNative();await page.waitForFunction(()=>document.querySelectorAll('.chat-draft-image').length===2);
   await page.evaluate(()=>{window.failAtImage=window.imageAttempts+2;window.failText=true;});await page.locator('#social-send').click();await page.waitForFunction(()=>document.querySelectorAll('.chat-send-retry').length===2);assert.equal(await page.locator('.chat-draft-image').count(),0);
@@ -146,6 +147,7 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   await page.setViewportSize({width:1100,height:600});await page.clock.runFor(160);
   await page.waitForFunction(()=>{const e=document.querySelector('#social-messages');return e.scrollHeight-e.scrollTop-e.clientHeight<2;});
   await page.locator('#social-draft').fill('一\n二\n三\n四');await page.clock.runFor(160);
+  await page.waitForFunction(()=>{const e=document.querySelector('#social-messages');return e.scrollHeight-e.scrollTop-e.clientHeight<2;});
   assert.ok(await page.locator('#social-messages').evaluate(e=>e.scrollHeight-e.scrollTop-e.clientHeight<2),JSON.stringify(await page.locator('#social-messages').evaluate(e=>({height:e.clientHeight,top:e.scrollTop,total:e.scrollHeight}))));
   await page.evaluate(()=>{const box=document.querySelector('#social-messages');box.scrollTop=0;});await page.clock.runFor(160);
   await page.waitForFunction(()=>!window.debugFollow);await page.setViewportSize({width:1100,height:740});await page.clock.runFor(160);assert.equal(await page.locator('#social-messages').evaluate(e=>e.scrollTop),0);

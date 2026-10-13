@@ -5,7 +5,8 @@
   let state=null,peer=null,messages=[],hasMore=false,polling=false,loading=false,mutating=false,generation=0;
   let clearedThrough="0";
   let readSeq=null,accountGeneration=0,friendsTab=false,syncCursor=null;
-  let outbox=null,seenConfirmed=new Set();const outboxes=new Map();
+  let outbox=null,seenConfirmed=new Set(),restoringHistory=false;const outboxes=new Map();
+  let contactFingerprint=null,actionFingerprint=null,titleFingerprint=null;
   const node=(tag,text='',cls='')=>{const e=document.createElement(tag);e.textContent=text;e.className=cls;return e;};
   const error=e=>window.showAppToast(String(e),2200);
   const syncFailures=new Map();
@@ -31,6 +32,9 @@
     const height=Math.max(42,Math.min(108,draft.scrollHeight));
     draft.style.height=`${height}px`;
     draft.style.overflowY=draft.scrollHeight>108?'auto':'hidden';
+    // Composer growth changes the message viewport immediately. Keep the
+    // bottom anchored in the same frame instead of waiting for ResizeObserver.
+    if(followBottom){const messages=el('social-messages');messages.scrollTop=messages.scrollHeight;}
   }
   function renderComposer(){
     const busy=mutating||chatUi.picking,root=el('social-draft-images');root.replaceChildren();root.classList.toggle('hidden',!chatUi.draftImages.length);
@@ -43,13 +47,13 @@
     el('social-image').disabled=busy||!peer;el('social-send').disabled=busy||!peer||(!el('social-draft').value.trim()&&!chatUi.draftImages.length);el('social-send').textContent=mutating?'发送中…':'发送';el('social-draft').readOnly=mutating;
     resizeDraft();
   }
-  function renderMessages(){if(!state||!peer)return;chatUi.invalidate(messages);const rows=[...messages,...(outbox?.records()||[])];el('social-messages').replaceChildren(...rows.map(m=>chatUi.row(m,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();},id=>outbox?.retry(id))));}
+  function renderMessages(animateNew=false){if(!state||!peer)return;chatUi.invalidate(messages);const rows=[...messages,...(outbox?.records()||[])];chatUi.render(el('social-messages'),rows,state.me,peer,async updated=>{const index=messages.findIndex(m=>m.id===updated.id);if(index>=0)messages[index]=updated;renderMessages();await refresh();},id=>outbox?.retry(id),animateNew);}
   function outboxChanged(queue){
     if(queue!==outbox||state?.me.id!==queue.accountId||peer?.id!==queue.peerId)return;
     const box=el('social-messages'),bottom=box.scrollHeight-box.scrollTop-box.clientHeight<80;
     for(const row of queue.confirmed){if(seenConfirmed.has(row.id))continue;seenConfirmed.add(row.id);if(BigInt(row.seq)<=BigInt(clearedThrough))continue;if(!messages.some(m=>m.id===row.id))messages.push(row);}
     messages.sort((a,b)=>BigInt(a.seq)<BigInt(b.seq)?-1:BigInt(a.seq)>BigInt(b.seq)?1:0);
-    renderMessages();if(bottom)box.scrollTop=box.scrollHeight;
+    renderMessages(bottom&&!restoringHistory);if(bottom)box.scrollTop=box.scrollHeight;
   }
   function bindOutbox(){
     const key=`${state.me.id}:${peer.id}`;
@@ -66,12 +70,13 @@
   }
   function resetChat() {
     recovered('messages');recovered('read');
-    followBottom=true;settings.close();clearedThrough="0";++generation;loading=false;peer=null;messages=[];outbox=null;seenConfirmed=new Set();readSeq=null;syncCursor=null;hasMore=false;chatUi.close();chatUi.clearDraft();composeError();
+    contactFingerprint=actionFingerprint=titleFingerprint=null;
+    followBottom=true;settings.close();clearedThrough="0";++generation;loading=false;peer=null;messages=[];outbox=null;seenConfirmed=new Set();readSeq=null;syncCursor=null;hasMore=false;chatUi.close();chatUi.resetRows();chatUi.clearDraft();composeError();
     const empty=node('div','','social-empty');empty.append(node('span','···','social-empty-symbol'),node('strong','选择好友，开始聊天'),node('span','在好友列表选择联系人，即可打开会话'));el('social-messages').replaceChildren(empty);el('social-actions').replaceChildren();
     el('social-chat-title').textContent='聊天';el('social-compose').classList.add('hidden');el('social-older').classList.add('hidden');el('social-draft').value='';
     resizeDraft();
   }
-  function renderChatTitle(friend){const title=el('social-chat-title'),avatar=node('span','','chat-avatar');window.accountAvatars?.render(avatar,friend);title.replaceChildren(avatar,document.createTextNode(name(friend)));}
+  function renderChatTitle(friend){const fingerprint=JSON.stringify([friend.id,name(friend),friend.avatarId,friend.avatarRevision]);if(titleFingerprint===fingerprint)return;titleFingerprint=fingerprint;const title=el('social-chat-title'),avatar=node('span','','chat-avatar');window.accountAvatars?.render(avatar,friend);title.replaceChildren(avatar,document.createTextNode(name(friend)));}
   async function refresh() {
     if(polling || el('app').classList.contains('hidden'))return;
     polling=true;const accountVersion=accountGeneration;
@@ -100,6 +105,8 @@
   }
   function renderContacts() {
     if(!state)return;
+    const fingerprint=JSON.stringify([state.me.id,state.friends,state.requests,state.outgoing,state.blocked,friendsTab,peer?.id,mutating]);
+    if(contactFingerprint===fingerprint)return;contactFingerprint=fingerprint;
     const root=el('social-contacts');root.replaceChildren();
     const count=state.friends.reduce((sum,f)=>sum+(f.blocked?0:f.unread),0);
     for(const [id,label,total] of [['social-tab-messages','消息',count],['social-tab-friends','好友',state.requests.length]]){const tab=el(id);tab.replaceChildren(node('span',label));if(total)tab.append(node('span',total>99?'99+':String(total),'social-count'));}
@@ -146,6 +153,8 @@
     clear:async friend=>{const v=generation;mutating=true;renderComposer();try{const result=await api('clear-history',{peerId:friend.id});if(v!==generation)return;++generation;loading=false;clearedThrough=result.clearedThrough;outbox?.discardFailures();messages=[];readSeq=null;syncCursor=null;hasMore=false;chatUi.close();renderMessages();el('social-older').classList.add('hidden');await window.__TAURI__.core.invoke('close_chat_history');await refresh();window.showAppToast('聊天记录已清空',1400);}finally{mutating=false;renderComposer();}await load();}
   });
   function renderActions() {
+    const fingerprint=JSON.stringify([peer?.id,peer?.name,peer?.remark,peer?.accountId,peer?.avatarId,peer?.avatarRevision,mutating]);
+    if(actionFingerprint===fingerprint){settings.refresh();return;}actionFingerprint=fingerprint;
     const root=el('social-actions');root.replaceChildren();if(!peer)return;
     const current=peer;
     const voice=button('语音',()=>window.friendCalls.start(current,'voice'),'social-call-button'),video=button('视频',()=>window.friendCalls.start(current,'video'),'social-call-button');
@@ -181,8 +190,9 @@
       if(data.serverNow)chatUi.clockOffset=Number(data.serverNow)-Date.now();
       messages=[...map.values()].sort((a,b)=>BigInt(a.seq)<BigInt(b.seq)?-1:BigInt(a.seq)>BigInt(b.seq)?1:0);
       if(older||initial)hasMore=data.hasMore;
-      outbox?.reconcile([...data.messages,...(data.updates||[])]);
-      if(changed)renderMessages();
+      restoringHistory=older||initial;
+      try{outbox?.reconcile([...data.messages,...(data.updates||[])]);}finally{restoringHistory=false;}
+      if(changed)renderMessages(!older&&!initial&&atBottom);
       if(!messages.length&&!outbox?.items.length){container.replaceChildren();const empty=node('div','','social-empty');empty.append(node('strong','还没有消息'),node('span','发送一条消息，开始聊天'));container.append(empty);}
       if(older)container.scrollTop=oldTop+container.scrollHeight-oldHeight;else if(initial||atBottom){followBottom=true;container.scrollTop=container.scrollHeight;}
       el('social-older').classList.toggle('hidden',!hasMore);

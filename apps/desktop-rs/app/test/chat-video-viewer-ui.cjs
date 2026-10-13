@@ -9,8 +9,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   await page.route('http://video.test/**',route=>{
    const name=new URL(route.request().url()).pathname.slice(1);
    if(name==='sample.mp4')return route.fulfill({body:fixture,contentType:'video/mp4'});
-   if(!['chat-video.html','chat-video.js','ui-icons.js'].includes(name))return route.abort();
-   return route.fulfill({body:fs.readFileSync(path.join(root,name)),contentType:name.endsWith('.js')?'text/javascript':'text/html'});
+   if(!['chat-video.html','chat-video.js','ui-icons.js','motion.js','motion.css'].includes(name))return route.abort();
+   return route.fulfill({body:fs.readFileSync(path.join(root,name)),contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html'});
   });
   await page.addInitScript(()=>{
    window.fullscreen=false;window.recalled=false;window.failed=true;

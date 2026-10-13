@@ -40,7 +40,9 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
   assert.equal(await page.evaluate(()=>window.commands.filter(c=>c.command==='friend_call_window_action').length),0,'swapping does not change capture');
   if(await page.locator('#call-controls').evaluate(e=>e.inert)){await page.locator('#show-controls').click();await page.clock.runFor(250);}
   await page.locator('.chrome').evaluateAll(list=>list.forEach(e=>e.getAnimations().forEach(a=>a.finish())));
+  const anchoredPreview=await page.locator('.small-video').boundingBox();
   await page.locator('#hide-controls').click();assert.equal(await page.locator('#call-controls').evaluate(e=>e.inert),true);
+  assert.deepEqual(await page.locator('.small-video').boundingBox(),anchoredPreview,'hiding controls does not move or resize live video');
   await page.locator('#remote-surface').click();assert.equal(await page.locator('#call-controls').evaluate(e=>e.inert),true,'PiP remains usable when controls hide');
   await page.locator('#show-controls').click();assert.equal(await page.locator('#call-controls').evaluate(e=>e.inert),false);
   await page.locator('#fullscreen').click();assert.equal(await page.locator('#fullscreen').getAttribute('aria-label'),'退出全屏');
@@ -65,6 +67,9 @@ const fs=require('fs'),path=require('path'),assert=require('assert');
    }
   }
   await page.evaluate(()=>{window.failFullscreen=false;window.listeners['friend-call-window:state']({payload:window.call});});await page.clock.runFor(250);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await page.locator('#call-controls').evaluate(e=>getComputedStyle(e).transitionDuration),'0s');
+  await page.emulateMedia({reducedMotion:'no-preference'});
   if(process.env.CALL_SCREENSHOT)await page.screenshot({path:process.env.CALL_SCREENSHOT});
   await page.clock.runFor(4300);assert.equal(await page.locator('#call-controls').evaluate(e=>e.inert),true,'controls auto-hide');
   await page.locator('#show-controls').click();await page.locator('#hangup').click();assert.ok(await page.evaluate(()=>window.commands.some(c=>c.command==='friend_call_window_action'&&c.args.action==='hangup')));

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'call_camera_view.dart';
+import 'app_motion.dart';
 
 /// Swapping and hiding controls only change presentation, never the call tracks.
 class FriendVideoStage extends StatefulWidget {
@@ -54,14 +55,8 @@ class _FriendVideoStageState extends State<FriendVideoStage> {
     _armHide();
   }
 
-  Widget _fade(Widget child) => IgnorePointer(
-      ignoring: !_visible,
-      child: ExcludeSemantics(
-          excluding: !_visible,
-          child: AnimatedOpacity(
-              opacity: _visible ? 1 : 0,
-              duration: const Duration(milliseconds: 180),
-              child: child)));
+  Widget _fade(Widget child) =>
+      AppVisibilityTransition(visible: _visible, child: child);
 
   @override
   void dispose() {
@@ -136,11 +131,11 @@ class _FriendVideoStageState extends State<FriendVideoStage> {
                             icon: const Icon(Icons.keyboard_arrow_down_rounded,
                                 color: Colors.white)),
                       ])))),
-              AnimatedPositioned(
+              Positioned(
                   key: const ValueKey('friend-video-preview'),
-                  duration: const Duration(milliseconds: 180),
                   right: padding.right + 16,
-                  top: padding.top + (_visible ? 88 : 16),
+                  // Hiding controls must not move or resize the live preview.
+                  top: padding.top + 88,
                   width: landscape ? 104 : 112,
                   height: landscape ? 138 : 150,
                   child: Semantics(

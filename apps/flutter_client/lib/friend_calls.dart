@@ -1,3 +1,4 @@
+import 'app_motion.dart';
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart' hide ConnectionState;
@@ -605,6 +606,7 @@ class _FriendCallScreenState extends State<FriendCallScreen> {
           if (!mounted) return;
           final authorize = await showDialog<bool>(
               context: context,
+              animationStyle: AppMotion.style(context),
               builder: (dialog) => AlertDialog(
                     title: const Text('开启悬浮窗'),
                     content: const Text(

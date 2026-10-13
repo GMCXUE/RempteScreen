@@ -17,7 +17,40 @@
  };
  const canRecall=(message,accountId,now=Date.now())=>message.senderId===accountId&&['text','image','video'].includes(message.kind||'text')&&now-Number(message.createdAt)<=120000;
  class ChatMessages {
-  constructor(options){Object.assign(this,options);this.menu=null;this.dialog=null;this.dialogMessage=null;this.clockOffset=0;this.picking=false;this.draftImages=[];this.copyingImage=false;this.recalled=new Set();document.addEventListener('pointerdown',e=>{if(this.menu&&!this.menu.contains(e.target))this.closeMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape')this.closeMenu();});}
+  constructor(options){Object.assign(this,options);this.menu=null;this.dialog=null;this.dialogMessage=null;this.clockOffset=0;this.picking=false;this.draftImages=[];this.copyingImage=false;this.recalled=new Set();this.renderedRows=new Map();this.seenRows=new Set();this.newRows=new Set();this.motionFrame=null;document.addEventListener('pointerdown',e=>{if(this.menu&&!this.menu.contains(e.target))this.closeMenu();});document.addEventListener('keydown',e=>{if(e.key==='Escape')this.closeMenu();});}
+  resetRows(){cancelAnimationFrame(this.motionFrame);this.motionFrame=null;for(const {element} of this.renderedRows.values())window.appMotion?.cancel(element);this.renderedRows.clear();this.seenRows.clear();this.newRows.clear();}
+  render(root,messages,me,peer,onRecall,onRetry,animateNew=false){
+   const next=new Map(),added=[];
+   for(const message of messages){
+    // A queued message and its server acknowledgement have the same identity.
+    const key=message.clientId?`${message.senderId}:${message.clientId}`:message.id;
+    const media=message.image||message.video||{};
+    // Compare references/primitives without copying multi-megabyte draft images
+    // into a JSON fingerprint on every upload-state change.
+    const signature=[message.id,message.senderId,message.kind,message.text,message.createdAt,message.recalledAt,
+      message.localStatus,message.localError,message.call?.kind,media.thumbnail,media.width,media.height,media.duration,
+      me.avatarId,me.avatarRevision,me.image,peer.avatarId,peer.avatarRevision,peer.image];
+    const previous=this.renderedRows.get(key);
+    const element=previous&&signature.every((value,index)=>value===previous.signature[index])?previous.element:this.row(message,me,peer,onRecall,onRetry);
+    if(previous&&previous.element!==element)window.appMotion?.continueOn(previous.element,element);
+    next.set(key,{signature,element});
+    if(!this.seenRows.has(key)&&animateNew&&message.kind!=='recalled')added.push(key);
+    this.seenRows.add(key);
+   }
+   for(const [key,{element}] of this.renderedRows)if(!next.has(key)){window.appMotion?.cancel(element);element.remove();}
+   const retained=new Set([...next.values()].map(row=>row.element));
+   for(const child of [...root.children])if(!retained.has(child))child.remove();
+   let index=0;
+   for(const {element} of next.values()){if(root.children[index]!==element)root.insertBefore(element,root.children[index]||null);index++;}
+   this.renderedRows=next;
+   // Coalesce synchronous queue changes; only the settled row enters, never its
+   // sending/retry/acknowledged replacements. Large catch-up batches stay still.
+   if(added.length<=4)for(const key of added)this.newRows.add(key);
+   if(this.newRows.size&&this.motionFrame===null)this.motionFrame=requestAnimationFrame(()=>{
+    this.motionFrame=null;for(const key of this.newRows){const row=this.renderedRows.get(key);if(row)window.appMotion?.enter(row.element,'message');}
+    this.newRows.clear();
+   });
+  }
   valid(context){const current=this.context();return current.accountId===context.accountId&&current.peerId===context.peerId&&current.generation===context.generation;}
   closeMenu(){this.menu?.remove();this.menu=null;this.menuMessage=null;}
   close(){this.closeMenu();const dialog=this.dialog;this.dialog=null;this.dialogMessage=null;dialog?.close();dialog?.remove();if(this.nativeImage){this.invoke('close_chat_image',{messageId:this.nativeImage}).catch(()=>{});this.nativeImage=null;}if(this.nativeVideo){this.invoke('close_chat_video',{messageId:this.nativeVideo}).catch(()=>{});this.nativeVideo=null;}}

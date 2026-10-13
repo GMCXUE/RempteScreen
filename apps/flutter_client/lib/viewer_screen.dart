@@ -1,3 +1,4 @@
+import 'app_motion.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -243,6 +244,7 @@ class _ViewerScreenState extends State<ViewerScreen>
     _controlsTimer?.cancel();
     final confirmed = await showDialog<bool>(
       context: context,
+      animationStyle: AppMotion.style(context),
       builder: (context) => AlertDialog(
         title: const Text('断开投屏'),
         content: Text('断开与「${session.deviceName}」的观看连接？'),

@@ -6,6 +6,7 @@ import 'home_screen.dart';
 import 'login_screen.dart';
 import 'session_manager.dart';
 import 'app_theme.dart';
+import 'app_motion.dart';
 import 'friend_calls.dart';
 
 /// 应用级会话管理器：投送与观看连接都由它持有，与页面生命周期无关。
@@ -110,7 +111,8 @@ class RemoteScreenApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       navigatorKey: appNavigatorKey,
-      builder: (context, child) => AppUpdateHost(child: FriendCallOverlay(child: child!)),
+      builder: (context, child) =>
+          AppUpdateHost(child: FriendCallOverlay(child: child!)),
       home: const BootGate(),
     );
   }
@@ -146,20 +148,23 @@ class _BootGateState extends State<BootGate> {
 
   @override
   Widget build(BuildContext context) {
+    final Widget child;
     if (!_loaded) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
-    if (_account != null) {
-      return HomeScreen(
+      child = const Scaffold(body: Center(child: CircularProgressIndicator()));
+    } else if (_account != null) {
+      child = HomeScreen(
         account: _account!,
         manager: sessionManager,
         onLogout: () => setState(() => _account = null),
       );
+    } else {
+      child = LoginScreen(
+        onLogin: (account) => setState(() => _account = account),
+      );
     }
-
-    return LoginScreen(
-      onLogin: (account) => setState(() => _account = account),
+    return AppContentTransition(
+      identity: !_loaded ? 'boot' : _account?.id ?? 'login',
+      child: child,
     );
   }
 }

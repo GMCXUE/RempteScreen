@@ -210,7 +210,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   font-size: 12.5px;
   color: #5b6376;
   cursor: pointer;
-  transition: .15s;
+  transition: background-color .12s, border-color .12s, color .12s;
 }
 .chip:hover { border-color: #c9d6ea; }
 .chip.active {
@@ -225,12 +225,12 @@ nav { display: flex; flex-direction: column; gap: 2px; }
 .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
 .slider {
   position: absolute; inset: 0; cursor: pointer;
-  background: #d2d8e3; border-radius: 999px; transition: .2s;
+  background: #d2d8e3; border-radius: 999px; transition: background-color .12s, transform .2s;
 }
 .slider::before {
   content: ""; position: absolute; height: 21px; width: 21px;
   left: 2px; top: 2px; background: #fff; border-radius: 50%;
-  transition: .2s;
+  transition: background-color .12s, transform .2s;
   box-shadow: 0 1px 3px rgba(20, 30, 50, .18);
 }
 .switch input:checked + .slider { background: var(--green); }
@@ -288,7 +288,7 @@ nav { display: flex; flex-direction: column; gap: 2px; }
   border-radius: 10px;
   background: #fbfcfe;
   cursor: pointer;
-  transition: .15s;
+  transition: background-color .12s, border-color .12s, color .12s;
 }
 .history-item:hover { border-color: #c9d6ea; background: #f6f9ff; }
 .history-main { min-width: 0; }

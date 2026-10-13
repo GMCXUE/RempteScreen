@@ -3,7 +3,7 @@
  const node=(tag,text='',cls='')=>{const e=document.createElement(tag);e.textContent=text;e.className=cls;return e;};
  window.ChatSettings=class {
   constructor(options){Object.assign(this,options);this.open=false;this.busy=false;this.version=0;this.muted=false;}
-  close(){this.open=false;++this.version;this.root.replaceChildren();this.root.classList.add('hidden');this.root.closest('.social-chat').classList.remove('settings-open');document.querySelector('#social-actions [aria-label="聊天信息"]')?.setAttribute('aria-expanded','false');}
+  close(){const restoreFocus=this.root.contains(document.activeElement);this.open=false;++this.version;this.root.replaceChildren();this.root.classList.add('hidden');this.root.closest('.social-chat').classList.remove('settings-open');const toggle=document.querySelector('#social-actions [aria-label="聊天信息"]');toggle?.setAttribute('aria-expanded','false');if(restoreFocus)toggle?.focus({preventScroll:true});}
   async toggle(){if(this.open){this.close();return;}this.open=true;this.root.classList.remove('hidden');this.root.closest('.social-chat').classList.add('settings-open');document.querySelector('#social-actions [aria-label="聊天信息"]')?.setAttribute('aria-expanded','true');this.render();const current=this.context(),version=++this.version;
    try{const value=await this.invoke('notification_settings',{accountId:current.me.id,value:null});if(this.valid(current,version)){this.muted=value.mutedPeers?.includes(current.peer.id)||false;this.render();}}catch(e){if(this.valid(current,version))this.error(e);}
   }

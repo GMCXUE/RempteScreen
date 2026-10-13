@@ -13,8 +13,34 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'account_avatar.dart';
 import 'app_theme.dart';
+import 'app_motion.dart';
+import 'chat_motion.dart';
 import 'friend_calls.dart';
 import 'native_service.dart';
+
+// Compare the account/contact snapshot, including nested profile fields and
+// list order. Transport-only metadata (for example serverNow) is not rendered.
+bool _sameSocialState(
+        Map<String, dynamic>? previous, Map<String, dynamic> next) =>
+    previous != null &&
+    const ['me', 'friends', 'requests', 'outgoing', 'blocked']
+        .every((key) => _sameSocialValue(previous[key], next[key]));
+
+bool _sameSocialValue(Object? previous, Object? next) {
+  if (identical(previous, next)) return true;
+  if (previous is List && next is List) {
+    return previous.length == next.length &&
+        Iterable<int>.generate(previous.length)
+            .every((index) => _sameSocialValue(previous[index], next[index]));
+  }
+  if (previous is Map && next is Map) {
+    return previous.length == next.length &&
+        previous.keys.every((key) =>
+            next.containsKey(key) &&
+            _sameSocialValue(previous[key], next[key]));
+  }
+  return previous == next;
+}
 
 /// Account-owned contacts; durable state is shared with the desktop client.
 class SocialScreen extends StatefulWidget {
@@ -84,10 +110,12 @@ class _SocialScreenState extends State<SocialScreen> {
             revision: person['avatarRevision'] ?? '');
       }
       if (mounted) {
-        setState(() {
-          _data = data;
-          _error = null;
-        });
+        if (_error != null || !_sameSocialState(_data, data)) {
+          setState(() {
+            _data = data;
+            _error = null;
+          });
+        }
         final unread = (data['friends'] as List).fold<int>(
                 0,
                 (sum, friend) =>
@@ -98,7 +126,9 @@ class _SocialScreenState extends State<SocialScreen> {
       }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = error.toString());
+        if (_error != error.toString()) {
+          setState(() => _error = error.toString());
+        }
         _syncFeedback.failed(context, 'contacts', error);
       }
     } finally {
@@ -128,6 +158,7 @@ class _SocialScreenState extends State<SocialScreen> {
     final controller = TextEditingController(text: initial);
     final value = await showDialog<String>(
         context: context,
+        animationStyle: AppMotion.style(context),
         builder: (context) => AlertDialog(
               title: Text(title),
               content: TextField(
@@ -207,6 +238,7 @@ class _SocialScreenState extends State<SocialScreen> {
     if (action == 'remove' || action == 'block') {
       final accepted = await showDialog<bool>(
           context: context,
+          animationStyle: AppMotion.style(context),
           builder: (context) => AlertDialog(
                 title: Text(action == 'remove' ? '删除好友？' : '拉黑好友？'),
                 content: Text(
@@ -560,6 +592,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   String? _error;
   late final ChatSendQueue _outbox;
   final _seenConfirmed = <String>{};
+  final _arrivals = ChatArrivals();
   bool _keepAtBottom = true, _bottomScheduled = false;
   String? _readSeq, _syncCursor;
   int _clockOffset = 0;
@@ -579,6 +612,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     _outbox = chatOutbox.queue(
         widget.account.id, widget.friend['id'], api.captureChatSender);
     _seenConfirmed.addAll(_outbox.confirmed.map((row) => row['id'] as String));
+    _arrivals.observe([
+      ..._outbox.confirmed,
+      ..._outbox.items.map((item) => item.record(widget.account.id)),
+    ], animate: false);
     _outbox.addListener(_outboxChanged);
     _draftFocus.addListener(() {
       if (mounted && _draftFocus.hasFocus) {
@@ -641,6 +678,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   void _outboxChanged() {
     if (!mounted) return;
+    _arrivals.observe([
+      ..._outbox.items.map((item) => item.record(widget.account.id)),
+      ..._outbox.confirmed,
+    ], animate: _visible && ModalRoute.of(context)?.isCurrent == true);
     setState(() {
       for (final row in _outbox.confirmed) {
         if (!_seenConfirmed.add(row['id'])) continue;
@@ -692,7 +733,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _applyClear(boundary);
       }
       final initial = _messages.isEmpty;
-      if(result['syncError'] is String){_syncFeedback.failed(context,'messages',result['syncError']);}else{_syncFeedback.recovered('messages');}
+      if (result['syncError'] is String) {
+        _syncFeedback.failed(context, 'messages', result['syncError']);
+      } else {
+        _syncFeedback.recovered('messages');
+      }
       final rows = (result['messages'] as List)
           .map((row) => Map<String, dynamic>.from(row))
           .toList();
@@ -702,6 +747,12 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       final previousOffset = _scroll.hasClients ? _scroll.offset : 0.0;
       final known = _messages.map((m) => m['id']).toSet();
       final fresh = rows.where((m) => !known.contains(m['id'])).toList();
+      _arrivals.observe(rows,
+          animate: !initial &&
+              !older &&
+              bottom &&
+              _keepAtBottom &&
+              ModalRoute.of(context)?.isCurrent == true);
       setState(() {
         final updates = (result['updates'] as List? ?? const [])
             .map((row) => Map<String, dynamic>.from(row));
@@ -832,6 +883,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (current['kind'] == 'recalled') return;
     final action = await showModalBottomSheet<String>(
         context: context,
+        sheetAnimationStyle: AppMotion.style(context),
         builder: (context) => SafeArea(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
               if (current['kind'] == 'image') ...[
@@ -887,6 +939,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (action == 'select') {
       final route = DialogRoute<void>(
           context: context,
+          animationStyle: AppMotion.style(context),
           builder: (context) => AlertDialog(
                   title: const Text('选择文字'),
                   content: SingleChildScrollView(
@@ -910,6 +963,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     }
     final confirmed = await showDialog<bool>(
         context: context,
+        animationStyle: AppMotion.style(context),
         builder: (context) => AlertDialog(
                 title: const Text('撤回消息？'),
                 content: const Text('撤回后，对方将无法在聊天中查看这条消息。'),
@@ -1181,6 +1235,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       ..._messages,
       ..._outbox.items.map((item) => item.record(widget.account.id))
     ];
+    final messageIndices = <String, int>{
+      for (var i = 0; i < display.length; i++)
+        chatMotionIdentity(display[i]): i + 1,
+    };
     return PopScope(
         canPop: !_moreOpen,
         onPopInvokedWithResult: (didPop, _) {
@@ -1237,6 +1295,10 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                             controller: _scroll,
                             padding: const EdgeInsets.all(16),
                             itemCount: display.length + 1,
+                            findChildIndexCallback: (key) =>
+                                key is ValueKey<String>
+                                    ? messageIndices[key.value]
+                                    : null,
                             itemBuilder: (context, index) {
                               if (index == 0) {
                                 if (_messages.isEmpty && _error != null) {
@@ -1305,30 +1367,36 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                   avatarId: person['avatarId'],
                                   revision: person['avatarRevision'] ?? '',
                                   size: 32);
-                              return Container(
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  decoration: BoxDecoration(
-                                      color: _highlightMessage == message['id']
-                                          ? const Color(0xFFE3EEFF)
-                                          : null,
-                                      borderRadius: BorderRadius.circular(12)),
-                                  child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisAlignment: mine
-                                          ? MainAxisAlignment.end
-                                          : MainAxisAlignment.start,
-                                      children: [
-                                        if (!mine) ...[
-                                          avatar,
-                                          const SizedBox(width: 8)
-                                        ],
-                                        Flexible(child: bubble),
-                                        if (mine) ...[
-                                          const SizedBox(width: 8),
-                                          avatar
-                                        ]
-                                      ]));
+                              final identity = chatMotionIdentity(message);
+                              return ChatMessageArrival(
+                                  key: ValueKey(identity),
+                                  animate: _arrivals.take(identity),
+                                  child: Container(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      decoration: BoxDecoration(
+                                          color:
+                                              _highlightMessage == message['id']
+                                                  ? const Color(0xFFE3EEFF)
+                                                  : null,
+                                          borderRadius:
+                                              BorderRadius.circular(12)),
+                                      child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          mainAxisAlignment: mine
+                                              ? MainAxisAlignment.end
+                                              : MainAxisAlignment.start,
+                                          children: [
+                                            if (!mine) ...[
+                                              avatar,
+                                              const SizedBox(width: 8)
+                                            ],
+                                            Flexible(child: bubble),
+                                            if (mine) ...[
+                                              const SizedBox(width: 8),
+                                              avatar
+                                            ]
+                                          ])));
                             })))),
             DecoratedBox(
               decoration: const BoxDecoration(
@@ -1339,151 +1407,174 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
                     Padding(
                         padding: const EdgeInsets.fromLTRB(12, 8, 8, 10),
-                        child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Expanded(
-                                  child: Container(
-                                      key:
-                                          const ValueKey('chat-composer-input'),
-                                      decoration: BoxDecoration(
-                                          color: const Color(0xFFF7F9FC),
-                                          border: Border.all(
-                                              color: const Color(0xFFE4E9F2)),
-                                          borderRadius:
-                                              BorderRadius.circular(12)),
-                                      child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            if (_draftImages.isNotEmpty)
-                                              SizedBox(
-                                                  height: 86,
-                                                  child: ListView.separated(
-                                                      key: const ValueKey(
-                                                          'chat-draft-images'),
-                                                      scrollDirection:
-                                                          Axis.horizontal,
-                                                      padding: const EdgeInsets
-                                                          .fromLTRB(
-                                                          10, 10, 10, 0),
-                                                      itemCount:
-                                                          _draftImages.length,
-                                                      separatorBuilder:
-                                                          (_, __) =>
-                                                              const SizedBox(
-                                                                  width: 8),
-                                                      itemBuilder:
-                                                          (context, index) {
-                                                        final image =
-                                                            _draftImages[index];
-                                                        return SizedBox(
-                                                            width: 76,
-                                                            height: 76,
-                                                            child: Stack(
-                                                                children: [
-                                                                  Positioned.fill(
-                                                                      child: ClipRRect(
-                                                                          borderRadius: BorderRadius.circular(
-                                                                              8),
-                                                                          child: ColoredBox(
-                                                                              color: const Color(0xFFEEF2F7),
-                                                                              child: image.kind == 'video' ? const Center(child: Icon(Icons.play_circle_outline_rounded, size: 34)) : Image.memory(image.bytes!, fit: BoxFit.contain, cacheWidth: 152, semanticLabel: '待发送图片 ${index + 1}')))),
-                                                                  Positioned(
-                                                                      top: 0,
-                                                                      right: 0,
-                                                                      child: IconButton(
-                                                                          tooltip: '移除${image.kind == 'video' ? '视频' : '图片'} ${index + 1}',
-                                                                          onPressed: _picking
-                                                                              ? null
-                                                                              : () {
-                                                                                  setState(() {
-                                                                                    _draftImages.remove(image);
-                                                                                    _composeError = null;
-                                                                                  });
-                                                                                  _draftFocus.requestFocus();
-                                                                                },
-                                                                          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                                                          padding: const EdgeInsets.all(5),
-                                                                          icon: const DecoratedBox(decoration: BoxDecoration(color: Color(0xD9253047), shape: BoxShape.circle), child: Icon(Icons.close_rounded, color: Colors.white, size: 20))))
-                                                                ]));
-                                                      })),
-                                            TextField(
-                                                controller: _draft,
-                                                focusNode: _draftFocus,
-                                                onChanged: (_) => setState(() {
-                                                      _composeError = null;
-                                                      if (_draft
-                                                          .text.isNotEmpty) {
-                                                        _moreOpen = false;
-                                                      }
-                                                    }),
-                                                maxLength: 2000,
-                                                minLines: 1,
-                                                maxLines: 4,
-                                                decoration:
-                                                    const InputDecoration(
-                                                        hintText: '发送消息',
-                                                        counterText: '',
-                                                        filled: false,
-                                                        border:
-                                                            InputBorder.none,
-                                                        enabledBorder:
-                                                            InputBorder.none,
-                                                        focusedBorder:
-                                                            InputBorder.none,
-                                                        contentPadding:
-                                                            EdgeInsets.symmetric(
-                                                                horizontal: 12,
-                                                                vertical: 10))),
-                                            if (_composeError != null)
-                                              Padding(
-                                                  padding:
-                                                      const EdgeInsets.fromLTRB(
-                                                          12, 0, 12, 8),
-                                                  child: Text(_composeError!,
-                                                      style: const TextStyle(
-                                                          color: Colors.red,
-                                                          fontSize: 12)))
-                                          ]))),
-                              if (_draft.text.isNotEmpty ||
-                                  _draftImages.isNotEmpty) ...[
-                                const SizedBox(width: 8),
-                                FilledButton(
-                                    onPressed: _picking ||
-                                            (_draft.text.trim().isEmpty &&
-                                                _draftImages.isEmpty)
-                                        ? null
-                                        : _send,
-                                    child: const Text('发送')),
-                              ],
-                              if (_draft.text.isEmpty) ...[
-                                const SizedBox(width: 4),
-                                IconButton(
-                                    key: const ValueKey('chat-more-button'),
-                                    tooltip: _moreOpen ? '收起功能' : '更多功能',
-                                    onPressed: _picking ? null : _toggleMore,
-                                    icon: AnimatedRotation(
-                                        turns: _moreOpen ? .125 : 0,
-                                        duration:
-                                            const Duration(milliseconds: 160),
-                                        child: Container(
-                                            width: 27,
-                                            height: 27,
-                                            decoration: BoxDecoration(
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                    color: AppTheme.muted,
-                                                    width: 1.7)),
-                                            child: const Icon(Icons.add_rounded,
-                                                size: 21)))),
-                              ],
-                            ])),
-                    if (_moreOpen)
-                      _ChatAttachmentPanel(
-                          onGallery: () => _pickImage(ImageSource.gallery),
-                          onCamera: () => _pickImage(ImageSource.camera)),
+                        child: ValueListenableBuilder<TextEditingValue>(
+                            valueListenable: _draft,
+                            child: Expanded(
+                                child: Container(
+                                    key: const ValueKey('chat-composer-input'),
+                                    decoration: BoxDecoration(
+                                        color: const Color(0xFFF7F9FC),
+                                        border: Border.all(
+                                            color: const Color(0xFFE4E9F2)),
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
+                                    child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          if (_draftImages.isNotEmpty)
+                                            SizedBox(
+                                                height: 86,
+                                                child: ListView.separated(
+                                                    key: const ValueKey(
+                                                        'chat-draft-images'),
+                                                    scrollDirection:
+                                                        Axis.horizontal,
+                                                    padding: const EdgeInsets
+                                                        .fromLTRB(
+                                                        10, 10, 10, 0),
+                                                    itemCount:
+                                                        _draftImages.length,
+                                                    separatorBuilder: (_, __) =>
+                                                        const SizedBox(
+                                                            width: 8),
+                                                    itemBuilder:
+                                                        (context, index) {
+                                                      final image =
+                                                          _draftImages[index];
+                                                      return SizedBox(
+                                                          width: 76,
+                                                          height: 76,
+                                                          child: Stack(
+                                                              children: [
+                                                                Positioned.fill(
+                                                                    child: ClipRRect(
+                                                                        borderRadius:
+                                                                            BorderRadius.circular(
+                                                                                8),
+                                                                        child: ColoredBox(
+                                                                            color: const Color(
+                                                                                0xFFEEF2F7),
+                                                                            child: image.kind == 'video'
+                                                                                ? const Center(child: Icon(Icons.play_circle_outline_rounded, size: 34))
+                                                                                : Image.memory(image.bytes!, fit: BoxFit.contain, cacheWidth: 152, semanticLabel: '待发送图片 ${index + 1}')))),
+                                                                Positioned(
+                                                                    top: 0,
+                                                                    right: 0,
+                                                                    child: IconButton(
+                                                                        tooltip: '移除${image.kind == 'video' ? '视频' : '图片'} ${index + 1}',
+                                                                        onPressed: _picking
+                                                                            ? null
+                                                                            : () {
+                                                                                setState(() {
+                                                                                  _draftImages.remove(image);
+                                                                                  _composeError = null;
+                                                                                });
+                                                                                _draftFocus.requestFocus();
+                                                                              },
+                                                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                                                        padding: const EdgeInsets.all(5),
+                                                                        icon: const DecoratedBox(decoration: BoxDecoration(color: Color(0xD9253047), shape: BoxShape.circle), child: Icon(Icons.close_rounded, color: Colors.white, size: 20))))
+                                                              ]));
+                                                    })),
+                                          TextField(
+                                              controller: _draft,
+                                              focusNode: _draftFocus,
+                                              onChanged: (text) {
+                                                // Normal typing only rebuilds
+                                                // this composer. The page is
+                                                // affected when dismissing a
+                                                // panel or a compose error.
+                                                if (_composeError != null ||
+                                                    (_moreOpen &&
+                                                        text.isNotEmpty)) {
+                                                  setState(() {
+                                                    _composeError = null;
+                                                    if (text.isNotEmpty) {
+                                                      _moreOpen = false;
+                                                    }
+                                                  });
+                                                }
+                                              },
+                                              maxLength: 2000,
+                                              minLines: 1,
+                                              maxLines: 4,
+                                              decoration: const InputDecoration(
+                                                  hintText: '发送消息',
+                                                  counterText: '',
+                                                  filled: false,
+                                                  border: InputBorder.none,
+                                                  enabledBorder:
+                                                      InputBorder.none,
+                                                  focusedBorder:
+                                                      InputBorder.none,
+                                                  contentPadding:
+                                                      EdgeInsets.symmetric(
+                                                          horizontal: 12,
+                                                          vertical: 10))),
+                                          if (_composeError != null)
+                                            Padding(
+                                                padding:
+                                                    const EdgeInsets.fromLTRB(
+                                                        12, 0, 12, 8),
+                                                child: Text(_composeError!,
+                                                    style: const TextStyle(
+                                                        color: Colors.red,
+                                                        fontSize: 12)))
+                                        ]))),
+                            builder: (context, draft, input) => Row(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      input!,
+                                      if (draft.text.isNotEmpty ||
+                                          _draftImages.isNotEmpty) ...[
+                                        const SizedBox(width: 8),
+                                        FilledButton(
+                                            onPressed: _picking ||
+                                                    (draft.text
+                                                            .trim()
+                                                            .isEmpty &&
+                                                        _draftImages.isEmpty)
+                                                ? null
+                                                : _send,
+                                            child: const Text('发送')),
+                                      ],
+                                      if (draft.text.isEmpty) ...[
+                                        const SizedBox(width: 4),
+                                        IconButton(
+                                            key: const ValueKey(
+                                                'chat-more-button'),
+                                            tooltip:
+                                                _moreOpen ? '收起功能' : '更多功能',
+                                            onPressed:
+                                                _picking ? null : _toggleMore,
+                                            icon: AnimatedRotation(
+                                                turns: _moreOpen ? .125 : 0,
+                                                duration: AppMotion.duration(
+                                                    context,
+                                                    AppMotion.feedback),
+                                                curve: AppMotion.curve,
+                                                child: Container(
+                                                    width: 27,
+                                                    height: 27,
+                                                    decoration: BoxDecoration(
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(
+                                                            color:
+                                                                AppTheme.muted,
+                                                            width: 1.7)),
+                                                    child: const Icon(
+                                                        Icons.add_rounded,
+                                                        size: 21)))),
+                                      ],
+                                    ]))),
+                    AppVisibilityTransition(
+                        visible: _moreOpen,
+                        collapse: true,
+                        child: _ChatAttachmentPanel(
+                            onGallery: () => _pickImage(ImageSource.gallery),
+                            onCamera: () => _pickImage(ImageSource.camera))),
                   ])),
             ),
           ]),
@@ -1603,6 +1694,7 @@ Future<void> showMessageAlertSettings(BuildContext context) async {
     if (!context.mounted) return;
     await showDialog<void>(
         context: context,
+        animationStyle: AppMotion.style(context),
         builder: (dialogContext) => StatefulBuilder(
             builder: (context, update) => AlertDialog(
                   title: const Text('消息与来电提醒'),

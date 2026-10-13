@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_motion.dart';
 
 class AppTheme {
   static const accent = Color(0xFF3478F6);
@@ -27,6 +28,7 @@ class AppTheme {
     );
     return ThemeData(
       useMaterial3: true,
+      pageTransitionsTheme: AppMotion.pageTransitions,
       colorScheme: scheme,
       textTheme: const TextTheme(
         titleMedium:
@@ -91,12 +93,14 @@ class AppTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
           style: FilledButton.styleFrom(
+        animationDuration: AppMotion.feedback,
         minimumSize: const Size(0, 44),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
       )),
       outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
+        animationDuration: AppMotion.feedback,
         minimumSize: const Size(0, 44),
         side: const BorderSide(color: line),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

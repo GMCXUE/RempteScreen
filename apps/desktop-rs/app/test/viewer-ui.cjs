@@ -58,6 +58,13 @@ const fs = require('fs'), path = require('path'), assert = require('assert');
       await page.clock.runFor(300);
       await page.screenshot({path: process.env.VIEWER_SCREENSHOT});
     }
+    await page.emulateMedia({reducedMotion: 'reduce'});
+    await page.evaluate(() => controls.hide());
+    assert.equal(await page.locator('#controls').evaluate(e => e.inert), true);
+    assert.equal(await page.locator('#controls').evaluate(e => getComputedStyle(e).transitionDuration), '0s');
+    await page.evaluate(() => controls.show());
+    assert.equal(await page.locator('#controls').evaluate(e => getComputedStyle(e).opacity), '1');
+    assert.equal(await page.locator('#screen').evaluate(e => e.getAnimations().length), 0);
     assert.deepEqual(errors, []);
     console.log('PASS: auto-hide, reveal, manual hide, native fullscreen/Escape/failure, cancel disconnect, responsive bounds');
   } finally { await browser.close(); }

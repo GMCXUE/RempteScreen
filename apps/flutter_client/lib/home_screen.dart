@@ -14,6 +14,7 @@ import 'file_transfer.dart';
 import 'file_transfer_screen.dart';
 import 'session_manager.dart';
 import 'app_theme.dart';
+import 'app_motion.dart';
 import 'app_components.dart';
 import 'home_dashboard.dart';
 import 'viewer_screen.dart';
@@ -134,7 +135,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _openingNotification = false;
   Future<void> _openMessageNotice(Map<String, dynamic> value) async {
     if (!mounted || value['accountId'] != widget.account.id) return;
-    setState(() => _selectedTab = 1);
+    setState(() {
+      _selectedTab = 1;
+      _devicesPage = false;
+    });
     if (NativeMessaging.visiblePeer == value['peerId']) return;
     try {
       final data = await api.social('state');
@@ -196,7 +200,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       } else if (action == 'message') {
         await _openMessageNotice(value);
       } else if (action == 'friends') {
-        setState(() => _selectedTab = 1);
+        setState(() {
+          _selectedTab = 1;
+          _devicesPage = false;
+        });
         if (mounted) {
           unawaited(appNavigatorKey.currentState?.push(MaterialPageRoute(
                   builder: (_) => Scaffold(
@@ -257,7 +264,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 管理器状态变化 → 刷新界面
   void _onManagerChanged() {
-    api.localChat.screenBusy=manager.publishing||manager.activeSessions.isNotEmpty;
+    api.localChat.screenBusy =
+        manager.publishing || manager.activeSessions.isNotEmpty;
     if (mounted) setState(() {});
     _maybeShowConnectRequest();
     _maybeShowFileTransferResult();
@@ -298,6 +306,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final isFileTransfer = request.purpose == 'files';
     final approved = await showDialog<bool>(
       context: context,
+      animationStyle: AppMotion.style(context),
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: Text(isFileTransfer ? '收到文件传输请求' : '收到观看请求'),
@@ -416,6 +425,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final current = manager.shareSettings;
     final result = await showModalBottomSheet<ScreenShareSettings>(
       context: context,
+      sheetAnimationStyle: AppMotion.style(context),
       builder: (sheetContext) {
         var height = current.height;
         var fps = current.fps;
@@ -500,6 +510,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     final password = await showDialog<String>(
       context: context,
+      animationStyle: AppMotion.style(context),
       builder: (dialogContext) => AlertDialog(
         title: const Text('自定义连接密码'),
         content: Form(
@@ -667,6 +678,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // 不 await：等待期间还要继续跑请求轮询
       showDialog<void>(
         context: context,
+        animationStyle: AppMotion.style(context),
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
           title: Text(transferOnly ? '等待文件传输授权' : '等待对方同意'),
@@ -745,6 +757,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     await showDialog<void>(
       context: context,
+      animationStyle: AppMotion.style(context),
       builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: Text(message, style: const TextStyle(fontSize: 13)),
@@ -872,24 +885,37 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         body: _registration == null && _busy
             ? const Center(child: CircularProgressIndicator())
-            : IndexedStack(
-                index: _selectedTab,
-                children: [
-                  _devicesPage
-                      ? _buildDevicesTab(context)
-                      : _buildHomeTab(context),
-                  SocialScreen(
-                      key: ValueKey(widget.account.id),
-                      account: _account,
-                      onUnreadChanged: (count) {
-                        if (mounted && count != _socialUnread) {
-                          setState(() => _socialUnread = count);
-                        }
-                      }),
-                  _buildCastTab(context),
-                  _buildProfileTab(context),
-                ],
-              ),
+            : AppContentTransition(
+                identity: _devicesPage ? 4 : _selectedTab,
+                child: IndexedStack(
+                  index: _devicesPage ? 4 : _selectedTab,
+                  children: [
+                    _buildHomeTab(context),
+                    SocialScreen(
+                        key: ValueKey(widget.account.id),
+                        account: _account,
+                        onUnreadChanged: (count) {
+                          if (mounted && count != _socialUnread) {
+                            setState(() => _socialUnread = count);
+                          }
+                        }),
+                    _buildCastTab(context),
+                    _buildProfileTab(context),
+                    _buildDevicesTab(context),
+                  ]
+                      .asMap()
+                      .entries
+                      .map((entry) => TickerMode(
+                            enabled:
+                                entry.key == (_devicesPage ? 4 : _selectedTab),
+                            child: ExcludeFocus(
+                              excluding: entry.key !=
+                                  (_devicesPage ? 4 : _selectedTab),
+                              child: entry.value,
+                            ),
+                          ))
+                      .toList(),
+                )),
         bottomNavigationBar: _buildBottomNavigation(),
       ),
     );
@@ -925,48 +951,79 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             clipBehavior: Clip.antiAlias,
             child: SizedBox(
               height: 56,
-              child: Row(
-                  children: List.generate(labels.length, (index) {
-                final selected = _selectedTab == index;
-                final color =
-                    selected ? AppTheme.accent : const Color(0xFF8A94A5);
-                return Expanded(
-                  child: Semantics(
-                    selected: selected,
-                    button: true,
-                    label: labels[index],
-                    excludeSemantics: true,
-                    child: InkWell(
-                      onTap: () => setState(() {
-                        _selectedTab = index;
-                        _devicesPage = false;
-                      }),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Badge(
-                              isLabelVisible: index == 1 && _socialUnread > 0,
-                              label: Text(_socialUnread > 99
-                                  ? '99+'
-                                  : '$_socialUnread'),
-                              child:
-                                  Icon(icons[index], size: 22, color: color)),
-                          const SizedBox(height: 3),
-                          Text(labels[index],
-                              maxLines: 1,
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  height: 1.2,
-                                  color: color,
-                                  fontWeight: selected
-                                      ? FontWeight.w600
-                                      : FontWeight.w500)),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              })),
+              child: LayoutBuilder(
+                  builder: (context, box) => Stack(children: [
+                        Positioned.fill(
+                            child: IgnorePointer(
+                                child: AnimatedAlign(
+                          alignment: Alignment(-1 + _selectedTab * 2 / 3, 0),
+                          duration:
+                              AppMotion.duration(context, AppMotion.content),
+                          curve: AppMotion.curve,
+                          child: SizedBox(
+                            width: box.maxWidth / 4,
+                            height: 44,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 5),
+                              child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                color: const Color(0xFFECF3FF),
+                                borderRadius: BorderRadius.circular(13),
+                              )),
+                            ),
+                          ),
+                        ))),
+                        Row(
+                            children: List.generate(labels.length, (index) {
+                          final selected = _selectedTab == index;
+                          final color = selected
+                              ? AppTheme.accent
+                              : const Color(0xFF8A94A5);
+                          return Expanded(
+                            child: Semantics(
+                              selected: selected,
+                              button: true,
+                              label: labels[index],
+                              excludeSemantics: true,
+                              child: InkWell(
+                                onTap: () => setState(() {
+                                  _selectedTab = index;
+                                  _devicesPage = false;
+                                }),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Badge(
+                                        isLabelVisible:
+                                            index == 1 && _socialUnread > 0,
+                                        label: Text(_socialUnread > 99
+                                            ? '99+'
+                                            : '$_socialUnread'),
+                                        child: AnimatedScale(
+                                            scale: selected ? 1.04 : 1,
+                                            duration: AppMotion.duration(
+                                                context, AppMotion.feedback),
+                                            curve: AppMotion.curve,
+                                            child: Icon(icons[index],
+                                                size: 22, color: color))),
+                                    const SizedBox(height: 3),
+                                    Text(labels[index],
+                                        maxLines: 1,
+                                        style: TextStyle(
+                                            fontSize: 10,
+                                            height: 1.2,
+                                            color: color,
+                                            fontWeight: selected
+                                                ? FontWeight.w600
+                                                : FontWeight.w500)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        })),
+                      ])),
             ),
           ),
         ),
@@ -996,6 +1053,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
 
   Widget _buildCastTab(BuildContext context) => ListView(
+        key: const PageStorageKey('cast-tab'),
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
         children: [
           _buildLocalCard(context),
@@ -1010,6 +1068,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget _buildDevicesTab(BuildContext context) => RefreshIndicator(
         onRefresh: _loadDevices,
         child: ListView(
+          key: const PageStorageKey('devices-tab'),
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
           children: [_buildDevicesCard(context)],
@@ -1017,6 +1076,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
 
   Widget _buildProfileTab(BuildContext context) => ListView(
+        key: const PageStorageKey('profile-tab'),
         padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
         children: [
           Card(
@@ -1121,7 +1181,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 onTap: () => setState(() => _selectedTab = 2)),
           ])),
           const SectionHeading('聊天记录'),
-          Card(child:ListTile(leading:const Icon(Icons.backup_outlined),title:const Text('本地保存与迁移'),subtitle:const Text('备份与恢复聊天记录'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const ChatArchiveScreen())))),
+          Card(
+              child: ListTile(
+                  leading: const Icon(Icons.backup_outlined),
+                  title: const Text('本地保存与迁移'),
+                  subtitle: const Text('备份与恢复聊天记录'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const ChatArchiveScreen())))),
           const SectionHeading('关于'),
           Card(
               child: ListTile(

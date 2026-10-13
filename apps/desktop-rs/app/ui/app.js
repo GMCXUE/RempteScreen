@@ -52,6 +52,7 @@ $("devices-back").addEventListener("click", () => {
 //
 // Tauri 的 WebView（WKWebView）不支持 prompt / confirm / alert，
 // 直接调用会静默返回 null（表现就是「点了没反应」），所以统一用自绘弹窗。
+let dismissActiveDialog = null;
 function askDialog({
   title,
   message = "",
@@ -64,7 +65,11 @@ function askDialog({
   inputType = "text",
 }) {
   return new Promise((resolve) => {
+    dismissActiveDialog?.();
     const modal = $("modal");
+    const previousFocus = document.activeElement;
+    const backgrounds = [$("app"), $("login-view")].map(element => [element, element.inert]);
+    for (const [element] of backgrounds) element.inert = true;
     const input = $("modal-input");
     input.type = inputType;
     const confirm = $("modal-confirm");
@@ -89,14 +94,24 @@ function askDialog({
     cancel.textContent = cancelText;
     cancel.classList.toggle("hidden", hideCancel);
 
+    modal.inert = false;
+    modal.removeAttribute('aria-hidden');
     modal.classList.remove("hidden");
     if (defaultValue !== null) {
       input.focus();
       input.select();
-    }
+    } else confirm.focus({preventScroll:true});
 
+    let finished = false;
     const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      dismissActiveDialog = null;
+      modal.inert = true;
       modal.classList.add("hidden");
+      modal.setAttribute('aria-hidden', 'true');
+      for (const [element, inert] of backgrounds) element.inert = inert;
+      if (previousFocus?.isConnected && previousFocus.getClientRects().length) previousFocus.focus({preventScroll:true});
       if(inputType==="password")input.value="";
       confirm.removeEventListener("click", onConfirm);
       cancel.removeEventListener("click", onCancel);
@@ -107,9 +122,16 @@ function askDialog({
 
     const onConfirm = () => finish(defaultValue === null ? true : inputType==="password"?input.value:input.value.trim());
     const onCancel = () => finish(defaultValue === null ? false : null);
+    dismissActiveDialog = onCancel;
     const onKey = (event) => {
       if (event.key === "Enter" && defaultValue !== null) onConfirm();
-      if (event.key === "Escape") onCancel();
+      if (event.key === "Escape") { event.preventDefault(); onCancel(); }
+      if (event.key === "Tab") {
+        const focusable = [...modal.querySelectorAll('button, input')].filter(element => !element.disabled && element.getClientRects().length);
+        const first = focusable[0], last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     };
     const onBackdrop = (event) => {
       if (event.target === modal) onCancel();

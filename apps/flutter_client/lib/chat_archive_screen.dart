@@ -1,3 +1,4 @@
+import 'app_motion.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -43,6 +44,7 @@ class _ChatArchiveScreenState extends State<ChatArchiveScreen> {
     final first = TextEditingController(), second = TextEditingController();
     final value = await showDialog<String>(
         context: context,
+        animationStyle: AppMotion.style(context),
         builder: (c) => AlertDialog(
                 title: Text(export ? '设置备份密码' : '输入备份密码'),
                 content: Column(mainAxisSize: MainAxisSize.min, children: [

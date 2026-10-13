@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_motion.dart';
 
 /// Presentation only: hiding chrome never changes a media track or connection.
 class ViewerChrome extends StatelessWidget {
@@ -107,10 +108,10 @@ class ViewerChrome extends StatelessWidget {
         ),
       ),
       if (camera != null)
-        AnimatedPositioned(
-          duration: const Duration(milliseconds: 200),
+        Positioned(
           right: padding.right + 14,
-          top: padding.top + (visible ? 88 : 14),
+          // Keep the live texture anchored while chrome fades around it.
+          top: padding.top + 88,
           width: landscape ? 120 : 112,
           height: landscape ? 90 : 84,
           child: ClipRRect(
@@ -197,16 +198,9 @@ class ViewerChrome extends StatelessWidget {
     ]);
   }
 
-  Widget _fade({required Widget child}) => IgnorePointer(
-        ignoring: !visible,
-        child: ExcludeSemantics(
-          excluding: !visible,
-          child: AnimatedOpacity(
-            opacity: visible ? 1 : 0,
-            duration: const Duration(milliseconds: 200),
-            child: child,
-          ),
-        ),
+  Widget _fade({required Widget child}) => AppVisibilityTransition(
+        visible: visible,
+        child: child,
       );
 }
 

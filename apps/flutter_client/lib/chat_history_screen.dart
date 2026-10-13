@@ -1,3 +1,4 @@
+import 'app_motion.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'api.dart';
@@ -117,6 +118,7 @@ class _ChatInformationScreenState extends State<ChatInformationScreen> {
   Future<void> _clear() => _run(() async {
         final confirmed = await showDialog<bool>(
             context: context,
+            animationStyle: AppMotion.style(context),
             builder: (context) => AlertDialog(
                   title: const Text('清空聊天记录？'),
                   content: const Text(

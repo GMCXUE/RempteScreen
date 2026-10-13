@@ -1,0 +1,65 @@
+/* Shared timings match the mobile client. Only finite, purposeful UI motion. */
+:root {
+  --motion-feedback: 120ms;
+  --motion-content: 200ms;
+  --motion-surface: 240ms;
+  --motion-ease: cubic-bezier(.2, .8, .2, 1);
+}
+
+button, summary, input, textarea, select {
+  transition-property: background-color, border-color, color, box-shadow, opacity;
+  transition-duration: var(--motion-feedback);
+  transition-timing-function: var(--motion-ease);
+}
+:is(.primary, .ghost, .nav-item, .chip, .modal-confirm, .ctl, .sidebar-toggle, .avatar-option,
+  .image-toolbar button, .window-actions button, #call-controls button) {
+  transition-property: background-color, border-color, color, box-shadow, opacity, scale;
+}
+:is(.primary, .ghost, .nav-item, .chip, .modal-confirm, .ctl, .sidebar-toggle, .avatar-option,
+  .image-toolbar button, .window-actions button, #call-controls button):active:not(:disabled) {
+  scale: .97;
+}
+/* Controls retain their focus ring and immediate hit testing throughout motion. */
+button:disabled { scale: 1; }
+.slider, .chat-setting-switch { transition: background-color var(--motion-feedback) var(--motion-ease); }
+.slider::before, .chat-setting-switch::before {
+  transition: transform var(--motion-content) var(--motion-ease);
+}
+.sidebar { transition: width var(--motion-content) var(--motion-ease); }
+.sidebar-toggle-arrow { transition: transform var(--motion-content) var(--motion-ease); }
+.progress-fill { transition: width var(--motion-content) var(--motion-ease); }
+.pending-dot { animation: none; }
+
+/* The video itself is never animated or rescaled by an animation. */
+.video-surface { transition: none; }
+.chrome, .controls, .viewer-heading {
+  transition: opacity var(--motion-content) var(--motion-ease), transform var(--motion-content) var(--motion-ease);
+}
+.controls { transform: translate(-50%, 8px); }
+.controls-visible .controls { transform: translate(-50%, 0); }
+.viewer-heading { transform: translateY(-6px); }
+.controls-visible .viewer-heading { transform: translateY(0); }
+#call-controls svg {
+  transition: color var(--motion-feedback) var(--motion-ease), background-color var(--motion-feedback) var(--motion-ease);
+}
+.shell .hint, .shell .fold { transition: opacity var(--motion-feedback) var(--motion-ease); }
+.shell .fold { visibility: hidden; pointer-events: none; }
+.shell:hover .fold, .shell:focus-within .fold { visibility: visible; opacity: 1; pointer-events: auto; }
+.shell:focus-within .hint { opacity: 1; }
+
+dialog[open]::backdrop { animation: motion-backdrop var(--motion-surface) var(--motion-ease); }
+@keyframes motion-backdrop { from { opacity: 0; } to { opacity: 1; } }
+
+/* Loaded last in every window, including the media viewers. Runtime preference
+   changes also cancel Web Animations in motion.js, without waiting for a timer. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  button:active { scale: 1 !important; }
+  .controls, .controls-visible .controls { transform: translateX(-50%); }
+  .viewer-heading, .controls-visible .viewer-heading { transform: none; }
+  .controls-hidden #call-header, .controls-hidden #call-controls { transform: none; }
+}

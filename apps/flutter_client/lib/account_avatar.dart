@@ -1,3 +1,4 @@
+import 'app_motion.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -143,6 +144,7 @@ Future<AvatarSelection?> chooseAccountAvatar(BuildContext context,
         AvatarSaver? save}) =>
     showModalBottomSheet<AvatarSelection>(
         context: context,
+        sheetAnimationStyle: AppMotion.style(context),
         isScrollControlled: true,
         showDragHandle: true,
         constraints: const BoxConstraints(maxWidth: 460),

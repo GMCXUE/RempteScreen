@@ -8,7 +8,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
   const root=path.resolve(__dirname,'../ui');
   await page.route('http://picture.test/**',route=>{
    const file=new URL(route.request().url()).pathname.slice(1);
-   if(!['chat-image.html','chat-image.css','chat-image.js','ui-icons.js'].includes(file))return route.abort();
+   if(!['chat-image.html','chat-image.css','chat-image.js','ui-icons.js','motion.js','motion.css'].includes(file))return route.abort();
    return route.fulfill({body:fs.readFileSync(path.join(root,file)),contentType:file.endsWith('.css')?'text/css':file.endsWith('.js')?'text/javascript':'text/html'});
   });
   const preview=process.env.VIEWER_PREVIEW_IMAGE?fs.readFileSync(process.env.VIEWER_PREVIEW_IMAGE).toString('base64'):null;
