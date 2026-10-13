@@ -13,6 +13,12 @@ const _binaryTopic = 'rs-file-bin';
 const _chunkSize = 12 * 1024;
 const _progressInterval = 256 * 1024;
 const _maxActiveReceives = 8;
+const maxTransferFileBytes = 50 * 1024 * 1024;
+const transferFileTooLarge = '单个文件不能超过 50 MB';
+
+String? transferFileSizeError(int size) => size < 0
+    ? '文件大小无效'
+    : size > maxTransferFileBytes ? transferFileTooLarge : null;
 
 enum FileTransferDirection { send, receive }
 
@@ -72,6 +78,8 @@ class FileTransferController extends ChangeNotifier {
     required this.room,
     required this.receiveEnabled,
     this.destinationIdentity,
+    this.recordStart,
+    this.recordFinish,
   }) {
     _listener = room.createListener(synchronized: true)
       ..on<DataReceivedEvent>(_handleDataReceived);
@@ -91,6 +99,8 @@ class FileTransferController extends ChangeNotifier {
   final Room room;
   final bool receiveEnabled;
   final String? destinationIdentity;
+  final Future<String> Function(String clientId, String name, int size)? recordStart;
+  final Future<void> Function(String id, String status)? recordFinish;
 
   late final EventsListener<RoomEvent> _listener;
   late final Timer _expiryTimer;
@@ -134,8 +144,17 @@ class FileTransferController extends ChangeNotifier {
     _activeSendId = id;
     _sendCancellations.remove(id);
     _acks[id] = {};
+    String? recordId;
 
     try {
+      _throwIfSendCancelled(id);
+      final sizeError = transferFileSizeError(selected.size);
+      if (sizeError != null) throw StateError(sizeError);
+      final actualSize = await File(selected.path).length();
+      final actualError = transferFileSizeError(actualSize);
+      if (actualError != null) throw StateError(actualError);
+      if (actualSize != selected.size) throw StateError('文件已变化，请重新选择');
+      recordId = await recordStart?.call('mobile-$id', selected.name, selected.size);
       _throwIfSendCancelled(id);
       await _sendControl(
         destination,
@@ -166,6 +185,9 @@ class FileTransferController extends ChangeNotifier {
           _throwIfSendCancelled(id);
           final chunk = await input.read(_chunkSize);
           if (chunk.isEmpty) break;
+          if (sent + chunk.length > selected.size) {
+            throw StateError('文件已变化，请重新选择');
+          }
           final header = ByteData(12)
             ..setUint64(0, id, Endian.little)
             ..setUint32(8, sequence, Endian.little);
@@ -198,6 +220,7 @@ class FileTransferController extends ChangeNotifier {
       _throwIfSendCancelled(id);
       await _sendControl(destination, {'t': 'end', 'id': id});
       await _waitForAck(id, 'saved');
+      await _finishRecord(recordId, 'completed');
       _update(FileTransferProgress(
         direction: FileTransferDirection.send,
         id: id,
@@ -209,6 +232,7 @@ class FileTransferController extends ChangeNotifier {
       return true;
     } catch (error) {
       final message = _errorText(error);
+      await _finishRecord(recordId, message == '已取消发送' ? 'cancelled' : 'failed');
       unawaited(_sendControl(
         destination,
         {'t': 'cancel', 'id': id, 'reason': message},
@@ -238,6 +262,17 @@ class FileTransferController extends ChangeNotifier {
   void cancelSend() {
     final id = _activeSendId;
     if (id != null) _sendCancellations[id] = '已取消发送';
+  }
+
+  Future<void> _finishRecord(String? id, String status) async {
+    if (id == null || recordFinish == null) return;
+    try {
+      await recordFinish!(id, status);
+    } catch (_) {
+      // Never turn a successfully saved file into a failed transfer because the
+      // receipt service is temporarily offline. History shows "未确认完成".
+      debugPrint('传输记录结果同步失败');
+    }
   }
 
   void _throwIfSendCancelled(int id) {
@@ -327,11 +362,12 @@ class FileTransferController extends ChangeNotifier {
       }
       final name = _safeName(message['name'] as String? ?? 'file');
       final size = (message['size'] as num?)?.toInt() ?? 0;
-      if (size < 0) {
+      final sizeError = transferFileSizeError(size);
+      if (sizeError != null) {
         await _sendControl(sender, {
           't': 'cancel',
           'id': id,
-          'reason': '文件大小无效',
+          'reason': sizeError,
         });
         return;
       }

@@ -13,6 +13,7 @@ pub struct Status {
     pub error: String,
 }
 pub struct FileSession {
+    pub grant_token: String,
     stop: Arc<AtomicBool>,
     pub local: Arc<Mutex<Option<LocalParticipant>>>,
     pub remote: Arc<Mutex<Option<ParticipantIdentity>>>,
@@ -44,6 +45,7 @@ pub fn start(
         ..Default::default()
     }));
     let result = FileSession {
+        grant_token: token.clone(),
         stop: stop.clone(),
         local: local.clone(),
         remote,

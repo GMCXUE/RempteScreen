@@ -100,6 +100,17 @@ fn post(path: &str, token: Option<&str>, body: &serde_json::Value) -> Result<ser
     Ok(parsed)
 }
 
+pub fn file_record_request(method: &str, path: &str, token: &str, body: Option<serde_json::Value>) -> Result<serde_json::Value,String> {
+    let request = ureq::request(method, &format!("{SERVER_URL}{path}"))
+        .timeout(std::time::Duration::from_secs(15)).set("Authorization", &format!("Bearer {token}"));
+    let result = if let Some(body) = body { request.send_json(body) } else { request.call() };
+    let response = match result { Ok(r) => r, Err(ureq::Error::Status(_,r)) => r, Err(e) => return Err(e.to_string()) };
+    let status=response.status();
+    let value:serde_json::Value=response.into_json().map_err(|e|e.to_string())?;
+    if status>=400 {return Err(value["error"]["message"].as_str().unwrap_or("传输记录请求失败").into());}
+    Ok(value)
+}
+
 /// 带账号令牌的 GET 请求（目前只用于 /v1/me）。
 fn get_json(path: &str, token: &str) -> Result<serde_json::Value, String> {
     get_json_with_timeout(path, token, 15)

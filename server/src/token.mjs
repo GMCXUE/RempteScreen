@@ -31,6 +31,7 @@ export function signLiveKitToken({
   canPublishSources,
   name,
   ttlSec,
+  fileTransfer,
 }) {
   const now = Math.floor(Date.now() / 1000);
   const sources = canPublishSources?.map(source => String(source).toLowerCase());
@@ -56,6 +57,7 @@ export function signLiveKitToken({
     },
   };
   if (name) payload.name = name;
+  if (fileTransfer) payload.fileTransfer = fileTransfer;
 
   const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
   const signature = createHmac('sha256', config.livekit.apiSecret)
@@ -69,6 +71,21 @@ export function signLiveKitToken({
 export function decodeTokenPayload(token) {
   const [, payload] = token.split('.');
   return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+}
+
+/** Separate signed capability, bound to both users and a data-only room. */
+export function verifyFileTransferGrant(token,userId) {
+ try {
+  if(typeof token!=='string'||token.length>8192)return null;
+  const parts=token.split('.');if(parts.length!==3)return null;
+  const expected=createHmac('sha256',config.livekit.apiSecret).update(parts[0]+'.'+parts[1]).digest();
+  const actual=Buffer.from(parts[2],'base64url');
+  if(actual.length!==expected.length||!timingSafeEqual(actual,expected))return null;
+  const h=JSON.parse(Buffer.from(parts[0],'base64url')),p=decodeTokenPayload(token),g=p.fileTransfer;
+  if(h.alg!=='HS256'||p.iss!==config.livekit.apiKey||!Number.isFinite(p.exp)||p.exp<=Date.now()/1000||p.nbf>Date.now()/1000)return null;
+  if(!g||g.senderId!==userId||!g.recipientId||!/^\d{9}$/.test(g.deviceId)||p.video?.room!==`files-${g.deviceId}`||p.video?.canPublishData!==true)return null;
+  return g;
+ } catch {return null;}
 }
 
 /** 定长字符串的常量时间比较，避免通过响应耗时逐位猜出密码。 */

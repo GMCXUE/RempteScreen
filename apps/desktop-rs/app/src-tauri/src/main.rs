@@ -1264,10 +1264,10 @@ async fn ft_send_file(
     state: tauri::State<'_, AppState>,
 ) -> Result<bool, String> {
     // 文件会话与观看会话分别持有，结束投屏不会中断传输。
-    let (local, remote) = {
+    let (local, remote, grant) = {
         let connection = state.file_session.lock().unwrap();
         match connection.as_ref() {
-            Some(session) => (session.local.clone(), session.remote.clone()),
+            Some(session) => (session.local.clone(), session.remote.clone(), session.grant_token.clone()),
             None => return Ok(false),
         }
     };
@@ -1294,22 +1294,46 @@ async fn ft_send_file(
         return Ok(false); // 用户取消
     };
     let path = handle.path().to_path_buf();
+    let size = std::fs::metadata(&path).map_err(|e|e.to_string())?.len();
+    file_transfer::check_file_size(size)?;
+    let (token, device_id) = { let creds=state.creds.lock().unwrap();
+        (creds.account_token.clone().ok_or("请先登录")?,creds.device_id.clone().ok_or("本机尚未注册")?) };
+    let name=path.file_name().and_then(|v|v.to_str()).ok_or("文件名无效")?.to_string();
+    let body=serde_json::json!({"grant":grant,"senderDeviceId":device_id,
+        "clientId":format!("desktop-{}",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()),"name":name,"size":size});
+    let record_token=token.clone();
+    let record=tauri::async_runtime::spawn_blocking(move || api::file_record_request("POST","/v1/file-transfers",&record_token,Some(body)))
+        .await.map_err(|e|e.to_string())??;
+    let record_id=record["transfer"]["id"].as_str().ok_or("传输记录响应无效")?.to_string();
     let transfer_manager = state.ft_recv.clone();
 
     tauri::async_runtime::spawn(async move {
-        if let Err(error) = crate::file_transfer::send_file(
+        let result = crate::file_transfer::send_file(
             &local,
             &remote,
             path,
             Some(app.clone()),
             transfer_manager,
         )
-        .await
-        {
+        .await;
+        let status=match &result {Ok(_)=>"completed",Err(e) if e=="已取消发送"=>"cancelled",Err(_)=>"failed"};
+        let _=tauri::async_runtime::spawn_blocking(move || api::file_record_request("PATCH",&format!("/v1/file-transfers/{record_id}"),&token,Some(serde_json::json!({"status":status})))).await;
+        if let Err(error) = result {
             crate::publisher::log_to_file(&format!("[文件传输] 发送失败: {error}"));
         }
     });
     Ok(true)
+}
+
+#[tauri::command]
+async fn ft_history(before: Option<String>, state: tauri::State<'_,AppState>) -> Result<serde_json::Value,String> {
+    let token=state.creds.lock().unwrap().account_token.clone().ok_or("请先登录")?;
+    let mut path="/v1/file-transfers".to_string();
+    if let Some(before)=before {if before.is_empty()||before.len()>19||!before.bytes().all(|c|c.is_ascii_digit()){return Err("历史游标无效".into());}path.push_str(&format!("?before={before}"));}
+    let expected=token.clone();
+    let result=tauri::async_runtime::spawn_blocking(move||api::file_record_request("GET",&path,&token,None)).await.map_err(|e|e.to_string())??;
+    if state.creds.lock().unwrap().account_token.as_deref()!=Some(&expected){return Err("账号已变化，请重新加载".into());}
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2058,6 +2082,7 @@ fn main() {
             ft_cancel_send,
             ft_recv_list,
             reveal_received_file,
+            ft_history,
             has_audio,
             logout,
             list_devices,

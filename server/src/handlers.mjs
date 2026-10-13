@@ -256,6 +256,7 @@ export async function createConnectRequest({ body, request }) {
   }
 
   const entry = requests.createRequest({
+    viewerUserId: user?.id ?? null,
     deviceId: found.record.device_id,
     viewerName: typeof body?.viewerName === 'string' ? body.viewerName.slice(0, 32) : '',
     purpose,
@@ -428,7 +429,9 @@ export async function decideConnectRequest({ body, params }) {
   const identity = `viewer-${randomBytes(4).toString('hex')}`;
   const filesOnly = entry.purpose === 'files';
   const roomName = `${filesOnly ? 'files' : 'device'}-${entry.deviceId}`;
+  const device = await store.findOnlineDevice(entry.deviceId);
   const token = signLiveKitToken({
+    fileTransfer: filesOnly && entry.viewerUserId && device.record ? {senderId:entry.viewerUserId,recipientId:device.record.user_id,deviceId:entry.deviceId} : undefined,
     identity,
     room: roomName,
     canPublish: !filesOnly,
@@ -437,7 +440,6 @@ export async function decideConnectRequest({ body, params }) {
     canPublishSources: filesOnly ? undefined : ['camera', 'microphone'],
     name: entry.viewerName || '观看端',
   });
-  const device = await store.findOnlineDevice(entry.deviceId);
   requests.attachGrant(entry.id, {
     token,
     roomName,
@@ -578,6 +580,7 @@ export async function connect({ body, request }) {
     roomName,
     livekitUrl: config.livekit.url,
     token: signLiveKitToken({
+      fileTransfer: filesOnly && user ? {senderId:user.id,recipientId:found.record.user_id,deviceId:found.record.device_id} : undefined,
       identity,
       room: roomName,
       canPublish: !filesOnly,

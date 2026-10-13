@@ -27,8 +27,12 @@ import * as handlers from './handlers.mjs';
 import { startSweeper } from './requests.mjs';
 import * as updates from './updates.mjs';
 import * as hotUpdates from './hot_updates.mjs';
+import * as fileTransfers from './file_transfers.mjs';
 
 const routes = [
+  ['POST','/v1/file-transfers',fileTransfers.create],
+  ['GET','/v1/file-transfers',fileTransfers.list],
+  ['PATCH','/v1/file-transfers/:id',fileTransfers.finish],
   ['PUT','/v1/social/videos/:clientId',videoHandlers.upload],
   ['GET','/v1/social/videos/:messageId',videoHandlers.download],
   ['HEAD','/v1/social/videos/:messageId',videoHandlers.download],

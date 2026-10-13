@@ -150,3 +150,9 @@ node test/e2e.mjs
 ## 应用版本管理
 
 更新检查、签名安装包、强制更新规则及独立管理 API 见 [应用更新与版本管理](../docs/app-updates.md)。管理接口默认不启用，需要独立发布令牌和签名私钥；普通账号没有发布权限。
+
+### 文件传输元数据历史
+
+`POST /v1/file-transfers` 需要账号 Bearer、files 连接下发的签名 `grant`、`senderDeviceId`、幂等 `clientId`、`name`、`size`。只存元数据（50 MB = 52,428,800 bytes），不接收文件内容。
+`GET /v1/file-transfers?before=<id>` 只返回当前账号参与的记录，每页最多 50 条，返回 `items` 和 `next`；按数值主键倒序。记录没有自动过期。
+`PATCH /v1/file-transfers/:id` 由发送方确认 `status: completed|failed|cancelled`，终态不可改写。十分钟未确认的记录在列表中显示 `unconfirmed`，不等同于实际传输失败。账号与设备名称记录的是发送时快照。

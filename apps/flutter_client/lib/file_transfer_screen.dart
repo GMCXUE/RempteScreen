@@ -5,6 +5,7 @@ import 'app_components.dart';
 import 'app_theme.dart';
 import 'compact_feedback.dart';
 import 'file_transfer.dart';
+import 'file_transfer_history.dart';
 import 'session_manager.dart';
 import 'native_service.dart';
 
@@ -234,7 +235,7 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
               ],
             ])),
             _receiveProgress(),
-            const SectionHeading('传输记录', caption: '本次运行'),
+            const SectionHeading('本次传输', caption: '单个文件不能超过 50 MB'),
             Card(
                 child: Column(children: [
               if (history.isEmpty)
@@ -254,6 +255,7 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
                 _taskRow(history[i]),
               ],
             ])),
+            FileTransferHistory(api: widget.manager.api),
           ]),
     );
   }

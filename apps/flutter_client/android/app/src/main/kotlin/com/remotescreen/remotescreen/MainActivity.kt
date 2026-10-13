@@ -398,13 +398,14 @@ class MainActivity : FlutterActivity() {
         Thread {
             var cached: File? = null
             try {
-                val (name, _) = queryFileInfo(uri)
+                val (name, declaredSize) = queryFileInfo(uri)
+                FileTransferLimit.check(declaredSize)
                 val sendDir = File(cacheDir, "remotescreen-send").apply { mkdirs() }
                 val safeName = safeFileName(name)
                 val selectedCache = File(sendDir, "${System.currentTimeMillis()}-$safeName")
                 cached = selectedCache
                 val copied = contentResolver.openInputStream(uri)?.use { input ->
-                    selectedCache.outputStream().buffered().use { output -> input.copyTo(output) }
+                    selectedCache.outputStream().buffered().use { output -> FileTransferLimit.copy(input, output) }
                 } ?: throw IllegalStateException("无法读取所选文件")
                 val size = copied
                 runOnUiThread {

@@ -18,6 +18,22 @@ pub const TOPIC_BIN: &str = "rs-file-bin";
 const CHUNK: usize = 12 * 1024;
 const PROGRESS_EVERY: u64 = 256 * 1024;
 const MAX_ACTIVE_RECEIVES: usize = 8;
+pub const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+pub fn check_file_size(size: u64) -> Result<(), String> {
+    if size > MAX_FILE_BYTES { Err("单个文件不能超过 50 MB".into()) } else { Ok(()) }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    #[test]
+    fn exact_limit_and_empty_are_allowed_but_oversize_is_rejected() {
+        assert!(check_file_size(0).is_ok());
+        assert!(check_file_size(MAX_FILE_BYTES).is_ok());
+        assert_eq!(check_file_size(MAX_FILE_BYTES+1).unwrap_err(), "单个文件不能超过 50 MB");
+        assert!(check_file_size(u64::MAX).is_err());
+    }
+}
 
 #[derive(Serialize, Clone)]
 pub struct FtProgress {
@@ -275,6 +291,10 @@ pub fn handle_packet(
                     .and_then(|item| item.as_str())
                     .unwrap_or("file");
                 let size = value.get("size").and_then(|item| item.as_u64()).unwrap_or(0);
+                if let Err(error) = check_file_size(size) {
+                    send_cancel(local, &sender, id, &error);
+                    return true;
+                }
                 let safe_name = Path::new(name)
                     .file_name()
                     .and_then(|value| value.to_str())
@@ -588,6 +608,9 @@ async fn send_file_inner(
         let count = file
             .read(&mut buffer)
             .map_err(|error| format!("读取文件失败: {error}"))?;
+        if sent.saturating_add(count as u64) > size {
+            return Err("文件已变化，请重新选择".into());
+        }
         if count == 0 {
             break;
         }
@@ -678,6 +701,10 @@ pub async fn send_file(
         }
     };
 
+    if let Err(error) = check_file_size(size) {
+        emit_send_error(app.as_ref(), id, name, size, error.clone());
+        return Err(error);
+    }
     mgr.lock().unwrap().start_send(id, destination.as_str());
     let result = send_file_inner(
         local,

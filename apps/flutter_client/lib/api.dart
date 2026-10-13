@@ -207,6 +207,26 @@ class ApiService {
   ApiService({required this.baseUrl});
 
   final String baseUrl;
+  Future<Map<String, dynamic>> fileTransferHistory({String? before}) async {
+    final token = await _token();
+    if (token == null) throw ApiException('unauthorized', '请先登录');
+    final result = await _request('GET', '/v1/file-transfers${before == null ? '' : '?before=${Uri.encodeComponent(before)}'}', expectedToken: token);
+    if (await _token() != token) throw ApiException('session_changed', '账号已变化，请重新加载');
+    return result;
+  }
+
+  Future<String> createFileTransferRecord(String grant, String deviceId,
+      String clientId, String name, int size) async {
+    final result = await _request('POST', '/v1/file-transfers', body: {
+      'grant': grant, 'senderDeviceId': deviceId, 'clientId': clientId,
+      'name': name, 'size': size,
+    });
+    return result['transfer']['id'] as String;
+  }
+
+  Future<void> finishFileTransferRecord(String id, String status) async {
+    await _request('PATCH', '/v1/file-transfers/${Uri.encodeComponent(id)}', body: {'status': status});
+  }
   late final LocalChat localChat=LocalChat(currentToken:_token,
     remote:(operation,body,token)=>_request(operation=='state'?'GET':'POST','/v1/social/$operation',body:operation=='state'?null:body,expectedToken:token,timeoutSeconds:operation=='local-image'||operation=='message-image'||operation=='send-image'?45:15),
     video:_downloadChatVideoRemote);

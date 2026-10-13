@@ -13,11 +13,12 @@ const TTL_SEC = 60;
 
 const now = () => Date.now();
 
-export function createRequest({ deviceId, viewerName, viewerAddress, purpose = 'screen' }) {
+export function createRequest({ deviceId, viewerName, viewerAddress, purpose = 'screen', viewerUserId = null }) {
   prune();
   const request = {
     id: randomBytes(16).toString('hex'),
     deviceId,
+    viewerUserId,
     purpose,
     viewerName: viewerName || '未知设备',
     viewerAddress: viewerAddress || '',

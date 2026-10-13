@@ -856,6 +856,9 @@ class SessionManager extends ChangeNotifier {
       fileTransfer: FileTransferController(
         room: room,
         receiveEnabled: true,
+        recordStart: fileOnly ? (clientId, name, size) => api.createFileTransferRecord(
+            session.subscribeToken, registration?.deviceId ?? '', clientId, name, size) : null,
+        recordFinish: fileOnly ? api.finishFileTransferRecord : null,
         destinationIdentity:
             '${fileOnly ? 'file-host' : 'caster'}-${session.deviceId}',
       ),

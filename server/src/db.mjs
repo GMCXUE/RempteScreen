@@ -14,6 +14,7 @@ import { accountSchema } from './account_schema.mjs';
 import { socialSchema } from './social_schema.mjs';
 import { config } from './config.mjs';
 import { updateSchema } from './update_schema.mjs';
+import { fileTransferSchema } from './file_transfer_schema.mjs';
 
 let pool = null;
 
@@ -97,6 +98,7 @@ export async function openDatabase() {
   await pool.query(callSchema);
   await pool.query(localChatSchema);
   await pool.query(updateSchema);
+  await pool.query(fileTransferSchema);
   return pool;
 }
 

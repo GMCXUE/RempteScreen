@@ -37,7 +37,7 @@ function switchPage(page) {
   for (const section of document.querySelectorAll(".page")) {
     section.classList.toggle("hidden", section.id !== `page-${page}`);
   }
-  if (page === "transfer") refreshTransfer();
+  if (page === "transfer") { refreshTransfer(); refreshTransferRecords(); }
 }
 
 for (const button of document.querySelectorAll(".nav-item")) {
@@ -167,6 +167,13 @@ async function refresh() {
   }
 
   showLogin(!state.logged_in);
+  const recordOwner = state.logged_in ? String(state.account_email || state.account_name || "") : "";
+  if (recordOwner !== transferRecordOwner) {
+    transferRecordOwner = recordOwner; transferRecordGeneration++;
+    transferRecordItems = []; transferRecordNext = null; transferRecordBusy = false;
+    transferHistory.clear(); $("transfer-history").replaceChildren();
+    $("transfer-records-error").textContent = ""; renderTransferRecords();
+  }
   if (!state.logged_in) return;
 
   ownDeviceId = state.device_id || "";
@@ -493,6 +500,43 @@ $("watch-stop").addEventListener("click", async () => {
 // ---------- 文件传输（独立页面，不打开观看窗口） ----------
 
 const transferHistory = new Map();
+let transferRecordOwner = "", transferRecordGeneration = 0, transferRecordBusy = false;
+let transferRecordItems = [], transferRecordNext = null;
+const transferStatusLabels = {sending:"发送中",completed:"已完成",failed:"失败",cancelled:"已取消",unconfirmed:"未确认完成"};
+function renderTransferRecords() {
+  $("transfer-records").replaceChildren(...transferRecordItems.map(item => {
+    const row=document.createElement("div");row.className="transfer-history-item";
+    const info=document.createElement("div");info.className="transfer-file-info";
+    const name=document.createElement("strong");name.textContent=name.title=item.name;
+    const meta=document.createElement("span");meta.className="muted small";
+    meta.textContent=`${window.uiIcons.bytes(item.size)} · ${new Date(item.createdAt).toLocaleString()} · ${transferStatusLabels[item.status] || "未确认完成"}`;
+    const parties=document.createElement("span");parties.className="muted small";parties.style.whiteSpace="pre-wrap";
+    parties.textContent=`发送方：${item.senderName}（${item.senderId}）\n${item.senderDeviceName} · ${item.senderDeviceId}\n接收方：${item.recipientName}（${item.recipientId}）\n${item.recipientDeviceName} · ${item.recipientDeviceId}`;
+    info.append(name,meta,parties);row.append(info);return row;
+  }));
+  if (!transferRecordItems.length && !transferRecordBusy) $("transfer-records").textContent="暂无传输历史";
+  $("transfer-records-more").classList.toggle("hidden",!transferRecordNext);
+  $("transfer-records-more").disabled=transferRecordBusy;
+  $("transfer-records-refresh").disabled=transferRecordBusy;
+}
+async function refreshTransferRecords(more=false) {
+  if (!transferRecordOwner || transferRecordBusy || currentPage!=="transfer") return;
+  const generation=transferRecordGeneration;transferRecordBusy=true;renderTransferRecords();
+  try {
+    const result=await invoke("ft_history",{before:more?transferRecordNext:null});
+    if(generation!==transferRecordGeneration)return;
+    if(!Array.isArray(result.items))throw Error("传输历史响应无效");
+    transferRecordItems=more?[...transferRecordItems,...result.items]:result.items;
+    transferRecordNext=result.next;$("transfer-records-error").textContent="";
+  } catch (error) {
+    if(generation===transferRecordGeneration)$("transfer-records-error").textContent="传输历史加载失败，请重试";
+  } finally {
+    if(generation===transferRecordGeneration){transferRecordBusy=false;renderTransferRecords();}
+  }
+}
+$("transfer-records-refresh").addEventListener("click",()=>refreshTransferRecords());
+$("transfer-records-more").addEventListener("click",()=>refreshTransferRecords(true));
+setInterval(()=>{if(transferRecordItems.length<=50)refreshTransferRecords();},15000);
 $("settings-alerts").addEventListener("click", () => $("social-alert-settings").click());
 $("settings-cast").addEventListener("click", () => document.querySelector('[data-page="cast"]').click());
 $("transfer-cancel-send").addEventListener("click", () => invoke("ft_cancel_send"));

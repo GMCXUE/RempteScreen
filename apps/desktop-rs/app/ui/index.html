@@ -290,8 +290,13 @@
             <div id="transfer-progress-bar" class="transfer-progress-bar"></div>
           </div>
         </div>
-        <div class="section-heading"><h2>传输记录</h2><span>本次运行</span></div>
+        <div class="section-heading"><h2>本次传输</h2><span>单个文件不能超过 50 MB</span></div>
         <div class="card transfer-records"><div id="transfer-history"></div></div>
+        <div class="section-heading"><h2>传输历史</h2><button id="transfer-records-refresh" class="ghost">刷新</button></div>
+        <p class="muted small">长期保存记录，不保存文件 · 单个文件不能超过 50 MB</p>
+        <p id="transfer-records-error" class="error"></p>
+        <div id="transfer-records" class="card transfer-records"></div>
+        <button id="transfer-records-more" class="ghost hidden">加载更早记录</button>
       </section>
 
       <!-- 我的设备 -->

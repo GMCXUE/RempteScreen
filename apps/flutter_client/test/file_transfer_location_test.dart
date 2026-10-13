@@ -5,8 +5,14 @@ import 'package:remotescreen/file_transfer.dart';
 import 'package:remotescreen/file_transfer_screen.dart';
 import 'package:remotescreen/session_manager.dart';
 
+class LocationApi extends ApiService {
+  LocationApi() : super(baseUrl: 'http://127.0.0.1');
+  @override
+  Future<Map<String, dynamic>> fileTransferHistory({String? before}) async => {'items': [], 'next': null};
+}
+
 class TransferLocationManager extends SessionManager {
-  TransferLocationManager() : super(api: ApiService(baseUrl: 'http://127.0.0.1'));
+  TransferLocationManager() : super(api: LocationApi());
 
   @override
   List<FileTransferProgress> get fileHistory => const [
@@ -58,5 +64,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsNothing);
     expect(folder, findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }
