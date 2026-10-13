@@ -7,3 +7,12 @@
 验证：本机隔离 PostgreSQL 的更新接口集成测试通过；Rust 更新相关测试 6 项通过；Flutter 更新及历史界面测试 12 项通过，覆盖分页失败后重试和强制提示下的系统返回；改动功能文件 Flutter analyze 无问题；桌面 Playwright 验证分页、重试、纯文本说明、当前版本标记，以及浏览历史后保持已下载状态及强制更新要求。未进行 Android 真机验证。main.dart 既有 AudioSessionOptions 实验性 API 提示与本次功能无关。
 
 发行版本：macOS 0.2.13、Android 0.2.19，构建号 2026101308。仅发布完整安装包，保留已有热更新能力，不发布新热更新。
+
+## 发布验证
+
+源码提交 `763db2e` 已推送到 `codex/server-bandwidth-20261013`。生产环境仅替换 `updates.mjs` 和 `index.mjs` 并重建控制服务镜像，数据库与媒体容器未重启。代码/镜像回滚点保留在 `/opt/remotescreen/backups/update-history-2026101308`，无需数据库迁移。
+
+- macos 0.2.13，构建 2026101308，发布记录 `rel_01be390b54fbaf1bc6`；18558972 字节，SHA-256 `ec53394c75e8c3fd5540c19ce9411b89c4b15f5a95954679dd8a8dc620cbac26`。公开下载完整内容、签名及最新版不重复升级均验证通过。
+- android 0.2.19，构建 2026101308，发布记录 `rel_db0e0cf8afe9bce0f6`；60881498 字节，SHA-256 `7b8883764ecb427b26615ade139cf7ee0fdc5284228051273a6c6d289c835201`。公开下载完整内容、签名及最新版不重复升级均验证通过。
+
+发布后的历史接口逐页验签通过：Android 16 条、macOS 13 条，新版本位于第一条。发布管理清单只新增这两条完整版本；所有旧记录和热更新清单保持不变。macOS 沿用本地 ad-hoc 签名，未做 Developer ID 公证；Android 沿用原发布证书，APK 架构、版本、SQLite 插件及 Shorebird 引擎校验通过。
