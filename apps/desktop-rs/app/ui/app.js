@@ -9,6 +9,7 @@ const $ = (id) => document.getElementById(id);
 
 const SERVER_URL = "http://121.43.102.154";
 let currentPage = "cast";
+let devicesReturnPage = "cast";
 /** 本机设备号（来自后端状态），用于在设备列表里标记「本机」 */
 let ownDeviceId = "";
 let latestFileTransfer = null;
@@ -22,6 +23,7 @@ function showLogin(show) {
 }
 
 function switchPage(page) {
+  if (page === "devices" && currentPage !== "devices") devicesReturnPage = currentPage;
   currentPage = page;
   const pageTitles = {cast:"投送本机",watch:"观看设备",transfer:"文件传输",devices:"我的设备",settings:"设置",messages:"消息"};
   $("workspace-title").textContent = pageTitles[page] || "RemoteScreen";
@@ -41,6 +43,10 @@ function switchPage(page) {
 for (const button of document.querySelectorAll(".nav-item")) {
   button.addEventListener("click", () => switchPage(button.dataset.page));
 }
+
+$("devices-back").addEventListener("click", () => {
+  document.querySelector(`.nav-item[data-page="${devicesReturnPage}"]`).click();
+});
 
 // ---------- 应用内弹窗 ----------
 //

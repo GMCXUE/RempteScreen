@@ -841,46 +841,55 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     const titles = ['首页', '消息', '投屏', '我的'];
 
-    return Scaffold(
-      appBar: AppBar(
-        toolbarHeight: 56,
-        automaticallyImplyLeading: false,
-        titleSpacing: _devicesPage ? null : 18,
-        leading: _devicesPage
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () => setState(() => _devicesPage = false))
-            : null,
-        title: Text(_devicesPage ? '我的设备' : titles[_selectedTab]),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: '刷新',
-            onPressed: _devicesPage ? _loadDevices : _registerAndStart,
-          ),
-        ],
-      ),
-      body: _registration == null && _busy
-          ? const Center(child: CircularProgressIndicator())
-          : IndexedStack(
-              index: _selectedTab,
-              children: [
-                _devicesPage
-                    ? _buildDevicesTab(context)
-                    : _buildHomeTab(context),
-                SocialScreen(
-                    key: ValueKey(widget.account.id),
-                    account: _account,
-                    onUnreadChanged: (count) {
-                      if (mounted && count != _socialUnread) {
-                        setState(() => _socialUnread = count);
-                      }
-                    }),
-                _buildCastTab(context),
-                _buildProfileTab(context),
-              ],
+    return PopScope(
+      canPop: !_devicesPage,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _devicesPage) {
+          setState(() => _devicesPage = false);
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          toolbarHeight: 56,
+          automaticallyImplyLeading: false,
+          titleSpacing: _devicesPage ? null : 18,
+          leading: _devicesPage
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  tooltip: '返回上一页面',
+                  onPressed: () => setState(() => _devicesPage = false))
+              : null,
+          title: Text(_devicesPage ? '我的设备' : titles[_selectedTab]),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: '刷新',
+              onPressed: _devicesPage ? _loadDevices : _registerAndStart,
             ),
-      bottomNavigationBar: _buildBottomNavigation(),
+          ],
+        ),
+        body: _registration == null && _busy
+            ? const Center(child: CircularProgressIndicator())
+            : IndexedStack(
+                index: _selectedTab,
+                children: [
+                  _devicesPage
+                      ? _buildDevicesTab(context)
+                      : _buildHomeTab(context),
+                  SocialScreen(
+                      key: ValueKey(widget.account.id),
+                      account: _account,
+                      onUnreadChanged: (count) {
+                        if (mounted && count != _socialUnread) {
+                          setState(() => _socialUnread = count);
+                        }
+                      }),
+                  _buildCastTab(context),
+                  _buildProfileTab(context),
+                ],
+              ),
+        bottomNavigationBar: _buildBottomNavigation(),
+      ),
     );
   }
 
