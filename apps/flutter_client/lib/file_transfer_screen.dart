@@ -289,6 +289,13 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
                       child: Text(task.error!,
                           style: const TextStyle(
                               fontSize: 12, color: AppTheme.danger))),
+                if (task.direction == FileTransferDirection.receive &&
+                    task.done && task.error == null && task.savedPath != null)
+                  Padding(
+                      padding: const EdgeInsets.only(top: 5),
+                      child: SelectableText('保存位置：${task.savedPath}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppTheme.muted))),
                 if (!task.done && task.error == null)
                   Padding(
                       padding: const EdgeInsets.only(top: 8),
@@ -318,16 +325,30 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
             IconButton(
                 tooltip: '打开所在目录',
                 icon: const Icon(Icons.folder_open_outlined, size: 20),
-                onPressed: _openReceivedDirectory),
+                onPressed: () => _openReceivedDirectory(task.savedPath!)),
         ]));
   }
 
-  Future<void> _openReceivedDirectory() async {
+  Future<void> _openReceivedDirectory(String savedPath) async {
     try {
       await NativeFileBridge.openReceivedDirectory();
     } catch (_) {
       if (!mounted) return;
-      _toast('无法打开文件所在目录');
+      await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+                title: const Text('无法打开文件所在目录'),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('系统未能打开文件管理器。请手动打开文件管理，按保存位置查找：'),
+                  const SizedBox(height: 12),
+                  SelectableText(savedPath),
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('知道了')),
+                ],
+              ));
     }
   }
 
@@ -430,7 +451,7 @@ class _FileTransferScreenState extends State<FileTransferScreen> {
             ? IconButton(
                 tooltip: '打开所在目录',
                 icon: const Icon(Icons.folder_open_outlined),
-                onPressed: _openReceivedDirectory,
+                onPressed: () => _openReceivedDirectory(progress.savedPath!),
               )
             : null,
         subtitle: Text(

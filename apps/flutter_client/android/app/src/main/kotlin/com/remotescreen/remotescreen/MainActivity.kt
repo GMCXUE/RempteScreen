@@ -257,23 +257,22 @@ class MainActivity : FlutterActivity() {
                             call.argument<String>("accountId"), call.argument<String>("clientId"), call.argument<String>("peerName"))
                     }
                     "openReceivedDirectory" -> {
-                        try {
+                        val opened = ReceivedDirectoryFallback.open(directory = {
                             val directory = android.provider.DocumentsContract.buildDocumentUri(
                                 "com.android.externalstorage.documents",
                                 "primary:Download/RemoteScreen-Files",
                             )
-                            try {
-                                startActivity(Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(directory, "vnd.android.document/directory")
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                })
-                            } catch (_: android.content.ActivityNotFoundException) {
-                                startActivity(Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS))
-                            }
-                            result.success(null)
-                        } catch (error: Exception) {
-                            result.error("open_directory_failed", "无法打开文件所在目录", null)
-                        }
+                            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(directory, "vnd.android.document/directory")
+                                // This URI belongs to the system DocumentsProvider. Our
+                                // MediaStore write does not grant permission to re-share it.
+                                // The file manager uses its own access to browse the folder.
+                            })
+                        }, downloads = {
+                            startActivity(Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS))
+                        })
+                        if (opened) result.success(null)
+                        else result.error("open_directory_failed", "无法打开文件所在目录", null)
                     }
                     "saveReceivedFile" -> {
                         val sourcePath = call.argument<String>("sourcePath")

@@ -536,6 +536,10 @@ function renderTransferProgress(progress) {
     status.textContent = item.error ? "失败" : item.done ? "已完成" : "传输中";
     row.append(icon, info, status);
     if (item.direction === "recv" && item.done && !item.error && item.path) {
+      const location = document.createElement("span");
+      location.className = "muted small transfer-saved-path";
+      location.textContent = `保存位置：${item.path}`;
+      info.append(location);
       const button = document.createElement("button");
       button.className = "ghost";
       window.uiIcons.button(button, "folder", "打开所在目录");
@@ -546,7 +550,7 @@ function renderTransferProgress(progress) {
           await invoke("reveal_received_file", { path: item.path });
           $("transfer-error").textContent = "";
         } catch (error) {
-          $("transfer-error").textContent = String(error);
+          $("transfer-error").textContent = `${String(error)}。请手动打开文件管理，按保存位置查找：${item.path}`;
         } finally {
           button.disabled = false;
         }
