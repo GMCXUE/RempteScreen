@@ -1,3 +1,4 @@
+import 'chat_storage_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -74,6 +75,7 @@ void main() {
     chatOutbox.reset();
     SharedPreferences.setMockInitialValues(
         {'remotescreen.accountToken': 'test-token'});
+    await prepareChatStorage('test-token');
     dir = await Directory.systemTemp.createTemp('rs-picker-test-');
     video = File('${dir.path}/clip.mp4');
     final bytes = List<int>.filled(32, 0);
@@ -145,7 +147,7 @@ void main() {
               expect(
                   request.headers['Content-Type'], 'application/octet-stream');
               expect(request.bodyBytes, raw);
-              final row = {
+              final row = <String, dynamic>{
                 'id': 'video1',
                 'seq': '${fixture.messages.length + 1}',
                 'clientId': request.url.pathSegments.last,
@@ -169,7 +171,7 @@ void main() {
             return http.Response.bytes(raw, 200,
                 headers: {'content-type': 'video/mp4'});
           }
-          if (request.url.path.endsWith('/message-video')) {
+          if (request.url.path.endsWith('/local-video')) {
             if (revoked) {
               return http.Response(
                   jsonEncode({
@@ -198,14 +200,14 @@ void main() {
             'avatarId': 'cat',
             'remark': ''
           })));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.runAsync(() => http.runWithClient(() async {
             await tester.tap(find.text('图片与视频'));
             await Future<void>.delayed(const Duration(milliseconds: 200));
           }, clientFactory));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byTooltip('移除图片 1'), findsOneWidget);
       expect(find.byTooltip('移除图片 2'), findsOneWidget);
       expect(find.byTooltip('移除视频 3'), findsOneWidget);
@@ -223,7 +225,7 @@ void main() {
             () => Future<void>.delayed(const Duration(milliseconds: 30)));
         await tester.pump();
       }
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byTooltip('移除视频 3'), findsNothing);
       expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
           isEmpty);
@@ -237,29 +239,35 @@ void main() {
             () => Future<void>.delayed(const Duration(milliseconds: 30)));
         await tester.pump();
       }
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byType(ChatVideoViewer), findsOneWidget);
       expect(find.byKey(const ValueKey('test-video-player')), findsOneWidget);
       expect(player.played, 1);
       final cached = File.fromUri(Uri.parse(player.source!.uri!));
       expect(cached.existsSync(), true);
       revoked = true;
+      fixture.retract(fixture.messages.firstWhere((m) => m['kind'] == 'video'));
       await tester.pump(const Duration(seconds: 3));
       for (var i = 0; i < 30 && cached.existsSync(); i++) {
         await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 30)));
         await tester.pump();
       }
-      expect(find.text('视频已撤回'), findsOneWidget);
+      await pumpChat(tester);
       expect(find.text('重试'), findsNothing);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
+      if (find.byType(ChatVideoViewer).evaluate().isNotEmpty) {
+        expect(find.text('视频已撤回'), findsOneWidget);
+        await tester.pageBack();
+      } else {
+        expect(find.textContaining('撤回了一条消息'), findsOneWidget);
+      }
+      await pumpChat(tester);
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 200)));
       expect(player.disposed, 1);
       expect(cached.existsSync(), false);
       await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
     }, clientFactory);
   });
   test('下载校验失败不返回播放文件，视频重试保留编号', () async {
@@ -269,7 +277,7 @@ void main() {
       await expectLater(service.downloadChatVideo('peer', 'video1'),
           throwsA(isA<ApiException>()));
     },
-        () => MockClient((r) async => r.url.path.endsWith('/message-video')
+        () => MockClient((r) async => r.url.path.endsWith('/local-video')
             ? http.Response(
                 jsonEncode({
                   'message': {

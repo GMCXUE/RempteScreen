@@ -140,7 +140,8 @@ pub async fn send_chat_video(
         .set("Content-Length", &size.to_string())
         .send(file);
         match result {
-            Ok(r) => r.into_json().map_err(|_| "视频发送响应格式不正确".into()),
+            Ok(r) => {let value:Value=r.into_json().map_err(|_| "视频发送响应格式不正确".to_owned())?;
+                super::chat_store::record(&owner,&peer_id,&value["message"])?;Ok(value)},
             Err(ureq::Error::Status(_, r)) => {
                 let data: Value = r.into_json().unwrap_or_default();
                 Err(data["error"]["message"]

@@ -16,7 +16,7 @@ export async function normalizeChatImage(value) {
    .flatten({background:'#ffffff'}).jpeg({quality:88}).toBuffer({resolveWithObject:true});
   const thumbnail = await sharp(data).resize({width:320,height:320,fit:'inside',withoutEnlargement:true}).jpeg({quality:72}).toBuffer();
   return {data, hash:createHash('sha256').update(bytes).digest('hex'),
-   metadata:{width:output.width,height:output.height,bytes:data.length,mime:'image/jpeg',thumbnail:'data:image/jpeg;base64,'+thumbnail.toString('base64')}};
+   metadata:{sha256:createHash('sha256').update(data).digest('hex'),width:output.width,height:output.height,bytes:data.length,mime:'image/jpeg',thumbnail:'data:image/jpeg;base64,'+thumbnail.toString('base64')}};
  } catch(error) {
   if (error.statusCode) throw error;
   fail('无法读取图片，请选择其他图片');

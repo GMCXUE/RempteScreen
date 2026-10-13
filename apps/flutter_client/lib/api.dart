@@ -12,6 +12,10 @@ import 'dart:io';
 import 'package:crypto/crypto.dart' as digest;
 import 'package:flutter/foundation.dart';
 import 'chat_outbox.dart';
+import 'local_chat.dart';
+import 'chat_store.dart';
+import 'chat_errors.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -203,15 +207,20 @@ class ApiService {
   ApiService({required this.baseUrl});
 
   final String baseUrl;
+  late final LocalChat localChat=LocalChat(currentToken:_token,
+    remote:(operation,body,token)=>_request(operation=='state'?'GET':'POST','/v1/social/$operation',body:operation=='state'?null:body,expectedToken:token,timeoutSeconds:operation=='local-image'||operation=='message-image'||operation=='send-image'?45:15),
+    video:_downloadChatVideoRemote);
+  Future<void> syncLocalChat() async {final token=await _token();if(token==null)throw ApiException('unauthorized','请先登录');await localChat.syncAll(token);}
+  Future<String> chatOwner() async {final token=await _token();if(token==null)throw ApiException('unauthorized','请先登录');return localChat.owner(token);}
+
   Future<ChatSender> captureChatSender() async {
     final token = await _token();
     if (token == null) throw ApiException('unauthorized', '请先登录');
-    return (operation, body) => operation == 'send-video'
-        ? _uploadChatVideo(body, token)
-        : _request('POST', '/v1/social/$operation',
-            body: body,
-            timeoutSeconds: operation == 'send-image' ? 45 : 15,
-            expectedToken: token);
+    return (operation,body) async {
+      final result=operation=='send-video'?await _uploadChatVideo(body,token):await localChat.call(operation,body,token);
+      if(operation=='send-video')await localChat.record(token,body['peerId'],result);
+      return result;
+    };
   }
 
   Future<void> startAccountNotifications(Account account) async {
@@ -220,7 +229,7 @@ class ApiService {
   }
 
   Future<Map<String, dynamic>> social(String operation,
-      [Map<String, dynamic>? body]) {
+      [Map<String, dynamic>? body]) async {
     if (!const {
       'account-profile',
       'avatar-image',
@@ -247,13 +256,10 @@ class ApiService {
     }.contains(operation)) {
       throw ArgumentError('不支持的好友操作');
     }
-    return _request(
-        operation == 'state' ? 'GET' : 'POST', '/v1/social/$operation',
-        body: body,
-        timeoutSeconds:
-            operation == 'send-image' || operation == 'message-image'
-                ? 45
-                : 15);
+    final token=await _token();if(token==null)throw ApiException('unauthorized','请先登录');
+    try{return await localChat.call(operation,body??{},token);}
+    on DatabaseException catch(e){throw ApiException('local_storage',chatError(e));}
+    on FormatException catch(e){final message=chatError(e);throw ApiException(message.contains('账号已变化')?'session_changed':'local_chat',message,status:message.contains('已撤回')?410:null);}
   }
 
   static const _tokenKey = 'remotescreen.accountToken';
@@ -267,6 +273,7 @@ class ApiService {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getString(_tokenKey) != token) chatOutbox.reset();
     if (token == null) {
+      localChat.callBusy=false;localChat.screenBusy=false;
       await prefs.remove(_tokenKey);
     } else {
       await prefs.setString(_tokenKey, token);
@@ -379,10 +386,12 @@ class ApiService {
     }
   }
 
-  Future<File> downloadChatVideo(String peerId, String messageId) async {
-    final token = await _token();
-    if (token == null) throw ApiException('unauthorized', '请先登录');
-    final result = await _request('POST', '/v1/social/message-video',
+  Future<File> downloadChatVideo(String peerId,String messageId) async {
+    final token=await _token();if(token==null)throw ApiException('unauthorized','请先登录');
+    return localChat.videoFile(peerId,messageId,token);
+  }
+  Future<File> _downloadChatVideoRemote(String peerId,String messageId,String token,bool background) async {
+    final result = await _request('POST', '/v1/social/local-video',
         body: {'peerId': peerId, 'messageId': messageId}, expectedToken: token);
     final meta = result['message']?['video'] as Map<String, dynamic>?;
     final size = (meta?['bytes'] as num?)?.toInt() ?? 0, sha = meta?['sha256'];
@@ -399,7 +408,7 @@ class ApiService {
           'GET',
           Uri.parse(
                   '$baseUrl/v1/social/videos/${Uri.encodeComponent(messageId)}')
-              .replace(queryParameters: {'peerId': peerId}))
+              .replace(queryParameters: {'peerId': peerId,'archive':'1'}))
         ..headers['Authorization'] = 'Bearer $token';
       final response =
           await request.send().timeout(const Duration(seconds: 30));
@@ -413,6 +422,7 @@ class ApiService {
       try {
         await for (final chunk
             in response.stream.timeout(const Duration(seconds: 30))) {
+          if(background&&localChat.mediaBlocked)throw ApiException('media_deferred','通话或投屏期间暂缓媒体下载');
           bytes += chunk.length;
           if (bytes > size) throw ApiException('video', '视频下载校验失败，请重试');
           sink.add(chunk);
@@ -469,6 +479,7 @@ class ApiService {
         },
         auth: false);
     await _saveToken(result['token'] as String);
+    final store=await localChat.store,user=result['user'] as Map<String,dynamic>;await store.bind(result['token'],user['id']);await ChatStore.set(store.db,user['id'],'account',jsonEncode(user));
     return Account.fromJson(result['user'] as Map<String, dynamic>);
   }
 
@@ -483,6 +494,7 @@ class ApiService {
         },
         auth: false);
     await _saveToken(result['token'] as String);
+    final store=await localChat.store,user=result['user'] as Map<String,dynamic>;await store.bind(result['token'],user['id']);await ChatStore.set(store.db,user['id'],'account',jsonEncode(user));
     return Account.fromJson(result['user'] as Map<String, dynamic>);
   }
 
@@ -495,8 +507,18 @@ class ApiService {
   }
 
   Future<Account> me() async {
-    final result = await _request('GET', '/v1/me');
-    return Account.fromJson(result['user'] as Map<String, dynamic>);
+    try {
+      final result = await _request('GET', '/v1/me');
+      final token=await _token();
+      if(token!=null){final store=await localChat.store;final user=result['user'] as Map<String,dynamic>;await store.bind(token,user['id']);await ChatStore.set(store.db,user['id'],'account',jsonEncode(user));}
+      return Account.fromJson(result['user'] as Map<String, dynamic>);
+    } on ApiException catch(e) {
+      if(e.code!='network')rethrow;
+      final token=await _token();if(token==null)rethrow;
+      final store=await localChat.store,id=await store.owner(token);if(id==null)rethrow;
+      final cached=await store.get(id,'account');if(cached==null)rethrow;
+      return Account.fromJson(jsonDecode(cached));
+    }
   }
 
   Future<List<Device>> listDevices() async {

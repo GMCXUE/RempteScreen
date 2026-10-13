@@ -61,10 +61,12 @@ function askDialog({
   danger = false,
   hideCancel = false,
   avatarId = null,
+  inputType = "text",
 }) {
   return new Promise((resolve) => {
     const modal = $("modal");
     const input = $("modal-input");
+    input.type = inputType;
     const confirm = $("modal-confirm");
     const cancel = $("modal-cancel");
 
@@ -95,6 +97,7 @@ function askDialog({
 
     const finish = (result) => {
       modal.classList.add("hidden");
+      if(inputType==="password")input.value="";
       confirm.removeEventListener("click", onConfirm);
       cancel.removeEventListener("click", onCancel);
       document.removeEventListener("keydown", onKey);
@@ -102,7 +105,7 @@ function askDialog({
       resolve(result);
     };
 
-    const onConfirm = () => finish(defaultValue === null ? true : input.value.trim());
+    const onConfirm = () => finish(defaultValue === null ? true : inputType==="password"?input.value:input.value.trim());
     const onCancel = () => finish(defaultValue === null ? false : null);
     const onKey = (event) => {
       if (event.key === "Enter" && defaultValue !== null) onConfirm();

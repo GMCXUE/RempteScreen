@@ -171,7 +171,7 @@
     try {
       const data=await api('messages',{peerId:current.id,...(syncCursor!==null?{syncCursor,loadedFrom:messages[0]?.seq}:{}),...(messages.length?(older?{before:messages[0].seq}:{after:messages.at(-1).seq}):{})});
       if(version!==generation || peer?.id!==current.id)return;
-      recovered('messages');
+      if(typeof data.syncError==='string')syncError('messages',data.syncError);else recovered('messages');
       const container=el('social-messages'),atBottom=container.scrollHeight-container.scrollTop-container.clientHeight<80;
       const oldHeight=container.scrollHeight,oldTop=container.scrollTop,initial=messages.length===0;
       const boundary=data.clearedThrough||'0';const cleared=BigInt(boundary)>BigInt(clearedThrough);if(cleared){clearedThrough=boundary;messages=messages.filter(m=>BigInt(m.seq)>BigInt(boundary));chatUi.close();window.__TAURI__.core.invoke('close_chat_history').catch(()=>{});}

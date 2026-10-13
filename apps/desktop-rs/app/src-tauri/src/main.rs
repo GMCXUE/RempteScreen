@@ -5,6 +5,8 @@
 // 架构：Rust 侧持有全部业务（服务端 API、心跳、原生采集推流），
 // 前端只是个壳，通过 invoke 调命令、轮询状态渲染界面。
 mod api;
+mod chat_store;
+mod chat_backup;
 mod updates;
 mod hot_updates;
 mod call;
@@ -206,6 +208,7 @@ fn snapshot(state: &AppState) -> AppStateDto {
     };
 
     let publishing = state.session.lock().unwrap().is_some();
+    chat_store::set_screen_busy(publishing||state.watch.lock().unwrap().is_some());
     let last_error = state.last_error.lock().unwrap().clone().unwrap_or_default();
 
     AppStateDto {
@@ -230,6 +233,7 @@ fn get_state(state: tauri::State<AppState>) -> AppStateDto {
 #[tauri::command]
 fn login(email: String, password: String, state: tauri::State<AppState>) -> Result<String, String> {
     let (name, token) = api::login(&email, &password)?;
+    chat_store::reset_media_busy();
     {
         let mut creds = state.creds.lock().unwrap();
         creds.account_token = Some(token);
@@ -339,6 +343,7 @@ async fn social_api(operation: String, body: Option<serde_json::Value>, send_ses
 /// 退出登录：停掉心跳、投送与观看，清空账号与设备凭据（画质设置保留）。
 #[tauri::command]
 fn logout(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    chat_store::reset_media_busy();
     chat_history_window::close(&app);
     chat_image_window::close(&app);
     chat_video_window::close(&app);
@@ -2007,6 +2012,7 @@ fn main() {
             friend_call_stop,
             friend_call_status,
             social_api,
+            chat_backup::chat_archive,
             pick_avatar_image,
             pick_chat_image,
             chat_media::pick_chat_media,

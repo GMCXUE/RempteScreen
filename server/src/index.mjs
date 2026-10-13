@@ -19,6 +19,7 @@
 //   健康   GET    /v1/health
 
 import http from 'node:http';
+import { purgeLocalChat } from './chat_local.mjs';
 import { createSocialHandler, videoHandlers } from './social.mjs';
 import { config } from './config.mjs';
 import { openDatabase, purgeExpiredSessions, closeDatabase } from './db.mjs';
@@ -44,7 +45,7 @@ const routes = [
   ['GET','/v1/admin/releases/:releaseId',updates.getRelease],
   ['PATCH','/v1/admin/releases/:releaseId',updates.editRelease],
   ['DELETE','/v1/admin/releases/:releaseId',updates.withdrawRelease],
-  ...['account-profile','avatar-image','avatar','state','search','request','decision','profile','history','message-context','clear-history','messages','send','send-image','message-image','message-video','recall','read','call-start','call-state','call-decision','call-end'].map(operation => [operation === 'state' ? 'GET' : 'POST', `/v1/social/${operation}`, createSocialHandler(operation)]),
+  ...['local-feed','local-activate','local-saved','local-image','local-video','account-profile','avatar-image','avatar','state','search','request','decision','profile','history','message-context','clear-history','messages','send','send-image','message-image','message-video','recall','read','call-start','call-state','call-decision','call-end'].map(operation => [operation === 'state' ? 'GET' : 'POST', `/v1/social/${operation}`, createSocialHandler(operation)]),
   ['POST', '/v1/auth/register', handlers.registerAccount],
   ['POST', '/v1/auth/login', handlers.login],
   ['POST', '/v1/auth/logout', handlers.logout],
@@ -208,6 +209,7 @@ startSweeper();
 const sweeper = setInterval(async () => {
   try {
     const removed = await purgeExpiredSessions();
+    await purgeLocalChat();
     if (removed > 0) console.log(`${timestamp()}  sweep  清理过期会话 ${removed} 条`);
   } catch (error) {
     console.warn(`${timestamp()}  sweep  清理失败：${error.message}`);

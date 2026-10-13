@@ -129,26 +129,14 @@ pub async fn get_chat_video(app: tauri::AppHandle) -> Result<Value, String> {
             .filter(|v| *v > 0 && *v <= 50 * 1024 * 1024)
             .ok_or("视频信息无效")?;
         let expected = meta["sha256"].as_str().ok_or("视频信息无效")?;
-        let mut reader = match ureq::get(&format!(
-            "{}/v1/social/videos/{}",
-            super::api::SERVER_URL,
-            saved.message
-        ))
-        .query("peerId", &saved.peer)
-        .set("Authorization", &format!("Bearer {}", saved.token))
-        .timeout(std::time::Duration::from_secs(90))
-        .call()
-        {
-            Ok(r) => r.into_reader(),
-            Err(ureq::Error::Status(_, r)) => {
-                let v: Value = r.into_json().unwrap_or_default();
-                return Err(v["error"]["message"]
-                    .as_str()
-                    .unwrap_or("视频下载失败，请重试")
-                    .into());
-            }
-            Err(_) => return Err("视频下载失败，请重试".into()),
+        let store=super::chat_store::Store::open().map_err(|e|e.to_string())?;
+        let owner=store.owner(&saved.token).map_err(|e|e.to_string())?;
+        let bytes=match store.bytes(&owner,&saved.message).map_err(|e|e.to_string())? {
+            Some(bytes)=>bytes,
+            None=>{let bytes=super::chat_store::download_video(&saved.token,&saved.peer,&saved.message,&reply["message"]).map_err(|e|e.to_string())?;
+                store.save_bytes(&owner,&saved.message,&bytes,"video/mp4",Some(expected)).map_err(|e|e.to_string())?;bytes}
         };
+        let mut reader=std::io::Cursor::new(bytes);
         let part = saved.cache.with_extension("part");
         let mut output = std::fs::File::create(&part).map_err(|_| "无法保存视频缓存")?;
         let mut hash = Sha256::new();

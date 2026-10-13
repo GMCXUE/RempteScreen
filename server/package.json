@@ -21,6 +21,7 @@
     "test:calls": "node test/calls.mjs",
     "test:profile-http": "node test/profile_http.mjs",
     "test:updates": "node test/updates.mjs",
-    "test:chat-history": "node test/chat_history.mjs"
+    "test:chat-history": "node test/chat_history.mjs",
+    "test:chat-local": "node test/chat_local.mjs"
   }
 }

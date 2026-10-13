@@ -1,3 +1,4 @@
+import 'chat_storage_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -54,7 +55,8 @@ class ChatFixture {
         ? <String, dynamic>{}
         : Map<String, dynamic>.from(jsonDecode(request.body));
     requests.add({'op': operation, ...body});
-    if (failedSync.contains(operation)) {
+    if (failedSync.contains(operation) ||
+        operation == 'local-feed' && failedSync.contains('messages')) {
       return http.Response(
           jsonEncode({
             'error': {'code': 'network', 'message': '连不上服务器，请检查网络或服务器地址'}
@@ -63,7 +65,33 @@ class ChatFixture {
           headers: {'content-type': 'application/json; charset=utf-8'});
     }
     Map<String, dynamic> result = {'ok': true};
-    if (operation == 'messages') {
+    if (operation == 'state') {
+      result = {
+        'me': {'id': 'me', 'name': '我'},
+        'friends': [
+          {'id': 'peer', 'name': '好友'}
+        ]
+      };
+    } else if (operation == 'local-feed') {
+      final after = BigInt.parse(body['after'] ?? '0'),
+          edit = int.parse(body['edit'] ?? '0');
+      result = {
+        'messages': messages
+            .where((m) => BigInt.parse(m['seq']) > after)
+            .map(
+                (m) => {...m, 'peerId': 'peer', 'editSeq': m['editSeq'] ?? '0'})
+            .toList(),
+        'updates': updates
+            .where((m) => int.parse(m['editSeq']) > edit)
+            .map((m) => {...m, 'peerId': 'peer'})
+            .toList(),
+        'clears': [],
+        'reads': [],
+        'after': messages.isEmpty ? '0' : messages.last['seq'],
+        'edit': '${updates.length}',
+        'hasMore': false
+      };
+    } else if (operation == 'messages') {
       result = {
         'messages': messages
             .where((m) =>
@@ -137,7 +165,7 @@ class ChatFixture {
               });
       if (!messages.any((m) => m['id'] == stored['id'])) messages.add(stored);
       result = {'message': stored};
-    } else if (operation == 'message-image') {
+    } else if ((operation == 'message-image' || operation == 'local-image')) {
       if (failReadImage) {
         return http.Response(
             jsonEncode({
@@ -181,7 +209,7 @@ void main() {
   bool cancelPicker = false;
   PlatformException? pickerError;
   final pickerSources = <int>[];
-  setUp(() {
+  setUp(() async {
     chatOutbox.reset();
     clipboard.clear();
     imageClipboard.clear();
@@ -214,6 +242,7 @@ void main() {
     failClipboard = false;
     SharedPreferences.setMockInitialValues(
         {'remotescreen.accountToken': 'test-token'});
+    await prepareChatStorage('test-token');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (call) async {
       if (call.method == 'Clipboard.setData') {
@@ -256,12 +285,12 @@ void main() {
           'remark': '',
           'avatarId': 'rabbit'
         })));
-    await tester.pumpAndSettle();
+    await pumpChat(tester);
   }
 
   Future<void> close(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpAndSettle();
+    await pumpChat(tester);
   }
 
   Future<void> choosePhoto(WidgetTester tester, {bool camera = false}) async {
@@ -270,23 +299,23 @@ void main() {
         tester.widget<TextField>(find.byType(TextField)).controller!.text;
     if (text.isNotEmpty) {
       await tester.enterText(find.byType(TextField), '');
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
     }
     if (find
         .byKey(const ValueKey('chat-attachment-panel'))
         .evaluate()
         .isEmpty) {
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
     }
     await tester.runAsync(() async {
       await tester.tap(find.text(camera ? '拍照' : '图片与视频'));
       await Future<void>.delayed(const Duration(milliseconds: 150));
     });
-    await tester.pumpAndSettle();
+    await pumpChat(tester);
     if (text.isNotEmpty) {
       await tester.enterText(find.byType(TextField), text);
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
     }
   }
 
@@ -321,7 +350,7 @@ void main() {
       await tester.enterText(find.byType(TextField), '未发送的草稿');
       fixture.failedSync.add('messages');
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byKey(const ValueKey('compact-feedback')), findsOneWidget);
       expect(find.text('第一行\n第二行'), findsOneWidget);
       expect(find.text('未发送的草稿'), findsOneWidget);
@@ -329,11 +358,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 2300));
       expect(find.byKey(const ValueKey('compact-feedback')), findsNothing);
       await tester.pump(const Duration(seconds: 6));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('连不上服务器，请检查网络或服务器地址'), findsNothing);
       fixture.failedSync.clear();
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       fixture.failedSync.add('read');
       fixture.messages.add({
         'id': 'retry-read',
@@ -344,17 +373,17 @@ void main() {
         'createdAt': '${DateTime.now().millisecondsSinceEpoch}'
       });
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       final attempts = fixture.requests.where((r) => r['op'] == 'read').length;
       await tester.pump(const Duration(milliseconds: 2300));
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(fixture.requests.where((r) => r['op'] == 'read').length,
           greaterThan(attempts));
       expect(find.byKey(const ValueKey('compact-feedback')), findsNothing);
       fixture.failedSync.clear();
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('未发送的草稿'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await close(tester);
@@ -383,10 +412,10 @@ void main() {
     await http.runWithClient(() async {
       await open(tester);
       await tester.longPress(find.text('第一行\n第二行'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('撤回'), findsNothing);
       await tester.tap(find.text('复制'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(clipboard, ['第一行\n第二行']);
       expect(find.text('已复制'), findsOneWidget);
       expect(find.byType(SnackBar), findsNothing);
@@ -394,31 +423,31 @@ void main() {
       expect(find.text('已复制'), findsNothing);
       systemFeedback = true;
       await tester.longPress(find.text('第一行\n第二行'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('复制'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('已复制'), findsNothing);
       systemFeedback = false;
       await tester.longPress(find.text('第一行\n第二行'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('选择文字'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byType(SelectableText), findsOneWidget);
       await tester.tap(find.text('关闭'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       failClipboard = true;
       await tester.longPress(find.text('第一行\n第二行'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('复制'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('复制失败，请重试'), findsOneWidget);
       await tester.longPress(find.text('第一行\n第二行'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('选择文字'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       fixture.retract(fixture.messages.first);
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byType(SelectableText), findsNothing);
       expect(find.text('对方撤回了一条消息'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -432,25 +461,25 @@ void main() {
       await open(tester);
       Future<void> recallMenu() async {
         await tester.longPress(find.text('我的消息'));
-        await tester.pumpAndSettle();
+        await pumpChat(tester);
         await tester.tap(find.text('撤回'));
-        await tester.pumpAndSettle();
+        await pumpChat(tester);
       }
 
       await recallMenu();
       await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(fixture.requests.where((r) => r['op'] == 'recall'), isEmpty);
       fixture.failRecall = true;
       await recallMenu();
       await tester.tap(find.text('撤回'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('我的消息'), findsOneWidget);
       expect(find.textContaining('已超过撤回时间'), findsOneWidget);
       fixture.failRecall = false;
       await recallMenu();
       await tester.tap(find.text('撤回'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('我的消息'), findsNothing);
       expect(find.text('你撤回了一条消息'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -478,18 +507,18 @@ void main() {
       expect(input.contains(preview.center), isTrue);
       expect(input.height, lessThan(190));
       await tester.tap(find.byTooltip('移除图片 1'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
           '保留草稿');
       await choosePhoto(tester);
       await tester.tap(find.text('发送'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byTooltip('网络不可用'), findsOneWidget);
       expect(find.byTooltip('移除图片 1'), findsNothing);
       expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
           isEmpty);
       await tester.tap(find.text('发送失败 · 重试'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       final sends =
           fixture.requests.where((r) => r['op'] == 'send-image').toList();
       expect(sends.length, 2);
@@ -512,11 +541,11 @@ void main() {
     await http.runWithClient(() async {
       await open(tester);
       await tester.enterText(find.byType(TextField), '保留文字');
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byKey(const ValueKey('chat-more-button')), findsNothing);
       expect(find.text('发送'), findsOneWidget);
       await tester.enterText(find.byType(TextField), '');
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('发送'), findsNothing);
       expect(find.byKey(const ValueKey('chat-attachment-panel')), findsNothing);
       final fieldRect = tester.getRect(find.byType(TextField));
@@ -524,7 +553,7 @@ void main() {
           tester.getCenter(find.byKey(const ValueKey('chat-more-button'))).dx,
           greaterThan(fieldRect.right));
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('图片与视频'), findsOneWidget);
       expect(find.text('拍照'), findsOneWidget);
       expect(find.text('粘贴图片'), findsNothing);
@@ -535,18 +564,18 @@ void main() {
               .contentInsertionConfiguration,
           isNull);
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byKey(const ValueKey('chat-attachment-panel')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.binding.handlePopRoute();
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byType(PrivateChatScreen), findsOneWidget);
       expect(find.byKey(const ValueKey('chat-attachment-panel')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.byType(TextField));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byKey(const ValueKey('chat-attachment-panel')), findsNothing);
       cancelPicker = true;
       await choosePhoto(tester);
@@ -577,9 +606,9 @@ void main() {
       await open(tester);
       await tester.enterText(find.byType(TextField), '原有草稿');
       await tester.longPress(find.byType(TextField));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('Paste'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
           contains('正常文字'));
       expect(imageReadUris, isEmpty);
@@ -607,7 +636,7 @@ void main() {
       await paste();
       await paste();
       await tester.tap(find.text('发送'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byTooltip('移除图片 1'), findsNothing);
       expect(find.text('发送失败 · 重试'), findsNWidgets(2));
       expect(fixture.messages.where((m) => m['kind'] == 'image').length, 1);
@@ -616,7 +645,7 @@ void main() {
           .lastWhere((r) => r['op'] == 'send-image')['clientId'];
       await tester.tap(find.descendant(
           of: find.byTooltip('网络不可用'), matching: find.text('发送失败 · 重试')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byKey(const ValueKey('chat-draft-images')), findsNothing);
       expect(fixture.imageAttempts, 3);
       expect(
@@ -627,7 +656,7 @@ void main() {
       final textId =
           fixture.requests.lastWhere((r) => r['op'] == 'send')['clientId'];
       await tester.tap(find.text('发送失败 · 重试'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(fixture.imageAttempts, 3);
       expect(fixture.requests.lastWhere((r) => r['op'] == 'send')['clientId'],
           textId);
@@ -660,7 +689,7 @@ void main() {
       await open(tester);
       pendingPicker = Completer<String?>();
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('图片与视频'));
       await tester.pump();
       await close(tester);
@@ -668,7 +697,7 @@ void main() {
         pendingPicker!.complete(File('assets/avatars/cat.png').absolute.path);
         await Future<void>.delayed(const Duration(milliseconds: 150));
       });
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(tester.takeException(), isNull);
     }, () => MockClient(fixture.respond));
   });
@@ -685,43 +714,43 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
       expect(find.byTooltip('移除图片 1'), findsOneWidget);
       await tester.tap(find.byTooltip('移除图片 1'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(fixture.requests.where((r) => r['op'] == 'send-image'), isEmpty);
       await pick();
       await tester.tap(find.text('发送'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byTooltip('网络不可用'), findsOneWidget);
       await tester.tap(find.text('发送失败 · 重试'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       final sends =
           fixture.requests.where((r) => r['op'] == 'send-image').toList();
       expect(sends.length, 2);
       expect(sends[0]['clientId'], sends[1]['clientId']);
       expect(find.byType(AlertDialog), findsNothing);
       await tester.longPress(find.bySemanticsLabel('查看图片'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('复制图片'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(imageClipboard.single, chatImageBytes(fixture.photo));
       expect(find.text('图片已复制'), findsOneWidget);
-      fixture.failReadImage = true;
+      fixture.failedSync.add('message-image');
       await tester.longPress(find.bySemanticsLabel('查看图片'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('复制图片'));
-      await tester.pumpAndSettle();
-      expect(imageClipboard.length, 1);
-      expect(find.text('图片已撤回'), findsOneWidget);
-      fixture.failReadImage = false;
+      await pumpChat(tester);
+      expect(imageClipboard.length, 2);
+      expect(find.text('图片已复制'), findsOneWidget);
+      fixture.failedSync.clear();
       await tester.pump(const Duration(milliseconds: 2300));
       await tester.tap(find.bySemanticsLabel('查看图片'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byType(ChatImageViewer), findsOneWidget);
       await tester.tap(find.byTooltip('复制图片'));
-      await tester.pumpAndSettle();
-      expect(imageClipboard.length, 2);
+      await pumpChat(tester);
+      expect(imageClipboard.length, 3);
       fixture.retract(fixture.messages.last);
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.byType(ChatImageViewer), findsNothing);
       expect(find.text('你撤回了一条消息'), findsOneWidget);
       expect(tester.takeException(), isNull);

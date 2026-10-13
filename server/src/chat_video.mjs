@@ -8,6 +8,7 @@ import {Transform} from 'node:stream';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createHash,randomUUID} from 'node:crypto';
+import {query as sqlQuery} from './db.mjs';
 import {resolveSession} from './users.mjs';
 const run=promisify(execFile);
 export const chatVideoMaxBytes=50*1024*1024;
@@ -38,8 +39,8 @@ export function chatVideoHandlers({pair,requireFriend,messageColumns,clientIdVal
   if(row&&(row.recipient_id!==peer||row.payload_hash!==hash))fail(409,'消息标识已经用于其他消息');
   if(row){delete row.recipient_id;delete row.payload_hash;}return row;
  });
- const info=async(user,peer,messageId)=>pair(user,peer,async({db,link,profiles})=>{
-  requireFriend(link,profiles);const row=(await db.query(`SELECT ${messageColumns} FROM chat_messages WHERE id=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2)) AND seq>COALESCE((SELECT cleared_seq FROM friend_profiles WHERE owner_id=$2 AND peer_id=$3),0)`,[messageId,user.id,peer])).rows[0];
+ const info=async(user,peer,messageId,archive=false)=>pair(user,peer,async({db,link,profiles})=>{
+  if(!archive)requireFriend(link,profiles);const row=(await db.query(`SELECT ${messageColumns} FROM chat_messages WHERE id=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2)) AND seq>COALESCE((SELECT cleared_seq FROM friend_profiles WHERE owner_id=$2 AND peer_id=$3),0)`,[messageId,user.id,peer])).rows[0];
   if(!row)fail(404,'消息不存在');if(row.kind==='recalled')fail(410,'视频已撤回');if(row.kind!=='video')fail(404,'视频不存在');return row;
  });
  return {
@@ -47,7 +48,8 @@ export function chatVideoHandlers({pair,requireFriend,messageColumns,clientIdVal
    let dir,processing=false;
    try{
     const user=await userFor(request),peer=query.get('peerId'),clientId=params.clientId;
-    if(!clientIdValid(clientId))fail(400,'消息标识不正确');budget(user.id,'send-video');
+    if(!clientIdValid(clientId))fail(400,'消息标识不正确');
+    if((await sqlQuery('SELECT 1 FROM chat_delivery_dedup WHERE sender_id=$1 AND client_id=$2',[user.id,clientId])).length)fail(409,'消息已投递并超过服务器暂存期限，请查看本地记录');budget(user.id,'send-video');
     await pair(user,peer,async({link,profiles})=>requireFriend(link,profiles));
     if(processors>=2)fail(429,'视频正在处理中，请稍后重试');processors++;processing=true;
     const declared=Number(request.headers['content-length']);if(Number.isFinite(declared)&&declared>chatVideoMaxBytes)fail(413,'视频过大，请选择 50 MB 以内的视频');
@@ -60,6 +62,7 @@ export function chatVideoHandlers({pair,requireFriend,messageColumns,clientIdVal
     const video=await normalizeChatVideo(input,dir);
     const message=await pair(user,peer,async({db,link,profiles,low,high})=>{
      requireFriend(link,profiles);
+     if((await db.query('SELECT 1 FROM chat_delivery_dedup WHERE sender_id=$1 AND client_id=$2',[user.id,clientId])).rows.length)fail(409,'消息已投递并超过服务器暂存期限，请查看本地记录');
      const duplicate=(await db.query(`SELECT ${messageColumns},recipient_id,payload_hash FROM chat_messages WHERE sender_id=$1 AND client_id=$2`,[user.id,clientId])).rows[0];
      if(duplicate){if(duplicate.recipient_id!==peer||duplicate.payload_hash!==payloadHash)fail(409,'消息标识已经用于其他消息');delete duplicate.recipient_id;delete duplicate.payload_hash;return duplicate;}
      const row=(await db.query(`INSERT INTO chat_messages(id,sender_id,recipient_id,client_id,text,created_at,kind,metadata,payload_hash) VALUES($1,$2,$3,$4,'[视频]',$5,'video',$6,$7) RETURNING ${messageColumns}`,[randomUUID(),user.id,peer,clientId,Date.now(),video.metadata,payloadHash])).rows[0];
@@ -68,13 +71,14 @@ export function chatVideoHandlers({pair,requireFriend,messageColumns,clientIdVal
    }catch(error){return errors(error);}finally{if(processing)processors--;if(dir)await rm(dir,{recursive:true,force:true});}
   },
   async metadata(user,body){return {message:await info(user,body.peerId,body.messageId)};},
+  async archiveMetadata(user,body){return {message:await info(user,body.peerId,body.messageId,true)};},
   async download({request,response,params,query}){
    let knownSize=0;
    try{
-    const user=await userFor(request),peer=query.get('peerId'),row=await info(user,peer,params.messageId),size=Number(row.video.bytes);knownSize=size;
+    const user=await userFor(request),peer=query.get('peerId'),row=await info(user,peer,params.messageId,query.get('archive')==='1'),size=Number(row.video.bytes);knownSize=size;
     let start=0,end=size-1,status=200;
     if(request.headers.range){const match=/^bytes=(\d*)-(\d*)$/.exec(request.headers.range);if(!match||(!match[1]&&!match[2]))fail(416,'视频范围无效');if(!match[1])start=Math.max(0,size-Number(match[2]));else{start=Number(match[1]);if(match[2])end=Math.min(end,Number(match[2]));}if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>end||start>=size)fail(416,'视频范围无效');status=206;}
-    const data=await pair(user,peer,async({db,link,profiles})=>{requireFriend(link,profiles);return (await db.query("SELECT substring(v.data FROM $2::int FOR $3::int) AS data FROM chat_videos v JOIN chat_messages m ON m.id=v.message_id WHERE v.message_id=$1 AND m.kind='video' AND m.seq>COALESCE((SELECT cleared_seq FROM friend_profiles WHERE owner_id=$4 AND peer_id=$5),0)",[row.id,start+1,request.method==='HEAD'?0:end-start+1,user.id,peer])).rows[0]?.data;});
+    const data=await pair(user,peer,async({db,link,profiles})=>{if(query.get('archive')!=='1')requireFriend(link,profiles);return (await db.query("SELECT substring(v.data FROM $2::int FOR $3::int) AS data FROM chat_videos v JOIN chat_messages m ON m.id=v.message_id WHERE v.message_id=$1 AND m.kind='video' AND m.seq>COALESCE((SELECT cleared_seq FROM friend_profiles WHERE owner_id=$4 AND peer_id=$5),0)",[row.id,start+1,request.method==='HEAD'?0:end-start+1,user.id,peer])).rows[0]?.data;});
     if(!data)fail(410,'视频已撤回');response.writeHead(status,{'Content-Type':'video/mp4','Content-Length':end-start+1,'Accept-Ranges':'bytes',...(status===206?{'Content-Range':`bytes ${start}-${end}/${size}`}:{})});response.end(request.method==='HEAD'?undefined:data);return {__sse:true};
    }catch(error){if(error.statusCode===416)response.setHeader('Content-Range',`bytes */${knownSize}`);return errors(error);}
   }

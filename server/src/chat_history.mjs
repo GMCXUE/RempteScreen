@@ -42,7 +42,7 @@ export function chatHistoryOperations({pair,requireFriend,problem,messageColumns
   async 'clear-history'(user,body) {
    return pair(user,body.peerId,async({db,link,profiles})=>{
     requireFriend(link,profiles);
-    const seq=(await db.query(`SELECT COALESCE(MAX(seq),0)::text AS seq FROM chat_messages WHERE (sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1)`,[user.id,body.peerId])).rows[0].seq;
+    const seq=(await db.query(`SELECT COALESCE(MAX(seq),0)::text AS seq FROM (SELECT seq FROM chat_messages WHERE (sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1) UNION ALL SELECT seq FROM chat_delivery_dedup WHERE (sender_id=$1 AND recipient_id=$2) OR (sender_id=$2 AND recipient_id=$1)) history_boundaries`,[user.id,body.peerId])).rows[0].seq;
     await db.query(`INSERT INTO friend_profiles(owner_id,peer_id,cleared_seq,read_seq) VALUES($1,$2,$3,$3)
       ON CONFLICT(owner_id,peer_id) DO UPDATE SET cleared_seq=GREATEST(friend_profiles.cleared_seq,$3),read_seq=GREATEST(friend_profiles.read_seq,$3)`,[user.id,body.peerId,seq]);
     return {ok:true,clearedThrough:seq};

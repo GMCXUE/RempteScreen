@@ -8,6 +8,7 @@
 // 旧数据用 scripts/migrate-sqlite-to-pg.mjs 一次性搬过来。
 
 import pg from 'pg';
+import { localChatSchema } from './chat_local.mjs';
 import { callSchema } from './calls.mjs';
 import { accountSchema } from './account_schema.mjs';
 import { socialSchema } from './social_schema.mjs';
@@ -94,6 +95,7 @@ export async function openDatabase() {
   await pool.query(accountSchema);
   await pool.query(socialSchema);
   await pool.query(callSchema);
+  await pool.query(localChatSchema);
   await pool.query(updateSchema);
   return pool;
 }

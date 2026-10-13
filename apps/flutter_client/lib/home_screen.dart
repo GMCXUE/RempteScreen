@@ -1,4 +1,5 @@
 import 'app_updates.dart';
+import 'chat_archive_screen.dart';
 import 'account_feedback.dart';
 import 'dart:async';
 import 'dart:io' show Platform;
@@ -256,6 +257,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// 管理器状态变化 → 刷新界面
   void _onManagerChanged() {
+    api.localChat.screenBusy=manager.publishing||manager.activeSessions.isNotEmpty;
     if (mounted) setState(() {});
     _maybeShowConnectRequest();
     _maybeShowFileTransferResult();
@@ -1118,6 +1120,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 trailing: const Icon(Icons.chevron_right, size: 20),
                 onTap: () => setState(() => _selectedTab = 2)),
           ])),
+          const SectionHeading('聊天记录'),
+          Card(child:ListTile(leading:const Icon(Icons.backup_outlined),title:const Text('本地保存与迁移'),subtitle:const Text('备份与恢复聊天记录'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.push(context,MaterialPageRoute(builder:(_)=>const ChatArchiveScreen())))),
           const SectionHeading('关于'),
           Card(
               child: ListTile(

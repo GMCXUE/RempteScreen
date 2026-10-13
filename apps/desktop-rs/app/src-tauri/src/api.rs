@@ -209,6 +209,7 @@ pub fn login(email: &str, password: &str) -> Result<(String, String), String> {
     )?;
     let name = result["user"]["name"].as_str().unwrap_or("用户").to_string();
     let token = result["token"].as_str().unwrap_or("").to_string();
+    if let Some(owner)=result["user"]["id"].as_str(){if let Ok(store)=super::chat_store::Store::open(){let _=store.bind(&token,owner);}}
     Ok((name, token))
 }
 
@@ -599,7 +600,10 @@ fn poll_connect_request_inner(request_id: &str, wait_sec: Option<u64>) -> Result
 
 /// Authenticated account-level social operations; credentials never enter the webview.
 pub fn social(operation: &str, token: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
-    if !["account-profile", "avatar-image", "avatar", "state", "search", "request", "decision", "profile", "history", "message-context", "clear-history", "messages", "send", "send-image", "message-image", "message-video", "recall", "read", "call-start", "call-state", "call-decision", "call-end"].contains(&operation) {
+    super::chat_store::social(operation,token,body)
+}
+pub fn social_remote(operation: &str, token: &str, body: serde_json::Value) -> Result<serde_json::Value, String> {
+    if !["local-feed","local-activate","local-saved","local-image","local-video","account-profile", "avatar-image", "avatar", "state", "search", "request", "decision", "profile", "history", "message-context", "clear-history", "messages", "send", "send-image", "message-image", "message-video", "recall", "read", "call-start", "call-state", "call-decision", "call-end"].contains(&operation) {
         return Err("不支持的好友操作".into());
     }
     let request = ureq::request(if operation == "state" { "GET" } else { "POST" }, &format!("{SERVER_URL}/v1/social/{operation}"))

@@ -29,6 +29,7 @@ jpeg-encoder = "0.6"
 cpal = "0.15"
 rtrb = "0.3"
 rfd = "0.15"
+rusqlite = { version = "0.37", features = ["bundled"] }
 futures-util = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]

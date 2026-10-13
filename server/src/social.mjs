@@ -4,6 +4,7 @@ import { validateAccountProfile, profileFields } from './account_profile.mjs';
 import { toPublicUser } from './users.mjs';
 import { avatarIds, avatarFields, normalizeAvatarImage } from './avatars.mjs';
 import { callOperation } from './calls.mjs';
+import { localChatOperations } from './chat_local.mjs';
 import { chatHistoryOperations } from './chat_history.mjs';
 import { chatVideoHandlers } from './chat_video.mjs';
 import { normalizeChatImage } from './chat_image.mjs';
@@ -34,6 +35,7 @@ async function pair(user, peer, action) {
  const db = await getPool().connect();
  try {
   await db.query('BEGIN');
+  await db.query('SELECT pg_advisory_xact_lock(72831013001)');
   const [low,high] = [user.id,peer].sort();
   await db.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`${low}:${high}`]);
   if (!(await db.query('SELECT id FROM users WHERE id=$1',[peer])).rows.length) problem(404,'账号不存在');
@@ -69,7 +71,9 @@ const clientIdValid = value => typeof value==='string' && /^[a-zA-Z0-9_-]{8,80}$
 const payloadHash = text => createHash('sha256').update('text:'+text).digest('hex');
 export const videoHandlers=chatVideoHandlers({pair,requireFriend,messageColumns,clientIdValid,budget});
 const operations = {
+ ...localChatOperations({problem,messageColumns}),
  'message-video':videoHandlers.metadata,
+ 'local-video':videoHandlers.archiveMetadata,
  ...chatHistoryOperations({pair,requireFriend,problem,messageColumns}),
  async 'account-profile'(user,body) {
   const profile=validateAccountProfile(body);
@@ -183,8 +187,10 @@ const operations = {
   const text=textValue(body.text,2000,'消息');
   if(!text) problem(400,'消息不能为空');
   if(!clientIdValid(body.clientId)) problem(400,'消息标识不正确');
+  if((await query('SELECT 1 FROM chat_delivery_dedup WHERE sender_id=$1 AND client_id=$2',[user.id,body.clientId])).length)problem(409,'消息已投递并超过服务器暂存期限，请查看本地记录');
   return pair(user,body.peerId,async({db,link,profiles,low,high})=>{
    requireFriend(link,profiles);
+   if((await db.query('SELECT 1 FROM chat_delivery_dedup WHERE sender_id=$1 AND client_id=$2',[user.id,body.clientId])).rows.length)problem(409,'消息已投递并超过服务器暂存期限，请查看本地记录');
    const hash=payloadHash(text);
    const existing=(await db.query(`SELECT ${messageColumns},recipient_id,payload_hash FROM chat_messages WHERE sender_id=$1 AND client_id=$2`,[user.id,body.clientId])).rows[0];
    if(existing) {
@@ -199,8 +205,10 @@ const operations = {
  },
  async 'send-image'(user,body) {
   if(!clientIdValid(body.clientId)) problem(400,'消息标识不正确');
+  if((await query('SELECT 1 FROM chat_delivery_dedup WHERE sender_id=$1 AND client_id=$2',[user.id,body.clientId])).length)problem(409,'消息已投递并超过服务器暂存期限，请查看本地记录');
   return pair(user,body.peerId,async({db,link,profiles,low,high})=>{
    requireFriend(link,profiles);
+   if((await db.query('SELECT 1 FROM chat_delivery_dedup WHERE sender_id=$1 AND client_id=$2',[user.id,body.clientId])).rows.length)problem(409,'消息已投递并超过服务器暂存期限，请查看本地记录');
    const image=await normalizeChatImage(body.image),hash='image:'+image.hash;
    const existing=(await db.query(`SELECT ${messageColumns},recipient_id,payload_hash FROM chat_messages WHERE sender_id=$1 AND client_id=$2`,[user.id,body.clientId])).rows[0];
    if(existing) {
@@ -244,7 +252,7 @@ const operations = {
    requireFriend(link,profiles);
    // Never accept a cursor for another conversation or a future message.
    const row=(await db.query('SELECT seq FROM chat_messages WHERE seq=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))',[body.seq,user.id,body.peerId])).rows[0];
-   if(!row) problem(400,'消息不存在');
+   if(!row&&!(await db.query('SELECT 1 FROM chat_delivery_dedup WHERE seq=$1 AND ((sender_id=$2 AND recipient_id=$3) OR (sender_id=$3 AND recipient_id=$2))',[body.seq,user.id,body.peerId])).rows.length) problem(400,'消息不存在');
    await db.query('INSERT INTO friend_profiles(owner_id,peer_id,read_seq) VALUES($1,$2,$3) ON CONFLICT(owner_id,peer_id) DO UPDATE SET read_seq=GREATEST(friend_profiles.read_seq,$3)',[user.id,body.peerId,body.seq]);return {ok:true};
   });
  },

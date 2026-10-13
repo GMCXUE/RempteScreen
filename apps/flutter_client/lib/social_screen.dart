@@ -692,7 +692,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
         _applyClear(boundary);
       }
       final initial = _messages.isEmpty;
-      _syncFeedback.recovered('messages');
+      if(result['syncError'] is String){_syncFeedback.failed(context,'messages',result['syncError']);}else{_syncFeedback.recovered('messages');}
       final rows = (result['messages'] as List)
           .map((row) => Map<String, dynamic>.from(row))
           .toList();

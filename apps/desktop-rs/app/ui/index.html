@@ -324,6 +324,12 @@
           <button id="settings-cast" class="settings-row" type="button"><span><strong>投屏画质</strong><small>清晰度与帧率</small></span><span id="set-quality" class="settings-value">—</span><span class="row-chevron" aria-hidden="true">›</span></button>
         </div>
         <p class="settings-note">首次投屏时，请按系统提示允许屏幕录制。麦克风与摄像头权限可在系统设置中管理。</p>
+        <div class="section-heading"><h2>聊天记录</h2></div>
+        <div class="card settings-group"><div class="settings-row"><span><strong>本地保存与迁移</strong><small id="chat-archive-status">服务器暂存 7 天，本地记录长期保存</small></span></div>
+        <button id="chat-archive-sync" class="settings-row" type="button"><span><strong>同步到本机</strong><small>下载聊天记录和图片视频</small></span><span>›</span></button>
+        <button id="chat-archive-export" class="settings-row" type="button"><span><strong>备份聊天记录</strong><small>加密保存，可迁移到手机或电脑</small></span><span>›</span></button>
+        <button id="chat-archive-import" class="settings-row" type="button"><span><strong>恢复聊天记录</strong><small>导入同一账号的备份并合并去重</small></span><span>›</span></button></div>
+        <p class="settings-note">备份仅包含本机已下载的记录和媒体。卸载、清理应用数据或换机前，请先备份。备份密码遗失后无法恢复。</p>
         <div class="section-heading"><h2>关于</h2></div>
         <div class="card settings-group"><div class="settings-row"><span><strong>RemoteScreen</strong><small>客户端版本</small></span><span id="settings-version" class="settings-value">0.2.0</span></div><button id="settings-check-update" class="settings-row" type="button"><span><strong>检查更新</strong><small>查看新版本与更新内容</small></span><span class="row-chevron">›</span></button></div>
         <details class="card settings-advanced"><summary>高级信息</summary><div class="kv last"><span class="muted">服务器</span><span id="set-server" class="mono-sm">—</span></div></details>
@@ -357,6 +363,7 @@
   <script src="app.js"></script>
   <script src="chat-messages.js"></script>
   <script src="chat-settings.js"></script>
+  <script src="chat-archive.js"></script>
   <script src="chat-outbox.js"></script>
 <script src="social.js"></script>
   <script src="friend-calls.js"></script>

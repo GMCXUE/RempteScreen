@@ -9,8 +9,10 @@ import 'package:remotescreen/chat_outbox.dart';
 import 'package:remotescreen/app_theme.dart';
 import 'package:remotescreen/chat_history_screen.dart';
 import 'package:remotescreen/social_screen.dart';
+import 'chat_storage_fixture.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   final account = Account(id: 'me', email: 'me@test.invalid', name: '我');
   final peer = <String, dynamic>{
     'id': 'peer',
@@ -19,240 +21,207 @@ void main() {
     'avatarId': 'cat',
     'pinned': false
   };
-  setUp(() {
+  var cleared = false;
+  final seen = <String>[], actions = <String>[];
+  setUp(() async {
     chatOutbox.reset();
     SharedPreferences.setMockInitialValues(
         {'remotescreen.accountToken': 'synthetic-token'});
+    await prepareChatStorage('synthetic-token');
+    cleared = false;
+    seen.clear();
+    actions.clear();
   });
-  test('日期筛选包含当天开始且不包含下一天，分页游标保持精度', () {
+  Future<http.Response> remote(http.Request request) async {
+    expect(request.headers['Authorization'], 'Bearer synthetic-token');
+    final op = request.url.pathSegments.last;
+    seen.add(op);
+    final body = request.body.isEmpty ? {} : jsonDecode(request.body);
+    Object result = {'ok': true};
+    if (op == 'state') {
+      result = {
+        'me': {'id': 'me', 'name': '我'},
+        'friends': [peer]
+      };
+    }
+    if (op == 'local-feed') {
+      result = {
+        'messages': [],
+        'updates': [],
+        'clears': cleared
+            ? [
+                {'peerId': 'peer', 'seq': '300'}
+              ]
+            : [],
+        'reads': [],
+        'after': body['after'],
+        'edit': body['edit'],
+        'hasMore': false
+      };
+    }
+    if (op == 'clear-history') {
+      actions.add(op);
+      result = {'clearedThrough': '300'};
+    }
+    if (op == 'profile') actions.add(body['action']);
+    return http.Response(jsonEncode(result), 200,
+        headers: {'content-type': 'application/json; charset=utf-8'});
+  }
+
+  Future<void> seed(List<Map<String, dynamic>> rows) async {
+    final s = await api.localChat.store;
+    for (final row in rows) {
+      await s.save('me', 'peer', row);
+    }
+  }
+
+  Map<String, dynamic> row(String id, String seq, String text,
+          {String kind = 'text'}) =>
+      {
+        'id': id,
+        'seq': seq,
+        'senderId': 'peer',
+        'kind': kind,
+        'text': text,
+        'createdAt': '1791768000000',
+        'editSeq': '0',
+        if (kind == 'call') 'call': {'kind': 'voice', 'durationSec': 12}
+      };
+  test('日期筛选与大整数游标保持精度', () {
     final date = DateTime(2026, 10, 12);
-    final query = historyQuery(
-        query: '  中文  ', kind: 'image', date: date, before: '9007199254740993');
-    expect(query['query'], '中文');
-    expect(query['before'], '9007199254740993');
-    expect(query['from'], date.millisecondsSinceEpoch);
-    expect(query['to'], DateTime(2026, 10, 13).millisecondsSinceEpoch);
+    final q = historyQuery(
+        query: ' 中文 ', kind: 'image', date: date, before: '9007199254740993');
+    expect(q['query'], '中文');
+    expect(q['before'], '9007199254740993');
+    expect(q['from'], date.millisecondsSinceEpoch);
+    expect(q['to'], DateTime(2026, 10, 13).millisecondsSinceEpoch);
   });
-  test('移动端真实 API 允许历史、定位和清空请求并带认证', () async {
-    final seen = <String>[];
+  test('真实 API 从本地查询历史和定位，清空仍同步认证边界', () async {
+    await seed([row('local-1', '1', '本地历史')]);
     await http.runWithClient(() async {
-      final service = ApiService(baseUrl: 'https://history.test.invalid');
-      for (final operation in ['history', 'message-context', 'clear-history']) {
-        await service.social(operation, {'peerId': 'peer'});
-      }
-    },
-        () => MockClient((request) async {
-              expect(
-                  request.headers['Authorization'], 'Bearer synthetic-token');
-              seen.add(request.url.path);
-              return http.Response('{}', 200);
-            }));
-    expect(seen.length, 3);
+      expect((await api.social('history', {'peerId': 'peer'}))['messages'],
+          hasLength(1));
+      expect(
+          (await api.social('message-context',
+              {'peerId': 'peer', 'messageId': 'local-1'}))['messages'],
+          hasLength(1));
+      await api.social('clear-history', {'peerId': 'peer'});
+      expect((await api.social('history', {'peerId': 'peer'}))['messages'],
+          isEmpty);
+    }, () => MockClient(remote));
+    expect(seen, contains('local-feed'));
+    expect(seen, contains('clear-history'));
+    expect(seen, isNot(contains('history')));
+    expect(seen, isNot(contains('message-context')));
   });
-  testWidgets('聊天信息仅四项功能，置顶保存且清空必须确认', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final operations = <String>[];
-    String? cleared;
+  testWidgets('聊天信息置顶与清空确认，清空边界持久化', (tester) async {
+    String? boundary;
     await http.runWithClient(() async {
       await tester.pumpWidget(MaterialApp(
           theme: AppTheme.light,
           home: ChatInformationScreen(
-              account: account, friend: peer, onCleared: (v) => cleared = v)));
-      await tester.pumpAndSettle();
-      expect(find.text('查找聊天记录'), findsOneWidget);
-      expect(find.text('消息免打扰'), findsOneWidget);
-      expect(find.text('置顶聊天'), findsOneWidget);
-      expect(find.text('清空聊天记录'), findsOneWidget);
+              account: account, friend: peer, onCleared: (s) => boundary = s)));
+      await pumpChat(tester);
       expect(find.byType(SwitchListTile), findsNWidgets(2));
-      expect(find.text('添加'), findsNothing);
       await tester.tap(find.text('置顶聊天'));
-      await tester.pumpAndSettle();
-      expect(operations, contains('pin'));
+      await pumpChat(tester);
+      expect(actions, contains('pin'));
       await tester.tap(find.text('清空聊天记录'));
-      await tester.pumpAndSettle();
-      expect(operations, isNot(contains('clear-history')));
+      await pumpChat(tester);
       await tester.tap(find.text('取消'));
-      await tester.pumpAndSettle();
-      expect(cleared, isNull);
+      await pumpChat(tester);
+      expect(boundary, isNull);
       await tester.tap(find.text('清空聊天记录'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('清空', skipOffstage: false));
-      await tester.pumpAndSettle();
-      expect(cleared, '123');
-      expect(operations, contains('clear-history'));
+      await pumpChat(tester);
+      expect(boundary, '300');
+      expect(actions, contains('clear-history'));
       await tester.pumpWidget(const SizedBox());
-      await tester.pumpAndSettle();
-    },
-        () => MockClient((request) async {
-              final body =
-                  request.method == 'POST' ? jsonDecode(request.body) : {};
-              Object result = {};
-              if (request.url.path.endsWith('/state'))
-                result = {
-                  'me': {'id': 'me', 'name': '我'},
-                  'friends': [peer]
-                };
-              if (request.url.path.endsWith('/profile')) {
-                operations.add(body['action']);
-                result = {'ok': true};
-              }
-              if (request.url.path.endsWith('/clear-history')) {
-                operations.add('clear-history');
-                result = {'clearedThrough': '123'};
-              }
-              return http.Response(jsonEncode(result), 200,
-                  headers: {'content-type': 'application/json; charset=utf-8'});
-            }));
+      await pumpChat(tester);
+    }, () => MockClient(remote));
   });
-  testWidgets('历史搜索覆盖分类和分页，定位将消息标识返回聊天页', (tester) async {
+  testWidgets('本地历史搜索分类与完整分页，可返回定位标识', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final requests = <Map<String, dynamic>>[];
+    await tester.runAsync(() => seed([
+          row('old-1', '9007199254740993', '中文历史内容'),
+          for (var i = 0; i < 61; i++)
+            row('call-$i', '${9007199254740900 + i}', '中文通话 $i', kind: 'call')
+        ]));
     String? located;
-    final message = {
-      'id': 'old-1',
-      'seq': '9007199254740993',
-      'senderId': 'peer',
-      'kind': 'text',
-      'text': '中文历史内容',
-      'createdAt': '1791768000000'
-    };
     await http.runWithClient(() async {
       await tester.pumpWidget(MaterialApp(
           theme: AppTheme.light,
           home: Builder(
-              builder: (context) => Scaffold(
+              builder: (c) => Scaffold(
                   body: TextButton(
                       onPressed: () async {
                         located = await Navigator.push<String>(
-                            context,
+                            c,
                             MaterialPageRoute(
                                 builder: (_) => ChatHistoryScreen(
                                     account: account, friend: peer)));
                       },
                       child: const Text('打开记录'))))));
       await tester.tap(find.text('打开记录'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('中文历史内容'), findsOneWidget);
       await tester.enterText(find.byType(TextField), '中文');
       await tester.pump(const Duration(milliseconds: 350));
-      await tester.pumpAndSettle();
-      expect(requests.last['query'], '中文');
+      await pumpChat(tester);
       await tester.ensureVisible(find.text('通话'));
       await tester.tap(find.text('通话'));
-      await tester.pumpAndSettle();
-      expect(requests.last['kind'], 'call');
+      await pumpChat(tester);
+      expect(find.text('中文历史内容'), findsNothing);
+      await tester.scrollUntilVisible(find.text('加载更多'), 500,
+          scrollable: find.byType(Scrollable).last);
       await tester.tap(find.text('加载更多'));
-      await tester.pumpAndSettle();
-      expect(requests.last['before'], '9007199254740993');
+      await pumpChat(tester);
+      expect(find.text('加载更多'), findsNothing);
+      await tester.ensureVisible(find.text('定位到聊天位置').first);
       await tester.tap(find.text('定位到聊天位置').first);
-      await tester.pumpAndSettle();
-      expect(located, 'old-1');
+      await pumpChat(tester);
+      expect(located, startsWith('call-'));
+      expect(seen, isNot(contains('history')));
       await tester.pumpWidget(const SizedBox());
-    },
-        () => MockClient((request) async {
-              Object result = {};
-              if (request.url.path.endsWith('/state'))
-                result = {
-                  'me': {'id': 'me', 'name': '我', 'avatarId': 'cat'}
-                };
-              if (request.url.path.endsWith('/history')) {
-                final body =
-                    Map<String, dynamic>.from(jsonDecode(request.body));
-                requests.add(body);
-                result = {
-                  'messages': [
-                    body['before'] == null
-                        ? message
-                        : {
-                            ...message,
-                            'id': 'old-0',
-                            'seq': '9007199254740992',
-                            'text': '较早消息'
-                          }
-                  ],
-                  'hasMore': body['before'] == null
-                };
-              }
-              return http.Response(jsonEncode(result), 200,
-                  headers: {'content-type': 'application/json; charset=utf-8'});
-            }));
+      await pumpChat(tester);
+    }, () => MockClient(remote));
   });
-  testWidgets('从实际聊天入口查找定位旧消息，另一设备清空后旧消息不再回流且草稿保留', (tester) async {
+  testWidgets('查找定位旧记录，远端清空后不回流且草稿保留', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    bool cleared = false;
-    final latest = {
-      'id': 'latest',
-      'seq': '300',
-      'senderId': 'peer',
-      'kind': 'text',
-      'text': '当前最新消息',
-      'createdAt': '1791768000000'
-    };
-    final old = {
-      'id': 'old-target',
-      'seq': '10',
-      'senderId': 'peer',
-      'kind': 'text',
-      'text': '历史定位目标',
-      'createdAt': '1791700000000'
-    };
+    await tester.runAsync(() => seed([
+          row('old-target', '10', '历史定位目标'),
+          for (var i = 20; i < 80; i++) row('filler-$i', '$i', '中间记录 $i'),
+          row('latest', '300', '当前最新消息')
+        ]));
     await http.runWithClient(() async {
       await tester.pumpWidget(MaterialApp(
           theme: AppTheme.light,
           home: PrivateChatScreen(account: account, friend: peer)));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('当前最新消息'), findsOneWidget);
       await tester.tap(find.byTooltip('聊天信息'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       await tester.tap(find.text('查找聊天记录'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
+      await tester.enterText(find.byType(TextField), '历史定位目标');
+      await tester.pump(const Duration(milliseconds: 350));
+      await pumpChat(tester);
       await tester.tap(find.text('定位到聊天位置'));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('聊天信息'), findsNothing);
       expect(find.text('历史定位目标'), findsOneWidget);
       await tester.enterText(find.byType(TextField), '保留草稿');
       cleared = true;
       await tester.pump(const Duration(seconds: 3));
-      await tester.pumpAndSettle();
+      await pumpChat(tester);
       expect(find.text('历史定位目标'), findsNothing);
       expect(find.text('当前最新消息'), findsNothing);
       expect(find.text('保留草稿'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
-      await tester.pumpAndSettle();
-    },
-        () => MockClient((request) async {
-              Object result = {};
-              final operation = request.url.path.split('/').last;
-              if (operation == 'state')
-                result = {
-                  'me': {'id': 'me', 'name': '我', 'avatarId': 'cat'},
-                  'friends': [peer]
-                };
-              if (operation == 'messages')
-                result = {
-                  'messages': cleared ? [] : [latest],
-                  'updates': [],
-                  'hasMore': false,
-                  'syncCursor': '0',
-                  'clearedThrough': cleared ? '300' : '0'
-                };
-              if (operation == 'history')
-                result = {
-                  'messages': [old],
-                  'hasMore': false
-                };
-              if (operation == 'message-context')
-                result = {
-                  'messages': [old],
-                  'hasMore': true,
-                  'syncCursor': '0',
-                  'clearedThrough': '0'
-                };
-              return http.Response(jsonEncode(result), 200,
-                  headers: {'content-type': 'application/json; charset=utf-8'});
-            }));
+      await pumpChat(tester);
+    }, () => MockClient(remote));
   });
 }

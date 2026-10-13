@@ -82,6 +82,7 @@ export async function callOperation(operation,user,body) {
  const client=clientId(body),db=await getPool().connect(),now=Date.now();
  try {
   await db.query('BEGIN');
+  await db.query('SELECT pg_advisory_xact_lock(72831013001)');
   // Two crossing calls and multiple answering devices must be decided atomically.
   await db.query("SELECT pg_advisory_xact_lock(hashtextextended('remotescreen:friend-calls',0))");
   await sweep(db,now);
