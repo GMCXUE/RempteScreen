@@ -8,6 +8,7 @@ import 'package:crypto/crypto.dart' as hashes;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'config.dart';
+import 'update_history.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 const _native = MethodChannel('remotescreen/native');
@@ -17,7 +18,8 @@ Future<Map<String, dynamic>> verifyHotUpdateEnvelope(
     Map<String, dynamic> envelope,
     Map<String, dynamic> key,
     Map<String, dynamic> info) async {
-  final payload = await verifyUpdateEnvelope(envelope, key, info);
+  final payload =
+      await verifyUpdateEnvelope(envelope, key, info, kind: 'hot-update');
   if (payload['kind'] != 'hot-update' ||
       payload['target']['nativeBuild'] != info['buildCode']) {
     throw const FormatException('更新信息与当前版本不兼容');
@@ -37,7 +39,7 @@ Future<Map<String, dynamic>> verifyHotUpdateEnvelope(
 /// Verify before trusting either the release, download location or forced-update flag.
 Future<Map<String, dynamic>> verifyUpdateEnvelope(Map<String, dynamic> envelope,
     Map<String, dynamic> key, Map<String, dynamic> info,
-    {bool cached = false}) async {
+    {bool cached = false, String? kind}) async {
   if (envelope['algorithm'] != 'ed25519' || envelope['keyId'] != key['keyId']) {
     throw const FormatException('更新信息签名无效');
   }
@@ -48,6 +50,11 @@ Future<Map<String, dynamic>> verifyUpdateEnvelope(Map<String, dynamic> envelope,
               type: KeyPairType.ed25519)));
   if (!valid) throw const FormatException('更新信息签名无效');
   final payload = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+  if (kind == null
+      ? payload.containsKey('kind') || !payload.containsKey('release')
+      : payload['kind'] != kind) {
+    throw const FormatException('更新信息类型无效');
+  }
   final target = payload['target'] as Map<String, dynamic>;
   final now = DateTime.now().millisecondsSinceEpoch;
   if (payload['schema'] != 1 ||
@@ -80,6 +87,46 @@ Future<Map<String, dynamic>> verifyUpdateEnvelope(Map<String, dynamic> envelope,
     }
   }
   return payload;
+}
+
+Future<Map<String, dynamic>> verifyUpdateHistoryEnvelope(
+    Map<String, dynamic> envelope,
+    Map<String, dynamic> key,
+    Map<String, dynamic> info,
+    {int? before}) async {
+  final value =
+      await verifyUpdateEnvelope(envelope, key, info, kind: 'update-history');
+  final items = value['items'];
+  const invalid = FormatException('更新历史信息无效');
+  if (value['kind'] != 'update-history' ||
+      items is! List ||
+      items.length > 20) {
+    throw invalid;
+  }
+  var previous = before ?? 2147483648;
+  for (final item in items) {
+    if (item is! Map ||
+        item['buildCode'] is! int ||
+        item['buildCode'] <= 0 ||
+        item['buildCode'] >= previous ||
+        item['buildCode'] > 2147483647 ||
+        item['versionName'] is! String ||
+        item['versionName'].isEmpty ||
+        item['versionName'].length > 64 ||
+        item['notes'] is! String ||
+        item['notes'].length > 12000 ||
+        item['publishedAt'] is! int ||
+        item['publishedAt'] <= 0 ||
+        item['publishedAt'] > DateTime.now().millisecondsSinceEpoch + 60000) {
+      throw invalid;
+    }
+    previous = item['buildCode'] as int;
+  }
+  if (value['next'] != null &&
+      (value['next'] is! int || items.isEmpty || value['next'] != previous)) {
+    throw invalid;
+  }
+  return value;
 }
 
 class AppUpdates extends ChangeNotifier {
@@ -241,6 +288,31 @@ class AppUpdates extends ChangeNotifier {
       downloading = false;
       notifyListeners();
     }
+  }
+
+  // Independent from checking/downloading: browsing notes cannot change update state.
+  Future<Map<String, dynamic>> history(int? before) async {
+    if (info.isEmpty || _key.isEmpty) throw StateError('更新信息尚未就绪');
+    final uri =
+        Uri.parse('$kServerUrl/v1/updates/history').replace(queryParameters: {
+      'platform': info['platform'],
+      'arch': info['arch'],
+      'channel': 'stable',
+      if (before != null) 'beforeBuild': '$before',
+    });
+    final response = await _metadataClient
+        .send(http.Request('GET', uri)..followRedirects = false)
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) throw const HttpException('读取更新历史失败');
+    final data = <int>[];
+    await for (final chunk
+        in response.stream.timeout(const Duration(seconds: 10))) {
+      data.addAll(chunk);
+      if (data.length > 2000000) throw const FormatException('更新历史信息过大');
+    }
+    return verifyUpdateHistoryEnvelope(
+        jsonDecode(utf8.decode(data)) as Map<String, dynamic>, _key, info,
+        before: before);
   }
 
   Future<void> check({bool manual = false}) async {
@@ -423,9 +495,11 @@ class AppUpdateHost extends StatefulWidget {
   const AppUpdateHost(
       {required this.child,
       this.controller,
+      this.navigatorKey,
       this.initialize = true,
       super.key});
   final AppUpdates? controller;
+  final GlobalKey<NavigatorState>? navigatorKey;
   final bool initialize;
   final Widget child;
   @override
@@ -436,6 +510,7 @@ class _AppUpdateHostState extends State<AppUpdateHost>
     with WidgetsBindingObserver {
   AppUpdates get updates => widget.controller ?? appUpdates;
   bool _away = false;
+  bool _history = false;
   @override
   void initState() {
     super.initState();
@@ -446,6 +521,21 @@ class _AppUpdateHostState extends State<AppUpdateHost>
 
   void _changed() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _openHistory() async {
+    final navigator =
+        widget.navigatorKey?.currentState ?? Navigator.maybeOf(context);
+    if (navigator == null || _history) return;
+    setState(() => _history = true);
+    try {
+      await navigator.push(MaterialPageRoute<void>(
+          builder: (_) => UpdateHistoryPage(
+              load: updates.history,
+              currentBuild: updates.info['buildCode'] as int?)));
+    } finally {
+      if (mounted) setState(() => _history = false);
+    }
   }
 
   @override
@@ -473,9 +563,10 @@ class _AppUpdateHostState extends State<AppUpdateHost>
     return Stack(children: [
       // A known mandatory update owns navigation and focus until replaced or withdrawn.
       ExcludeFocus(
-          excluding: u.visible,
-          child: IgnorePointer(ignoring: u.visible, child: widget.child)),
-      if (u.visible)
+          excluding: u.visible && !_history,
+          child: IgnorePointer(
+              ignoring: u.visible && !_history, child: widget.child)),
+      if (u.visible && !_history)
         Positioned.fill(
             child: Material(
                 color: Colors.black54,
@@ -578,6 +669,9 @@ class _AppUpdateHostState extends State<AppUpdateHost>
                                                     child: Text(u.checking
                                                         ? '正在检查…'
                                                         : '重新检查更新')),
+                                              TextButton(
+                                                  onPressed: _openHistory,
+                                                  child: const Text('更新历史')),
                                               if (!u.forced)
                                                 TextButton(
                                                     onPressed: u.downloading ||

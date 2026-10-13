@@ -41,6 +41,7 @@ const routes = [
   ['GET','/v1/admin/hot-releases',hotUpdates.list],
   ['DELETE','/v1/admin/hot-releases/:releaseId',hotUpdates.withdraw],
   ['GET','/v1/updates/check',updates.checkUpdate],
+  ['GET','/v1/updates/history',updates.updateHistory],
   ['GET','/v1/updates/packages/:releaseId',updates.downloadUpdatePackage],
   ['HEAD','/v1/updates/packages/:releaseId',updates.downloadUpdatePackage],
   ['PUT','/v1/admin/update-packages/:sha256',updates.uploadUpdatePackage],

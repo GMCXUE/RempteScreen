@@ -1,4 +1,5 @@
 import 'app_updates.dart';
+import 'update_history.dart';
 import 'chat_archive_screen.dart';
 import 'account_feedback.dart';
 import 'dart:async';
@@ -1200,6 +1201,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       'RemoteScreen ${appUpdates.info['versionName'] ?? '0.2.0'}'),
                   trailing: const Icon(Icons.chevron_right, size: 20),
                   onTap: () => appUpdates.check(manual: true))),
+          Card(
+              child: ListTile(
+            leading: const Icon(Icons.history_rounded),
+            title: const Text('更新历史'),
+            subtitle: const Text('查看历次版本的更新内容'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => UpdateHistoryPage(
+                        load: appUpdates.history,
+                        currentBuild: appUpdates.info['buildCode'] as int?))),
+          )),
           const SizedBox(height: 18),
           Card(
               child: ListTile(

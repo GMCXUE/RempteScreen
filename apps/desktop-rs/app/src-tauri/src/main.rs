@@ -2017,7 +2017,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             chat_history_window::open_chat_history, chat_history_window::close_chat_history, chat_history_window::get_chat_history_context, chat_history_window::chat_history_api, chat_history_window::locate_chat_message,
             chat_image_window::open_chat_image, chat_image_window::close_chat_image, chat_image_window::get_chat_image, chat_image_window::copy_viewed_chat_image,
-            updates::update_info, updates::update_check, updates::update_download, updates::update_install,
+            updates::update_info, updates::update_history, updates::update_check, updates::update_download, updates::update_install,
             hot_updates::hot_update_ready, hot_updates::hot_update_check, hot_updates::hot_update_stage, hot_updates::hot_update_restart,
             friend_call_window::set_friend_call_window_state,
             friend_call_window::close_friend_call_window,

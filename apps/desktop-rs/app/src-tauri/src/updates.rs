@@ -23,7 +23,15 @@ fn directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 fn agent() -> ureq::Agent { ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(30)).redirects(0).build() }
 fn bytes64(value: &Value, field: &str) -> Result<Vec<u8>, String> { STANDARD.decode(value[field].as_str().ok_or("更新签名无效")?).map_err(err) }
-fn validate(envelope: &Value, cached: bool) -> Result<Value, String> { validate_with_key(envelope,cached,&public_key()) }
+fn validate_full_payload(value: &Value) -> Result<(), String> {
+    if value.get("kind").is_some() || value.get("release").is_none() { return Err("更新信息类型无效".into()); }
+    Ok(())
+}
+fn validate(envelope: &Value, cached: bool) -> Result<Value, String> {
+    let value = validate_with_key(envelope,cached,&public_key())?;
+    validate_full_payload(&value)?;
+    Ok(value)
+}
 fn validate_with_key(envelope: &Value, cached: bool, key: &Value) -> Result<Value, String> {
     if envelope["algorithm"] != "ed25519" || envelope["keyId"] != key["keyId"] { return Err("更新签名无效".into()); }
     let payload = bytes64(envelope, "payload")?;
@@ -79,6 +87,39 @@ pub async fn update_check(app: tauri::AppHandle) -> Result<Value,String> {
         if current.as_ref().map(|r| &r["sha256"]) != Some(&release["sha256"]) { *state.prepared.lock().unwrap()=None; }
         *current=if release.is_null(){None}else{Some(release.clone())};
         Ok(json!({"release":release,"error":error}))
+    }).await.map_err(err)?
+}
+// History is read-only and never changes a prepared installer or mandatory gate.
+fn validate_history(value: &Value, before: Option<u64>) -> Result<(), String> {
+    let invalid = || "更新历史信息无效".to_string();
+    if value["kind"] != "update-history" { return Err(invalid()); }
+    let items = value["items"].as_array().filter(|a| a.len() <= 20).ok_or_else(invalid)?;
+    let mut previous = before.unwrap_or(2147483648);
+    for item in items {
+        let build = item["buildCode"].as_u64().filter(|n| *n > 0 && *n < previous && *n <= 2147483647).ok_or_else(invalid)?;
+        if item["versionName"].as_str().filter(|v| !v.is_empty() && v.len() <= 64).is_none() ||
+           item["notes"].as_str().filter(|v| v.chars().count() <= 12000).is_none() ||
+           item["publishedAt"].as_u64().filter(|v| *v > 0 && *v <= now()+60000).is_none() { return Err(invalid()); }
+        previous = build;
+    }
+    if !value["next"].is_null() && (items.is_empty() || value["next"].as_u64() != Some(previous)) { return Err(invalid()); }
+    Ok(())
+}
+#[tauri::command]
+pub async fn update_history(before_build: Option<u64>) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if before_build.is_some_and(|n| n == 0 || n > 2147483647) { return Err("分页参数无效".into()); }
+        let mut request = agent().get(&format!("{}/v1/updates/history", super::api::SERVER_URL))
+            .query("platform", platform()).query("arch", arch()).query("channel", version()["channel"].as_str().unwrap());
+        if let Some(before) = before_build { request = request.query("beforeBuild", &before.to_string()); }
+        let response = request.call().map_err(err)?;
+        let mut bytes = Vec::new();
+        response.into_reader().take(2_000_001).read_to_end(&mut bytes).map_err(err)?;
+        if bytes.len() > 2_000_000 { return Err("更新历史信息过大".into()); }
+        let envelope: Value = serde_json::from_slice(&bytes).map_err(err)?;
+        let payload = validate_with_key(&envelope, false, &public_key())?;
+        validate_history(&payload, before_build)?;
+        Ok(payload)
     }).await.map_err(err)?
 }
 fn verify_file(path: &Path, release: &Value) -> Result<(),String> {
@@ -179,6 +220,16 @@ mod tests {
                 "sizeBytes":3,"sha256":format!("{:x}",Sha256::digest(b"abc")),"notes":"修复通话","forceUpdate":true}});
         let bytes=serde_json::to_vec(&payload).unwrap();
         (json!({"algorithm":"ed25519","keyId":"test","payload":STANDARD.encode(&bytes),"signature":STANDARD.encode(pair.sign(&bytes).as_ref())}),key)
+    }
+    #[test]
+    fn history_rejects_wrong_kind_repeated_pages_and_invalid_cursor() {
+        let mut value=json!({"kind":"update-history","items":[{"buildCode":5,"versionName":"0.2.1","notes":"历史说明","publishedAt":now()}],"next":5});
+        assert!(validate_history(&value,None).is_ok());
+        assert!(validate_full_payload(&value).is_err());
+        assert!(validate_full_payload(&json!({"release":null})).is_ok());
+        assert!(validate_history(&value,Some(5)).is_err());
+        value["next"]=json!(6);assert!(validate_history(&value,None).is_err());
+        value["next"]=Value::Null;value["kind"]=json!("update");assert!(validate_history(&value,None).is_err());
     }
     #[test]
     fn signatures_and_expiry_gate_updates() {

@@ -74,6 +74,49 @@ void main() {
       'publicKey': base64Encode((await pair.extractPublicKey()).bytes)
     };
   });
+  test('history verifies signatures, target, expiry, ordering and cursor',
+      () async {
+    final history = {
+      ...payload(),
+      'release': null,
+      'kind': 'update-history',
+      'items': [
+        {
+          'buildCode': 5,
+          'versionName': '0.2.1',
+          'notes': '历史说明',
+          'publishedAt': DateTime.now().millisecondsSinceEpoch
+        }
+      ],
+      'next': 5
+    };
+    final envelope = await signed(history);
+    expect((await verifyUpdateHistoryEnvelope(envelope, key, info))['next'], 5);
+    await expectLater(
+        verifyUpdateEnvelope(envelope, key, info), throwsFormatException);
+    await expectLater(
+        verifyUpdateHistoryEnvelope(envelope, key, info, before: 5),
+        throwsFormatException);
+    await expectLater(
+        verifyUpdateHistoryEnvelope(
+            envelope, key, {...info, 'platform': 'macos'}),
+        throwsFormatException);
+    for (final change in [
+      {'kind': 'update'},
+      {'next': 6},
+      {'expiresAt': 1},
+      {'items': []}
+    ]) {
+      await expectLater(
+          verifyUpdateHistoryEnvelope(
+              await signed({...history, ...change}), key, info),
+          throwsFormatException);
+    }
+    envelope['payload'] =
+        base64Encode(utf8.encode(jsonEncode({...history, 'next': null})));
+    await expectLater(verifyUpdateHistoryEnvelope(envelope, key, info),
+        throwsFormatException);
+  });
   test('signed metadata rejects tampering and wrong platform', () async {
     final envelope = await signed(payload());
     expect(
@@ -276,9 +319,14 @@ void main() {
       ..release = release
       ..visible = true;
     var taps = 0;
+    final navigator = GlobalKey<NavigatorState>();
     await tester.pumpWidget(MaterialApp(
+        navigatorKey: navigator,
         builder: (context, child) => AppUpdateHost(
-            controller: controller, initialize: false, child: child!),
+            controller: controller,
+            navigatorKey: navigator,
+            initialize: false,
+            child: child!),
         home: Scaffold(
             body: TextButton(
                 onPressed: () => taps++, child: const Text('后台操作')))));
@@ -290,6 +338,15 @@ void main() {
     await tester.tapAt(const Offset(2, 2));
     await tester.pump();
     expect(controller.visible, true);
+    expect(taps, 0);
+    await tester.tap(find.text('更新历史'));
+    await tester.pumpAndSettle();
+    expect(find.text('更新历史'), findsOneWidget);
+    expect(find.text('发现新版本 0.2.0'), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('发现新版本 0.2.0'), findsOneWidget);
+    expect(controller.forced, true);
     expect(taps, 0);
     controller.error = '安装已取消';
     controller.notifyListeners();

@@ -53,6 +53,16 @@ export async function checkUpdate({query:params}) {
  const payload=Buffer.from(JSON.stringify({schema:1,target:selection,checkedAt:Date.now(),expiresAt:Date.now()+15*60*1000,release}));
  return ok({algorithm:'ed25519',keyId:createHash('sha256').update(publicKey).digest('hex').slice(0,16),payload:payload.toString('base64'),signature:sign(null,payload,signing).toString('base64')});
 }
+// Public release notes contain no draft records, package credentials or admin fields.
+export async function updateHistory({query:params}) {
+ const selection=target(Object.fromEntries(params));
+ const before=params.get('beforeBuild'),limit=Number(params.get('limit')??20);
+ if((before!==null&&!/^\d+$/.test(before))||!Number.isInteger(limit)||limit<1||limit>20)fail(400,'分页参数无效');
+ const cursor=before===null?2147483648:code(Number(before)),now=Date.now();
+ const rows=await query(`SELECT version_name,build_code,notes,published_at FROM app_releases WHERE platform=$1 AND arch=$2 AND channel=$3 AND status='published' AND published_at<=$4 AND build_code<$5 ORDER BY build_code DESC LIMIT $6`,[selection.platform,selection.arch,selection.channel,now,cursor,limit+1]);
+ const items=rows.slice(0,limit).map(r=>({versionName:r.version_name,buildCode:Number(r.build_code),notes:r.notes,publishedAt:Number(r.published_at)}));
+ return ok(await signUpdatePayload({schema:1,kind:'update-history',target:selection,checkedAt:now,expiresAt:now+15*60*1000,items,next:rows.length>limit?items.at(-1).buildCode:null}));
+}
 export async function uploadUpdatePackage({request,params,query:values}) {
  await requireUpdateAdmin(request);
  const sha=params.sha256;if(!/^[a-f0-9]{64}$/.test(sha??''))fail(400,'安装包校验值无效');

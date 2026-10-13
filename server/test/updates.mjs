@@ -45,6 +45,17 @@ try {
  const offer=await check();assert.equal(offer.release.id,latest.id);assert.equal(offer.release.forceUpdate,true);assert.equal(offer.release.notes,'修复通话\n优化更新提示');
  assert.equal((await check(2)).release.forceUpdate,false);assert.equal((await check(3)).release,null);
  const draft=await create(4,false,'draft');assert.equal((await check()).release.id,latest.id);
+ const history=async(extra='')=>{
+  const r=await call('/v1/updates/history?platform=android&arch=arm64&channel=stable'+extra,'GET',null,false);
+  assert.equal(r.status,200);assert.ok(verify(null,Buffer.from(r.body.payload,'base64'),publicKey,Buffer.from(r.body.signature,'base64')));
+  const p=JSON.parse(Buffer.from(r.body.payload,'base64'));assert.equal(p.kind,'update-history');return p;
+ };
+ const firstHistory=await history('&limit=1');assert.deepEqual(firstHistory.items.map(r=>r.buildCode),[3]);assert.equal(firstHistory.next,3);
+ assert.deepEqual(Object.keys(firstHistory.items[0]).sort(),['buildCode','notes','publishedAt','versionName']);
+ const olderHistory=await history('&limit=1&beforeBuild=3');assert.deepEqual(olderHistory.items.map(r=>r.buildCode),[2]);assert.equal(olderHistory.next,null);
+ assert.equal((await history('&beforeBuild=2')).items.length,0);
+ for(const invalid of ['&beforeBuild=abc','&beforeBuild=-1','&limit=21','&limit=1.5'])assert.equal((await call('/v1/updates/history?platform=android&arch=arm64'+invalid,'GET',null,false)).status,400);
+ const macHistory=await call('/v1/updates/history?platform=macos&arch=arm64','GET',null,false);assert.deepEqual(JSON.parse(Buffer.from(macHistory.body.payload,'base64')).items,[]);
  const full=await fetch(base+offer.release.downloadPath);assert.deepEqual(Buffer.from(await full.arrayBuffer()),bytes);
  const head=await fetch(base+offer.release.downloadPath,{method:'HEAD'});assert.equal(Number(head.headers.get('content-length')),bytes.length);assert.equal((await head.text()),'');
  const range=await fetch(base+offer.release.downloadPath,{headers:{Range:'bytes=10-19'}});assert.equal(range.status,206);assert.deepEqual(Buffer.from(await range.arrayBuffer()),bytes.subarray(10,20));
@@ -54,6 +65,8 @@ try {
  assert.equal((await check()).release.forceUpdate,false);
  assert.equal((await call('/v1/admin/releases/'+draft.id,'PATCH',{status:'published',notes:'上线新的更新'})).status,200);
  assert.equal((await check()).release.id,draft.id);
+ assert.deepEqual((await history()).items.map(r=>r.buildCode),[4,3]);
+ assert.equal((await history()).items[0].notes,'上线新的更新');
  const list=await call('/v1/admin/releases?limit=2');assert.equal(list.body.releases.length,2);assert.ok(list.body.next);
  const next=await call('/v1/admin/releases?'+new URLSearchParams({...list.body.next,limit:2}));assert.equal(next.body.releases.length,1);
  assert.equal((await call('/v1/admin/releases?limit=1.5')).status,400);
@@ -84,7 +97,8 @@ try {
  assert.equal((await call('/v1/admin/releases/'+forced.id)).body.release.status,'withdrawn');
  assert.equal((await checkHot('android')).patch.resource.patchNumber,2);
  assert.ok((await call('/v1/admin/hot-releases')).body.releases.find(r=>r.id===hot.body.id&&r.status==='withdrawn'));
- console.log('Update HTTP integration PASS: auth, signed metadata, persisted releases, mandatory upgrade chain, withdraw, upload hash, range and pagination');
+ assert.deepEqual((await history()).items.map(r=>r.buildCode),[4,3]);
+ console.log('Update HTTP integration PASS: public signed history, target isolation, pagination, draft/withdrawal exclusion, auth, signed metadata, persisted releases, mandatory upgrade chain, withdraw, upload hash, range and pagination');
 } finally {
  if(child&&child.exitCode===null){child.kill('SIGTERM');await new Promise(r=>{child.once('exit',r);setTimeout(r,4000).unref();});}
  if(created)await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);await admin.end();await rm(dir,{recursive:true,force:true});

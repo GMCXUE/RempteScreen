@@ -1,10 +1,10 @@
 {
-  "versionName": "0.2.12",
-  "buildCode": 2026101307,
+  "versionName": "0.2.13",
+  "buildCode": 2026101308,
   "channel": "stable",
   "android": {
-    "versionName": "0.2.18",
-    "buildCode": 2026101307,
+    "versionName": "0.2.19",
+    "buildCode": 2026101308,
     "channel": "stable"
   }
 }

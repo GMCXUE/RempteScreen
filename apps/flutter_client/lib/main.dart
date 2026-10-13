@@ -111,8 +111,9 @@ class RemoteScreenApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       navigatorKey: appNavigatorKey,
-      builder: (context, child) =>
-          AppUpdateHost(child: FriendCallOverlay(child: child!)),
+      builder: (context, child) => AppUpdateHost(
+          navigatorKey: appNavigatorKey,
+          child: FriendCallOverlay(child: child!)),
       home: const BootGate(),
     );
   }

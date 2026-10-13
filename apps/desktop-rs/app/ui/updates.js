@@ -4,7 +4,7 @@
   const dialog = document.createElement('dialog');
   dialog.className = 'app-update-dialog';
   dialog.setAttribute('aria-labelledby', 'app-update-title');
-  dialog.innerHTML = `<div class="app-update-mark" aria-hidden="true">↑</div><h2 id="app-update-title" class="app-update-title">检查更新</h2><p class="app-update-required"></p><div class="app-update-notes"></div><progress max="1" value="0" hidden></progress><p class="app-update-notice" role="status"></p><p class="app-update-error" role="alert"></p><div class="app-update-actions"><button class="app-update-later ghost">稍后</button><button class="app-update-retry ghost">重新检查更新</button><button class="app-update-primary">下载更新</button></div>`;
+  dialog.innerHTML = `<div class="app-update-mark" aria-hidden="true">↑</div><h2 id="app-update-title" class="app-update-title">检查更新</h2><p class="app-update-required"></p><div class="app-update-notes"></div><progress max="1" value="0" hidden></progress><p class="app-update-notice" role="status"></p><p class="app-update-error" role="alert"></p><div class="app-update-actions"><button class="app-update-history ghost">更新历史</button><button class="app-update-later ghost">稍后</button><button class="app-update-retry ghost">重新检查更新</button><button class="app-update-primary">下载更新</button></div>`;
   document.body.append(dialog);
   const el = name => dialog.querySelector('.app-update-' + name);
   let initializing = true;
@@ -63,6 +63,46 @@
   window.__TAURI__.event.listen('app-update:progress', event => { progress = event.payload; render(); });
   document.getElementById('settings-check-update').onclick = () => check(true);
   invoke('update_info').then(info => {document.getElementById('settings-version').textContent = info.versionName;}).catch(() => {});
+  let historyDialog;
+  async function showHistory() {
+    if (historyDialog?.open) return;
+    const h = document.createElement('dialog');
+    historyDialog = h; h.className = 'app-update-dialog update-history-dialog';
+    h.setAttribute('aria-labelledby', 'update-history-title');
+    h.innerHTML = `<header><h2 id="update-history-title">更新历史</h2><button class="history-close ghost" aria-label="关闭更新历史">关闭</button></header><p class="app-update-notice">当前平台的完整版本更新记录</p><div class="history-list"></div><p class="history-status" role="status"></p><button class="history-more ghost" hidden>加载更多</button>`;
+    document.body.append(h);
+    h.querySelector('.history-close').onclick = () => h.close();
+    h.addEventListener('close', () => {h.remove(); if (historyDialog === h) historyDialog = null;});
+    const list = h.querySelector('.history-list'), status = h.querySelector('.history-status'), more = h.querySelector('.history-more');
+    let next = null, loaded = false, loading = false;
+    h.showModal();
+    async function load() {
+      if (loading) return;
+      loading = true; more.disabled = true; status.textContent = '正在加载…';
+      try {
+        const [page, info] = await Promise.all([invoke('update_history', {beforeBuild: next}), invoke('update_info')]);
+        if (!h.isConnected) return;
+        for (const item of page.items) {
+          const card = document.createElement('article'), title = document.createElement('h3'), date = document.createElement('time'), notes = document.createElement('p');
+          card.className = 'history-release'; title.textContent = `版本 ${item.versionName}`;
+          if (item.buildCode === info.buildCode) {const badge = document.createElement('span'); badge.className = 'history-current'; badge.textContent = '当前版本'; title.append(badge);}
+          const published = new Date(item.publishedAt);
+          date.dateTime = published.toISOString(); date.textContent = published.toLocaleString('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false});
+          notes.textContent = item.notes; card.append(title, date, notes); list.append(card);
+        }
+        loaded = true; next = page.next; more.hidden = next === null; more.textContent = '加载更多';
+        status.textContent = !list.children.length ? '暂无更新历史' : next === null ? '已显示全部更新记录' : '';
+      } catch (_) {
+        if (!h.isConnected) return;
+        status.textContent = '暂时无法加载更新历史，请检查网络后重试'; more.hidden = false; more.textContent = '重试';
+      } finally {loading = false; more.disabled = false;}
+    }
+    more.onclick = () => {if (!loaded) next = null; load();};
+    load();
+  }
+  el('history').onclick = showHistory;
+  const historyEntry = document.getElementById('settings-update-history');
+  if (historyEntry) historyEntry.onclick = showHistory;
   // Debounce brief focus changes (menus, permission panels). Each genuine return checks once.
   let focusTimer;
   window.addEventListener('blur', () => { clearTimeout(focusTimer); focusTimer = setTimeout(() => {away = true;}, 700); });

@@ -954,3 +954,13 @@ body:has(.content.social-content #social-compose:not(.hidden)) .friend-call-bar 
 
 .devices-page-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .devices-page-heading .page-title { margin: 0; }
+
+/* Release notes share the verified updater, but have independent navigation. */
+.update-history-dialog { width:min(620px,calc(100vw - 48px)); }
+.update-history-dialog header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.update-history-dialog header h2 { margin:0; }
+.history-release { border-top:1px solid #e3e8f2; padding:20px 0 8px; }
+.history-release h3 { margin:0 0 8px; font-size:17px; display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.history-release time,.history-status { color:#69758a; font-size:13px; }
+.history-release p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; }
+.history-current { color:#3478f6; background:#edf3ff; border-radius:8px; padding:3px 8px; font-size:12px; font-weight:500; }
