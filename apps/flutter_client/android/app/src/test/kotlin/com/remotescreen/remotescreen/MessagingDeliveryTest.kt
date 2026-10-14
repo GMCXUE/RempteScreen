@@ -86,6 +86,36 @@ class MessagingDeliveryTest {
         messages(2);poll()
         assertTrue(notices.isEmpty());assertNull(MessagingService.takeNotice())
     }
+    @Test fun pausingBeforeBannerFrameRetriesAsSystemNotificationEvenWhenAnotherDeviceReadIt() {
+        MainActivity.messagingForeground=true
+        messages(1);poll()
+        val notice=MessagingService.takeNotice()!!
+        assertFalse(prefs.contains("seen:account:peer"))
+        MainActivity.messagingForeground=false
+        MessagingService.noticeShown(service,"account","peer",notice.getValue("seq").toLong())
+        assertFalse(prefs.contains("seen:account:peer"))
+        state.getJSONArray("friends").getJSONObject(0).put("unread",0)
+        poll();assertEquals(1,notices.size);assertEquals(1L,prefs.getLong("seen:account:peer",0))
+        poll();assertEquals(1,notices.size)
+    }
+    @Test fun displayedBannerIsAcknowledgedWithoutDuplicateBackgroundNotification() {
+        MainActivity.messagingForeground=true
+        messages(1);poll();MessagingService.takeNotice()
+        MessagingService.noticeShown(service,"wrong-account","peer",1)
+        assertFalse(prefs.contains("seen:account:peer"))
+        MessagingService.noticeShown(service,"account","peer",1)
+        assertEquals(1L,prefs.getLong("seen:account:peer",0))
+        MainActivity.messagingForeground=false;poll();assertTrue(notices.isEmpty())
+    }
+    @Test fun oldBannerAcknowledgementCannotConsumeNewerPendingMessage() {
+        MainActivity.messagingForeground=true
+        messages(1);poll();MessagingService.takeNotice()
+        messages(1,2);poll();MessagingService.takeNotice()
+        MessagingService.noticeShown(service,"account","peer",1)
+        assertEquals(2L,prefs.getLong("pending:account:peer",0))
+        MainActivity.messagingForeground=false;poll()
+        assertEquals(listOf(2L),notices.map {it.notification.extras.getLong(ChatNotifications.SEQUENCE)})
+    }
     @Test fun disabledOrMutedChatStillAdvancesDeliveryWithoutCreatingUnreadSideEffects() {
         messages(1);poll();assertEquals(1,notices.size)
         MessagingService.settings(service,"{\"messageEnabled\":false}")

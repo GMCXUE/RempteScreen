@@ -7,7 +7,8 @@ import 'app_motion.dart';
 import 'app_theme.dart';
 
 class MessageNotice {
-  MessageNotice.fromMap(Map<String, dynamic> value, this.onReply)
+  MessageNotice.fromMap(Map<String, dynamic> value, this.onReply,
+      {this.onShown})
       : accountId = value['accountId'] as String,
         peerId = value['peerId'] as String,
         preview = value['preview'] != false && value['preview'] != 'false',
@@ -23,6 +24,7 @@ class MessageNotice {
   final bool preview;
   final int? receivedAt, sentAt;
   final VoidCallback onReply;
+  final VoidCallback? onShown;
   String get title => preview ? name : 'RemoteScreen';
   String get summary => preview ? '私信了你：$message' : '收到新消息';
 }
@@ -98,6 +100,8 @@ class MessageBannerHost extends StatefulWidget {
 class _MessageBannerHostState extends State<MessageBannerHost>
     with WidgetsBindingObserver {
   Timer? _timer;
+  Timer? _shownTimer;
+  MessageNotice? _scheduledNotice;
   MessageBannerController get controller => widget.controller ?? messageBanners;
 
   @override
@@ -138,6 +142,7 @@ class _MessageBannerHostState extends State<MessageBannerHost>
   @override
   void dispose() {
     _timer?.cancel();
+    _shownTimer?.cancel();
     controller.removeListener(_changed);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -146,6 +151,28 @@ class _MessageBannerHostState extends State<MessageBannerHost>
   @override
   Widget build(BuildContext context) {
     final notice = controller.value;
+    if (!identical(notice, _scheduledNotice)) {
+      _scheduledNotice = notice;
+      _shownTimer?.cancel();
+      if (notice != null) {
+        final delay = AppMotion.duration(context, AppMotion.panel);
+        // Confirm only a rendered banner that finished entering while foreground.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              !controller.foreground ||
+              !identical(controller.value, notice)) {
+            return;
+          }
+          _shownTimer = Timer(delay, () {
+            if (mounted &&
+                controller.foreground &&
+                identical(controller.value, notice)) {
+              notice.onShown?.call();
+            }
+          });
+        });
+      }
+    }
     return Stack(children: [
       widget.child,
       Positioned(

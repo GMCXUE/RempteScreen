@@ -72,6 +72,15 @@ class NativeMessaging {
     return _channel.invokeMapMethod<String, dynamic>('takeMessagingNotice');
   }
 
+  static Future<void> noticeShown(Map<String, dynamic> notice) async {
+    if (!Platform.isAndroid) return;
+    await _channel.invokeMethod('messagingNoticeShown', {
+      'accountId': notice['accountId'],
+      'peerId': notice['peerId'],
+      'seq': notice['seq'],
+    });
+  }
+
   static Future<void> stop() async {
     visiblePeer = null;
     if (Platform.isAndroid) {

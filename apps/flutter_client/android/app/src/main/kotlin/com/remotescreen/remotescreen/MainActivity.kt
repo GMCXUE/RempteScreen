@@ -160,6 +160,10 @@ class MainActivity : FlutterActivity() {
                     }
                     "messagingSettings" -> { result.success(MessagingService.settings(this,call.argument<String>("value"))) }
                     "takeMessagingNotice" -> { result.success(MessagingService.takeNotice()) }
+                    "messagingNoticeShown" -> {
+                        MessagingService.noticeShown(this,call.argument<String>("accountId")?:"",call.argument<String>("peerId")?:"",call.argument<String>("seq")?.toLongOrNull()?:0)
+                        result.success(null)
+                    }
                     "clearMessagingCall" -> {
                         configureCallLockScreen(null)
                         val id = call.argument<String>("callId")

@@ -173,6 +173,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _handleNotification() async {
     if (_openingNotification || !mounted) return;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
     if (messageBanners.value?.peerId == NativeMessaging.visiblePeer) {
       messageBanners.clear();
     }
@@ -200,10 +202,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             !(settings['mutedPeers'] as List? ?? [])
                 .contains(value['peerId']) &&
             value['peerId'] != NativeMessaging.visiblePeer) {
-          messageBanners.show(MessageNotice.fromMap({
+          final banner = MessageNotice.fromMap({
             ...value,
             if (settings['messagePreview'] == false) 'preview': false
-          }, () => unawaited(_openMessageNotice(value))));
+          }, () => unawaited(_openMessageNotice(value)), onShown: () {
+            if (mounted && value['accountId'] == widget.account.id) {
+              unawaited(NativeMessaging.noticeShown(value).catchError((_) {}));
+            }
+          });
+          messageBanners.show(banner);
         }
       }
       final value = await NativeMessaging.takeAction();

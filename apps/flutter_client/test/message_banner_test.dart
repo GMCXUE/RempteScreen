@@ -53,6 +53,35 @@ Widget host(MessageBannerController controller,
             home: home ?? const Scaffold(body: Center(child: Text('当前页面')))));
 
 void main() {
+  testWidgets('横幅显示完成才确认，切后台或被新消息替换不确认旧消息', (tester) async {
+    final c = MessageBannerController()..bind('me');
+    addTearDown(c.dispose);
+    await tester.pumpWidget(host(c));
+    var oldShown = 0, latestShown = 0;
+    MessageNotice value(VoidCallback shown) => MessageNotice.fromMap({
+          'accountId': 'me',
+          'peerId': 'peer',
+          'name': '好友',
+          'message': '新消息'
+        }, () {}, onShown: shown);
+    c.show(value(() => oldShown++));
+    await tester.pump();
+    expect(oldShown, 0);
+    c.foreground = false;
+    c.clear();
+    await tester.pumpAndSettle();
+    expect(oldShown, 0);
+    c.foreground = true;
+    c.show(value(() => oldShown++));
+    await tester.pump();
+    c.show(value(() => latestShown++));
+    await tester.pumpAndSettle();
+    expect(oldShown, 0);
+    expect(latestShown, 1);
+    await tester.pump();
+    expect(latestShown, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   test('发送时间使用本地绝对时间，跨日跨年保留日期，不冒充接收时间', () {
     final now = DateTime(2026, 10, 14, 15);
     expect(
