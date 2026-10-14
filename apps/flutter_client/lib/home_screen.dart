@@ -137,7 +137,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _openingNotification = false;
   bool _openingMessage = false;
   Future<void> _openMessageNotice(Map<String, dynamic> value) async {
-    if (!mounted || _openingMessage || value['accountId'] != widget.account.id) {
+    if (!mounted ||
+        _openingMessage ||
+        value['accountId'] != widget.account.id) {
       return;
     }
     setState(() {
@@ -194,7 +196,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         final settings = await NativeMessaging.settings();
         if (!mounted) return;
         final value = notice;
-        if (value['peerId'] != NativeMessaging.visiblePeer) {
+        if (settings['messageEnabled'] != false &&
+            !(settings['mutedPeers'] as List? ?? [])
+                .contains(value['peerId']) &&
+            value['peerId'] != NativeMessaging.visiblePeer) {
           messageBanners.show(MessageNotice.fromMap({
             ...value,
             if (settings['messagePreview'] == false) 'preview': false

@@ -61,23 +61,60 @@ static void trimChatNotifications(UNUserNotificationCenter *center) {
         if(remove.count)[center removeDeliveredNotificationsWithIdentifiers:remove];
     }];
 }
-void rs_notifications_post(const char *json) {
+// Called only by the native polling worker or an async command. A successful
+// enqueue is required before the client advances its persistent delivery cursor.
+bool rs_notifications_post(const char *json) {
     NSString *value=[NSString stringWithUTF8String:json];
-    dispatch_async(dispatch_get_main_queue(),^{
-        NSDictionary *data=[NSJSONSerialization JSONObjectWithData:[value dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-        if(!data)return;
+    NSDictionary *data=[NSJSONSerialization JSONObjectWithData:[value dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if(!data)return false;
+    UNUserNotificationCenter *center=[UNUserNotificationCenter currentNotificationCenter];
+    dispatch_semaphore_t done=dispatch_semaphore_create(0);
+    __block BOOL delivered=NO;
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+        if(settings.authorizationStatus!=UNAuthorizationStatusAuthorized && settings.authorizationStatus!=UNAuthorizationStatusProvisional) {
+            report(@{@"type":@"delivery",@"error":@"系统通知未允许，请在系统通知设置中开启"});
+            dispatch_semaphore_signal(done);return;
+        }
         UNMutableNotificationContent *content=[UNMutableNotificationContent new];
         content.title=data[@"title"]?:@"RemoteScreen";content.body=data[@"body"]?:@"";content.userInfo=data[@"extra"]?:@{};
-        content.categoryIdentifier=data[@"category"]?:@"";
-        content.threadIdentifier=data[@"thread"]?:@"";
+        content.categoryIdentifier=data[@"category"]?:@"";content.threadIdentifier=data[@"thread"]?:@"";
         if([data[@"sound"] boolValue])content.sound=[UNNotificationSound defaultSound];
         NSString *identifier=data[@"id"]?:NSUUID.UUID.UUIDString;
         UNNotificationRequest *request=[UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
-        [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:^(NSError *error){
+        [center addNotificationRequest:request withCompletionHandler:^(NSError *error){
+            delivered=error==nil;
             report(@{@"type":@"delivery",@"id":identifier,@"error":error.localizedDescription?:@""});
-            if(!error && [content.userInfo[@"kind"] isEqual:@"message"])trimChatNotifications([UNUserNotificationCenter currentNotificationCenter]);
+            dispatch_semaphore_signal(done);
+            if(!error && [content.userInfo[@"kind"] isEqual:@"message"])trimChatNotifications(center);
         }];
-    });
+    }];
+    if(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,3*NSEC_PER_SEC))!=0) {
+        report(@{@"type":@"delivery",@"error":@"通知提交超时，将自动重试"});return false;
+    }
+    return delivered;
+}
+// Reconcile notifications already shown, including those retained across restart.
+void rs_notifications_prune(const char *json) {
+    NSDictionary *policy=[NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    if(!policy)return;
+    NSDate *cutoff=[NSDate date];
+    BOOL (^remove)(NSDictionary *)=^BOOL(NSDictionary *info) {
+        NSString *kind=info[@"kind"];
+        if(![kind isEqual:@"message"] && ![kind isEqual:@"friends"])return NO;
+        if(![info[@"accountId"] isEqual:policy[@"accountId"]])return YES;
+        if([policy[@"clearPrivate"] boolValue])return YES;
+        if([kind isEqual:@"friends"])return [policy[@"friendEnabled"] isEqual:@NO] || (policy[@"requests"] && ![policy[@"requests"] containsObject:info[@"requestId"]?:@""]);
+        NSString *peer=info[@"peerId"]?:@"";
+        if([policy[@"messageEnabled"] isEqual:@NO] || [policy[@"mutedPeers"] containsObject:peer])return YES;
+        NSDictionary *peers=policy[@"peers"];
+        return peers && (![peers[peer] isKindOfClass:NSArray.class] || ![peers[peer] containsObject:info[@"seq"]?:@""]);
+    };
+    UNUserNotificationCenter *center=[UNUserNotificationCenter currentNotificationCenter];
+    [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification *> *notes) {
+        NSMutableArray *ids=[NSMutableArray new];
+        for(UNNotification *note in notes)if([note.date compare:cutoff]!=NSOrderedDescending && remove(note.request.content.userInfo))[ids addObject:note.request.identifier];
+        [center removeDeliveredNotificationsWithIdentifiers:ids];
+    }];
 }
 void rs_notifications_remove(const char *identifier) {
     NSString *value=[NSString stringWithUTF8String:identifier];

@@ -59,6 +59,13 @@ class ChatNotificationsTest {
         MessagingService.viewed(context,"account","peer",4)
         assertTrue(ChatNotifications.children(manager,"account").isEmpty())
     }
+    @Test fun dismissingOldSummaryCannotEraseMessageThatArrivedAfterIt() {
+        post(1);post(2)
+        ChatNotifications.refreshSummary(context,"account",true)
+        post(3)
+        MessageDismissReceiver().onReceive(context,Intent().putExtra("account","account").putExtra("peer","").putExtra("seq",2L))
+        assertEquals(listOf(3L),ChatNotifications.children(manager,"account").map {it.notification.extras.getLong(ChatNotifications.SEQUENCE)})
+    }
     @Test fun privateGroupHasNoSenderOrMessageContent() {
         post(1,preview=false);post(2,preview=false)
         ChatNotifications.refreshSummary(context,"account",false)

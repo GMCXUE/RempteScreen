@@ -197,7 +197,7 @@
       if(older)container.scrollTop=oldTop+container.scrollHeight-oldHeight;else if(initial||atBottom){followBottom=true;container.scrollTop=container.scrollHeight;}
       el('social-older').classList.toggle('hidden',!hasMore);
       const last=messages.at(-1);
-      if(!older && last && last.seq!==readSeq && !document.hidden && document.hasFocus() && !el('page-messages').classList.contains('hidden')) {
+      if(!older && last && last.seq!==readSeq && container.scrollHeight-container.scrollTop-container.clientHeight<80 && !document.hidden && document.hasFocus() && !el('page-messages').classList.contains('hidden')) {
         try{await api('read',{peerId:current.id,seq:last.seq});if(version===generation){readSeq=last.seq;recovered('read');}}
         catch(e){if(version===generation)syncError('read',e);}
       }
@@ -214,6 +214,7 @@
     // A viewport resize may emit scroll before ResizeObserver; it is not a user leaving the bottom.
     if(messageViewport.clientHeight!==viewportHeight)return;
     followBottom=messageViewport.scrollHeight-messageViewport.scrollTop-messageViewport.clientHeight<80;
+    syncNotificationContext();
   });
   new ResizeObserver(()=>{viewportHeight=messageViewport.clientHeight;if(followBottom)messageViewport.scrollTop=messageViewport.scrollHeight;}).observe(messageViewport);
   new ResizeObserver(()=>{document.body.style.setProperty('--chat-composer-height',`${Math.ceil(el('social-compose').getBoundingClientRect().height)+12}px`);}).observe(el('social-compose'));
@@ -224,8 +225,8 @@
       const accountId=state?.me.id;
       const value=await window.__TAURI__.core.invoke('notification_settings',{accountId:state?.me.id,value:null});
       const dialog=node('dialog','','alert-settings-dialog');dialog.append(node('h3','消息与来电提醒'));
-      for(const [key,label] of [['messageSound','消息提示音'],['messagePreview','通知显示消息内容'],['callSound','来电铃声']]){
-        const row=node('label',label);const input=node('input');input.type='checkbox';input.checked=value[key];input.onchange=()=>value[key]=input.checked;row.append(input);dialog.append(row);
+      for(const [key,label] of [['messageEnabled','聊天消息通知'],['friendEnabled','好友申请通知'],['messageSound','消息提示音'],['messagePreview','通知显示消息内容'],['callSound','来电铃声']]){
+        const row=node('label',label);const input=node('input');input.type='checkbox';input.checked=value[key]!==false;input.onchange=()=>value[key]=input.checked;row.append(input);dialog.append(row);
       }
       dialog.append(node('p','免打扰可在好友菜单中设置。设置仅应用于本设备。','muted small'));
       const advanced=node('details','','notification-advanced');advanced.append(node('summary','系统通知设置'));
@@ -233,7 +234,7 @@
       const refreshDiagnostics=async()=>{const data=await window.__TAURI__.core.invoke('notification_diagnostics');const p=data.permission||{};diagnostics.textContent=`系统通知：${p.authorization===2?'已允许':p.authorization===1?'已关闭，请在系统通知设置中允许':'等待系统授权'}${p.alerts!==undefined&&p.alerts!==2?'；系统横幅已关闭':''}${p.sounds!==undefined&&p.sounds!==2?'；系统声音已关闭':''}${data.pollError?'；同步失败：'+data.pollError:''}${data.delivery?.error?'；发送失败：'+data.delivery.error:''}`;};refreshDiagnostics().catch(error);
       advanced.append(button('系统通知设置',async()=>{await window.__TAURI__.core.invoke('open_notification_settings');}),button('测试消息通知',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'message'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}),button('测试来电铃声',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'call'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}));
       const actions=node('div','','actions');actions.append(button('取消',()=>dialog.close()),button('保存',async()=>{
-        await window.__TAURI__.core.invoke('notification_settings',{accountId,value});dialog.close();
+        await window.__TAURI__.core.invoke('notification_settings',{accountId,value});el('ft-toast').classList.add('hidden');dialog.close();
       },'primary'));dialog.append(actions);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
     }catch(e){error(e);}
   };

@@ -1,5 +1,6 @@
 import 'chat_storage_fixture.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -49,6 +50,7 @@ void main() {
         'createdAt': '123456'
       });
     }
+    final reads = <String>[];
     await http.runWithClient(() async {
       await tester.pumpWidget(conversation());
       await pumpChat(tester);
@@ -56,6 +58,7 @@ void main() {
       final controller = tester.widget<ListView>(list).controller!;
       expect(controller.position.extentAfter, lessThan(2));
       expect(find.text('最后一条消息'), findsOneWidget);
+      expect(reads, contains('60'));
       await tester.tap(find.byType(TextField));
       tester.view.viewInsets = const FakeViewPadding(bottom: 330);
       await pumpChat(tester);
@@ -68,14 +71,36 @@ void main() {
       await pumpChat(tester);
       final offset = controller.offset;
       expect(controller.position.extentAfter, greaterThan(100));
+      final before = reads.length;
+      fixture.messages.add({
+        'id': 'incoming61',
+        'seq': '61',
+        'senderId': 'peer',
+        'kind': 'text',
+        'text': '未读的新消息',
+        'createdAt': '123457'
+      });
+      await tester.pump(const Duration(seconds: 4));
+      await pumpChat(tester);
+      expect(reads.length, before, reason: '翻看历史时不能把新消息标为已读');
       tester.view.viewInsets = const FakeViewPadding(bottom: 370);
       await pumpChat(tester);
       expect(controller.offset, closeTo(offset, 2));
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump(const Duration(seconds: 4));
+      await pumpChat(tester);
+      expect(reads, contains('61'), reason: '返回最新消息后应更新已读');
       await tester.pumpWidget(const SizedBox.shrink());
       await pumpChat(tester);
-    }, () => MockClient(fixture.respond));
+    },
+        () => MockClient((request) async {
+              if (request.url.path.endsWith('/read')) {
+                reads.add('${jsonDecode(request.body)['seq']}');
+              }
+              return fixture.respond(request);
+            }));
   });
-  testWidgets('上传等待期间图片立即进聊天，清空输入框并可输入下一条，失败在消息中重试', (tester) async {
+  testWidgets('相册确认后图片立即进聊天，上传等待期间可输入下一条，失败在消息中重试', (tester) async {
     final hold = Completer<void>(), fixture = ChatFixture();
     fixture.failImage = true;
     const picker = MethodChannel('plugins.flutter.io/image_picker');
@@ -97,8 +122,6 @@ void main() {
         await tester.tap(find.text('图片与视频'));
         await Future<void>.delayed(const Duration(milliseconds: 150));
       });
-      await pumpChat(tester);
-      await tester.tap(find.text('发送'));
       await pumpChat(tester);
       expect(find.byKey(const ValueKey('chat-draft-images')), findsNothing);
       expect(find.text('发送中'), findsOneWidget);

@@ -9,6 +9,10 @@ internal object MessagingPolicy {
         latest > previous && (unread > 0 || initialized) && !visible
     fun canRing(enabled:Boolean, muted:Boolean, stopped:Boolean, expires:Long, now:Long):Boolean =
         enabled && !muted && !stopped && expires>now
+    // One audible message/request per account per ten seconds. Backlog stays silent.
+    fun shouldAlert(lastAlert: Long, sentAt: Long, now: Long): Boolean =
+        sentAt > 0 && sentAt <= now + 5000 && now - sentAt <= 60000 &&
+            (lastAlert == 0L || now < lastAlert || now - lastAlert >= 10000)
     fun remainingRing(createdAt: Long, now: Long): Long = (createdAt + 45000 - now).coerceIn(1000, 45000)
 }
 

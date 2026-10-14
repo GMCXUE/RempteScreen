@@ -35,6 +35,8 @@ class NativeMessaging {
     if (!Platform.isAndroid) {
       return value ??
           {
+            'messageEnabled': true,
+            'friendEnabled': true,
             'messageSound': true,
             'messagePreview': true,
             'callSound': true,

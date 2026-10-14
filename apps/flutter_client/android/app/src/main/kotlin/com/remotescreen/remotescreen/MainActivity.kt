@@ -181,7 +181,6 @@ class MainActivity : FlutterActivity() {
                         else {
                             val peer = intent.getStringExtra("messagingPeer") ?: ""
                             val id = intent.getStringExtra("messagingCall") ?: ""
-                            if(action=="message")MessagingService.viewed(this,intent.getStringExtra("messagingAccount") ?: "",peer,intent.getLongExtra("messagingSeq",0))
                             intent.removeExtra("messagingAction")
                             if (id.isNotEmpty() && (action=="answer" || action=="reject")) {
                                 MessagingService.stopRing(id)

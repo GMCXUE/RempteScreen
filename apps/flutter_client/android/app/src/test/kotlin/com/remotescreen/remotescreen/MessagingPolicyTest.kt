@@ -3,6 +3,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class MessagingPolicyTest {
+    @Test fun burstsAndReconnectBacklogsStayQuietWithoutSuppressingDelivery() {
+        val now=1000000L
+        assertTrue(MessagingPolicy.shouldAlert(0,now,now))
+        assertFalse(MessagingPolicy.shouldAlert(now-9999,now,now))
+        assertTrue(MessagingPolicy.shouldAlert(now-10000,now,now))
+        assertFalse(MessagingPolicy.shouldAlert(0,now-60001,now))
+        assertFalse(MessagingPolicy.shouldAlert(0,0,now))
+        assertFalse(MessagingPolicy.shouldAlert(0,now+6000,now))
+        assertTrue(MessagingPolicy.shouldAlert(now+1,now,now))
+    }
+
     @Test fun answeredEndedAndLateStoppedCallsCannotShowIncomingAlerts() {
         assertTrue(MessagingPolicy.showIncomingCall("ringing",true,false,150,100))
         assertFalse(MessagingPolicy.showIncomingCall("active",true,false,150,100))

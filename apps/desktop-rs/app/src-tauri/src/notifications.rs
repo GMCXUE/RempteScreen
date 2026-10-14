@@ -2,7 +2,7 @@
 //! Current scope requires the app to remain running. Future push delivery must
 //! reuse account validation and messaging-action routing (see notification-delivery.md).
 use crate::api;
-use crate::notification_policy::{can_ring, should_alert, show_call_panel, message_previews};
+use crate::notification_policy::{can_ring, should_alert, show_call_panel, message_previews, should_sound};
 use std::{
     collections::{HashMap, HashSet},
     process::{Child, Command},
@@ -15,6 +15,7 @@ use tauri_plugin_notification::{Action, ActionType, NotificationExt};
 #[derive(Default)]
 pub struct NotificationContext {
     pub peer: Mutex<Option<String>>,
+    delivery: Mutex<()>,
     diagnostics: Mutex<serde_json::Value>,
     ring: Mutex<Option<(String, u64, String)>>,
     stopped: Mutex<HashSet<String>>,
@@ -25,7 +26,8 @@ static NATIVE_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::
 #[cfg(target_os = "macos")]
 extern "C" {
     fn rs_notifications_init(callback: extern "C" fn(*const std::ffi::c_char));
-    fn rs_notifications_post(json: *const std::ffi::c_char);
+    fn rs_notifications_post(json: *const std::ffi::c_char) -> bool;
+    fn rs_notifications_prune(json: *const std::ffi::c_char);
     fn rs_notifications_status();
     fn rs_notifications_remove(id: *const std::ffi::c_char);
     fn rs_chat_notifications_remove_peer(account: *const std::ffi::c_char, peer: *const std::ffi::c_char);
@@ -104,7 +106,19 @@ fn remove_message(app: &tauri::AppHandle, account: &str, peer: &str) {
     #[cfg(not(target_os="macos"))]
     let _=app.notification().remove_active(vec![notification_number(&id)]);
 }
-fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Value, sound: bool) {
+fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Value, sound: bool) -> bool {
+    let state=app.state::<NotificationContext>();
+    let _delivery=state.delivery.lock().unwrap();
+    let settings=read_settings(app,extra["accountId"].as_str().unwrap_or_default());
+    let chat=extra["kind"]=="message";
+    let friend=extra["kind"]=="friends";
+    if (chat || friend) && (api::load_creds().account_token.is_none()
+        || (chat && (!settings.message_enabled || settings.muted_peers.contains(extra["peerId"].as_str().unwrap_or_default())))
+        || (friend && !settings.friend_enabled)) {return false;}
+    let title=if chat && !settings.message_preview {"RemoteScreen"}else{title};
+    let body=if !settings.message_preview && chat {"收到新消息"}
+        else if !settings.message_preview && friend {"收到新的好友申请"}else{body};
+    let sound=sound && (!(chat || friend) || settings.message_sound);
     record(
         app,
         "lastAttempt",
@@ -112,6 +126,8 @@ fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Valu
     );
     let id = if extra["kind"] == "call" {
         format!("call-{}", extra["callId"].as_str().unwrap_or_default())
+    } else if extra["kind"] == "friends" {
+        format!("friend-{}-{}",extra["accountId"].as_str().unwrap_or_default(),extra["requestId"].as_str().unwrap_or_default())
     } else if let Some(seq)=extra["seq"].as_str() {
         format!("message-{}-{}-{seq}",extra["accountId"].as_str().unwrap_or_default(),extra["peerId"].as_str().unwrap_or_default())
     } else {
@@ -122,9 +138,10 @@ fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Valu
         let payload = serde_json::json!({"id":id,"title":title,"body":body,"extra":extra,"sound":sound,"thread":if extra["kind"]=="message"{format!("rs-chats-{}",extra["accountId"].as_str().unwrap_or_default())}else{String::new()},"category":if extra["kind"]=="call"{"friend-call"}else{""}});
         if let Ok(text) = std::ffi::CString::new(payload.to_string()) {
             unsafe {
-                rs_notifications_post(text.as_ptr());
+                return rs_notifications_post(text.as_ptr());
             }
         }
+        false
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -139,8 +156,16 @@ fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Valu
         }
         if let Err(e) = b.show() {
             record(app, "nativeError", serde_json::json!(e.to_string()));
+            return false;
         }
+        true
     }
+}
+fn prune_notifications(_app: &tauri::AppHandle, policy: serde_json::Value) {
+    #[cfg(target_os="macos")]
+    if let Ok(json)=std::ffi::CString::new(policy.to_string()) { unsafe {rs_notifications_prune(json.as_ptr());} }
+    #[cfg(not(target_os="macos"))]
+    let _=policy; // The current Windows notification backend cannot withdraw delivered toasts.
 }
 #[tauri::command]
 pub fn notification_diagnostics(app: tauri::AppHandle) -> serde_json::Value {
@@ -185,6 +210,8 @@ pub async fn test_notification(
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AlertSettings {
+    message_enabled: bool,
+    friend_enabled: bool,
     message_sound: bool,
     message_preview: bool,
     call_sound: bool,
@@ -193,6 +220,8 @@ pub struct AlertSettings {
 impl Default for AlertSettings {
     fn default() -> Self {
         Self {
+            message_enabled: true,
+            friend_enabled: true,
             message_sound: true,
             message_preview: true,
             call_sound: true,
@@ -242,10 +271,13 @@ fn update_settings(
         return Err("账号已变化".into());
     }
     if let Some(value) = value {
+        let context=app.state::<NotificationContext>();
+        let _delivery=context.delivery.lock().unwrap();
         let path = settings_path(&app, user).ok_or("无法保存提醒设置")?;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(path, serde_json::to_vec(&value).unwrap()).map_err(|e| e.to_string())?;
-        if !value.message_preview {
+        prune_notifications(&app,serde_json::json!({"accountId":user,"messageEnabled":value.message_enabled,"friendEnabled":value.friend_enabled,"clearPrivate":!value.message_preview,"mutedPeers":value.muted_peers}));
+        if !value.message_preview || !value.message_enabled {
             if let Ok(path)=app.path().app_data_dir() {
                 if let Ok(bytes)=std::fs::read(path.join("notification-seen.json")) {
                     if let Ok(seen)=serde_json::from_slice::<HashMap<String,u64>>(&bytes) {
@@ -495,7 +527,10 @@ pub fn start(app: tauri::AppHandle) {
         let mut delivered_messages=HashSet::<String>::new();
         let mut account = String::new();
         let mut avatar_cache: HashMap<String,String> = HashMap::new();
-        let mut requests = HashSet::new();
+        let requests_cache=cache.as_ref().map(|p|p.with_file_name("notification-requests.json"));
+        let mut requests:HashSet<String>=requests_cache.as_ref().and_then(|p|std::fs::read(p).ok())
+            .and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut last_alert=0;
         let mut ringing = HashSet::new();
         loop {
             std::thread::sleep(Duration::from_secs(4));
@@ -510,10 +545,11 @@ pub fn start(app: tauri::AppHandle) {
                     .unwrap()
                     .clear();
                 for key in seen.keys(){if let Some((owner,peer))=key.split_once(':'){remove_message(&app,owner,peer);}}
+                prune_notifications(&app,serde_json::json!({"accountId":""}));
                 delivered_messages.clear();
                 account.clear();
                 avatar_cache.clear();
-                requests.clear();
+                last_alert=0;
                 ringing.clear();
                 *app.state::<NotificationContext>().ring.lock().unwrap() = None;
                 continue;
@@ -543,7 +579,7 @@ pub fn start(app: tauri::AppHandle) {
                 for key in seen.keys(){if let Some((previous,peer))=key.split_once(':'){if previous!=user{remove_message(&app,previous,peer);}}}
                 delivered_messages.clear();
                 account = user.to_owned();
-                requests.clear();
+                last_alert=0;
                 ringing.clear();
                 *app.state::<NotificationContext>().ring.lock().unwrap() = None;
                 app.state::<NotificationContext>()
@@ -553,6 +589,10 @@ pub fn start(app: tauri::AppHandle) {
                     .clear();
             }
             let settings = read_settings(&app, user);
+            let peers:serde_json::Map<String,serde_json::Value>=data["friends"].as_array().into_iter().flatten()
+                .filter_map(|f|Some((f["id"].as_str()?.to_owned(),if f["blocked"]==true{serde_json::json!([])}else{f.get("incomingMessages").and_then(|v|v.as_array()).map(|rows|rows.iter().map(|m|m["seq"].clone()).collect::<Vec<_>>()).unwrap_or_else(||vec![f["lastIncomingSeq"].clone()]).into()}))).collect();
+            prune_notifications(&app,serde_json::json!({"accountId":user,"messageEnabled":settings.message_enabled,"friendEnabled":settings.friend_enabled,"mutedPeers":settings.muted_peers,
+                "peers":peers,"requests":data["requests"].as_array().into_iter().flatten().map(|r|r["id"].clone()).collect::<Vec<_>>()}));
             let focused = app
                 .get_webview_window("main")
                 .and_then(|w| w.is_focused().ok())
@@ -589,11 +629,12 @@ pub fn start(app: tauri::AppHandle) {
                     let floor=*viewed.entry(key.clone()).or_insert_with(|| {
                         dirty=true;f["notificationReadSeq"].as_str().and_then(|v|v.parse().ok()).unwrap_or(0)
                     });
-                    if visible.as_deref()==Some(peer) || f["blocked"]==true || settings.muted_peers.contains(peer) {
+                    if !settings.message_enabled || visible.as_deref()==Some(peer) || f["blocked"]==true || settings.muted_peers.contains(peer) {
                         remove_message(&app,user,peer);delivered_messages.remove(peer);
                         if floor<seq{viewed.insert(key.clone(),seq);dirty=true;}
                     }
-                    if !f["blocked"].as_bool().unwrap_or(false)
+                    let mut delivered=true;
+                    if settings.message_enabled && !f["blocked"].as_bool().unwrap_or(false)
                         && !settings.muted_peers.contains(peer)
                         && should_alert(
                             *seen.get(&key).unwrap_or(&0),
@@ -611,19 +652,37 @@ pub fn start(app: tauri::AppHandle) {
                         let fallback=serde_json::json!([{"seq":seq.to_string(),"text":f["lastIncomingText"].as_str().unwrap_or("新消息"),"createdAt":now()}]);
                         let previews=message_previews(f.get("incomingMessages").unwrap_or(&fallback),floor.max(*seen.get(&key).unwrap_or(&0)));
                         if !previews.is_empty() {
-                            let preview=read_settings(&app,user).message_preview;
+                            let latest_settings=read_settings(&app,user);
+                            if api::load_creds().account_token.as_deref()!=Some(&token) { break; }
+                            if !latest_settings.message_enabled || latest_settings.muted_peers.contains(peer) {continue;}
+                            let preview=latest_settings.message_preview;
                             let title=if preview{name}else{"RemoteScreen"};
-                            if focused {
-                                let _=app.emit("messaging-notice",serde_json::json!({"accountId":user,"peerId":peer,"text":format!("{title}：{}",if preview {previews.last().unwrap().text.as_str()}else{"收到新消息"})}));
+                            let foreground=app.get_webview_window("main").and_then(|w|w.is_focused().ok()).unwrap_or(false);
+                            let viewing=foreground && app.state::<NotificationContext>().peer.lock().unwrap().as_deref()==Some(peer);
+                            if viewing { remove_message(&app,user,peer); }
+                            else if foreground {
+                                delivered=app.emit("messaging-notice",serde_json::json!({"accountId":user,"peerId":peer,"text":format!("{title}：{}",if preview {previews.last().unwrap().text.as_str()}else{"收到新消息"})})).is_ok();
+                            } else {
+                                for (index,message) in previews.iter().enumerate() {
+                                    let live=read_settings(&app,user);
+                                    if api::load_creds().account_token.as_deref()!=Some(&token)
+                                        || live.message_preview!=preview || !live.message_enabled || live.muted_peers.contains(peer) {
+                                        delivered=false;break;
+                                    }
+                                    let front=app.get_webview_window("main").and_then(|w|w.is_focused().ok()).unwrap_or(false);
+                                    if front {delivered=false;break;}
+                                    let body=if preview{message.text.as_str()}else{"收到新消息"};
+                                    let audible=live.message_sound && index==previews.len()-1 && should_sound(last_alert,message.at,now());
+                                    delivered=post(&app,title,body,serde_json::json!({"accountId":user,"peerId":peer,"kind":"message","seq":message.seq.to_string()}),audible);
+                                    if !delivered {break;}
+                                    seen.insert(key.clone(),message.seq);dirty=true;
+                                    if audible {last_alert=now();}
+                                }
+                                delivered_messages.insert(peer.into());
                             }
-                            for (index,message) in previews.iter().enumerate() {
-                                let body=if preview{message.text.as_str()}else{"收到新消息"};
-                                post(&app,title,body,serde_json::json!({"accountId":user,"peerId":peer,"kind":"message","seq":message.seq.to_string()}),settings.message_sound && index==previews.len()-1);
-                            }
-                            delivered_messages.insert(peer.into());
                         }
                     }
-                    if !seen.contains_key(&key) || seen.get(&key).is_some_and(|old|*old<seq) {
+                    if delivered && (!seen.contains_key(&key) || seen.get(&key).is_some_and(|old|*old<seq)) {
                         dirty = true;
                         seen.insert(key, seq);
                     }
@@ -632,18 +691,18 @@ pub fn start(app: tauri::AppHandle) {
             if let Some(incoming) = data["requests"].as_array() {
                 unread += incoming.len() as i64;
                 for request in incoming {
-                    let key = format!("{}:{}", request["id"], request["createdAt"]);
-                    if requests.insert(key) {
-                        post(
-                            &app,
-                            "新的好友申请",
-                            &format!(
-                                "{} 希望添加你为好友",
-                                request["name"].as_str().unwrap_or("好友")
-                            ),
-                            serde_json::json!({"accountId":user,"kind":"friends"}),
-                            settings.message_sound,
-                        );
+                    if api::load_creds().account_token.as_deref()!=Some(&token) {break;}
+                    let key = format!("{user}:{}:{}", request["id"], request["createdAt"]);
+                    let config=read_settings(&app,user);
+                    if !config.friend_enabled {dirty|=requests.insert(key);continue;}
+                    if !requests.contains(&key) {
+                        let body=if config.message_preview {format!("{} 希望添加你为好友",request["name"].as_str().unwrap_or("好友"))} else {"收到新的好友申请".into()};
+                        let sent=request["createdAt"].as_str().and_then(|v|v.parse().ok()).unwrap_or(0);
+                        let audible=config.message_sound && should_sound(last_alert,sent,now());
+                        if post(&app,"新的好友申请",&body,serde_json::json!({"accountId":user,"kind":"friends","requestId":request["id"]}),audible) {
+                            requests.insert(key);dirty=true;
+                            if audible {last_alert=now();}
+                        }
                     }
                 }
             }
@@ -775,6 +834,10 @@ pub fn start(app: tauri::AppHandle) {
                 let _ = w.set_badge_count(if unread > 0 { Some(unread) } else { None });
             }
             if dirty {
+                if let Some(path)=&requests_cache {
+                    if let Some(parent)=path.parent(){let _=std::fs::create_dir_all(parent);}
+                    if let Ok(bytes)=serde_json::to_vec(&requests){let tmp=path.with_extension("tmp");if std::fs::write(&tmp,bytes).is_ok(){let _=std::fs::rename(tmp,path);}}
+                }
                 if let Some(path)=&viewed_cache {
                     if let Some(parent)=path.parent(){let _=std::fs::create_dir_all(parent);}
                     if let Ok(bytes)=serde_json::to_vec(&viewed){let tmp=path.with_extension("tmp");if std::fs::write(&tmp,bytes).is_ok(){let _=std::fs::rename(tmp,path);}}

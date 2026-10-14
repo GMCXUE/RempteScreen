@@ -110,6 +110,16 @@ internal object ChatNotifications {
         if(picture!=null)builder.setLargeIcon(picture)
         return builder.build()
     }
+    fun friend(context:Context,account:String,id:String,name:String,preview:Boolean,alert:Boolean,action:PendingIntent):Notification {
+        val channel=if(alert)"rs_messages_v2" else "rs_messages_quiet"
+        return Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_remotescreen)
+            .setContentTitle("新的好友申请").setContentText(if(preview)"$name 希望添加你为好友" else "收到新的好友申请")
+            .setContentIntent(action).setAutoCancel(true).setOnlyAlertOnce(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .addExtras(Bundle().apply {putString(ACCOUNT,account);putString(PEER,id)})
+            .setPublicVersion(Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_remotescreen)
+                .setContentTitle("RemoteScreen").setContentText("收到新的好友申请").build()).build()
+    }
     fun refreshSummary(context:Context,account:String,preview:Boolean) {
         val manager=context.getSystemService(NotificationManager::class.java)
         trim(manager,account)
@@ -128,7 +138,7 @@ internal object ChatNotifications {
             .setWhen(messages.first().notification.`when`).setShowWhen(messages.first().notification.`when`>0)
             .setGroup(group(account)).setGroupSummary(true).setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
             .setOnlyAlertOnce(true).setContentIntent(activity(context,account)).setAutoCancel(true)
-            .setDeleteIntent(MessageDismissReceiver.intent(context,account,"",0))
+            .setDeleteIntent(MessageDismissReceiver.intent(context,account,"",messages.first().notification.extras.getLong(SEQUENCE)))
             .setVisibility(if(preview)Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(Notification.Builder(context,"rs_messages_quiet").setSmallIcon(R.drawable.ic_stat_remotescreen)
                 .setContentTitle("RemoteScreen").setContentText(title).setVisibility(Notification.VISIBILITY_PUBLIC).build()).build()

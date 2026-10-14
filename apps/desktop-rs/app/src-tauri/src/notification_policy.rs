@@ -1,3 +1,10 @@
+// Keep message/request bursts and reconnect backlogs quiet on every client.
+pub(crate) fn should_sound(last_alert: u64, sent_at: u64, now: u64) -> bool {
+    sent_at > 0 && sent_at <= now.saturating_add(5000)
+        && now.saturating_sub(sent_at) <= 60000
+        && (last_alert == 0 || now < last_alert || now - last_alert >= 10000)
+}
+
 pub(crate) fn show_call_panel(
     status: &str,
     callee: bool,
@@ -33,6 +40,18 @@ pub(crate) fn message_previews(value: &serde_json::Value, viewed: u64) -> Vec<Me
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bursts_and_reconnect_backlogs_stay_quiet() {
+        let now=1_000_000;
+        assert!(super::should_sound(0,now,now));
+        assert!(!super::should_sound(now-9999,now,now));
+        assert!(super::should_sound(now-10000,now,now));
+        assert!(!super::should_sound(0,now-60001,now));
+        assert!(!super::should_sound(0,0,now));
+        assert!(!super::should_sound(0,now+6000,now));
+        assert!(super::should_sound(now+1,now,now));
+    }
+
     use super::{can_ring, should_alert, show_call_panel};
     #[test]
     fn notification_preview_keeps_newest_five_after_local_viewed_sequence() {

@@ -14,19 +14,21 @@ import java.util.UUID
 /** Account messaging survives page changes and Dart background timer suspension. */
 class MessagingService : Service() {
     companion object {
+        private val notificationLock = Any()
         @Volatile private var instance: MessagingService? = null
         private val notices = java.util.concurrent.ConcurrentLinkedQueue<Map<String,String>>()
         fun diagnostics(context:Context):Map<String,Any> {
             val p=context.getSharedPreferences(PREFS,MODE_PRIVATE)
             val manager=context.getSystemService(NotificationManager::class.java)
             val audio=context.getSystemService(android.media.AudioManager::class.java)
+            val config=JSONObject(settings(context))
             return mapOf("running" to (instance?.running==true),"notifications" to manager.areNotificationsEnabled(),
                 "ringerMode" to audio.ringerMode,"lastPoll" to p.getLong("lastPoll",0),"error" to (p.getString("pollError","")?:""),
                 "vibrator" to context.getSystemService(android.os.Vibrator::class.java).hasVibrator(),
                 "dnd" to (manager.currentInterruptionFilter!=NotificationManager.INTERRUPTION_FILTER_ALL),
                 "batteryUnrestricted" to context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName),
-                "callAlerts" to ((manager.getNotificationChannel("rs_calls_v3")?:manager.getNotificationChannel("rs_calls_v2"))?.importance?:0),
-                "messageAlerts" to (manager.getNotificationChannel("rs_messages_v2")?.importance?:0),
+                "callAlerts" to ((manager.getNotificationChannel(if(config.optBoolean("callSound",true))"rs_calls_v3" else "rs_calls_quiet_v3"))?.importance?:0),
+                "messageAlerts" to (manager.getNotificationChannel(if(config.optBoolean("messageSound",true))"rs_messages_v2" else "rs_messages_quiet")?.importance?:0),
                 "fullScreenCalls" to (Build.VERSION.SDK_INT<34 || manager.canUseFullScreenIntent()),
                 "deliveryError" to (p.getString("deliveryError","")?:""),
                 "lastNotificationAt" to p.getLong("lastNotificationAt",0))
@@ -35,7 +37,7 @@ class MessagingService : Service() {
             require(kind=="message"||kind=="call")
             context.startForegroundService(Intent(context,MessagingService::class.java).putExtra("testAlert",kind))
         }
-        fun viewed(context:Context,account:String,peer:String,seq:Long) {
+        fun viewed(context:Context,account:String,peer:String,seq:Long): Unit = synchronized(notificationLock) {
             val p=context.getSharedPreferences(PREFS,MODE_PRIVATE)
             if(p.getString("account","")!=account || peer.isEmpty())return
             val key="viewed:$account:$peer"
@@ -43,11 +45,11 @@ class MessagingService : Service() {
             ChatNotifications.clearPeer(context.getSystemService(NotificationManager::class.java),account,peer)
             ChatNotifications.refreshSummary(context,account,JSONObject(settings(context)).optBoolean("messagePreview",true))
         }
-        fun dismissed(context:Context,account:String,peer:String) {
+        fun dismissed(context:Context,account:String,peer:String,through:Long=Long.MAX_VALUE): Unit = synchronized(notificationLock) {
             val p=context.getSharedPreferences(PREFS,MODE_PRIVATE)
             if(p.getString("account","")!=account)return
             val manager=context.getSystemService(NotificationManager::class.java)
-            if(peer.isEmpty())ChatNotifications.children(manager,account).forEach {manager.cancel(it.tag,it.id)}
+            if(peer.isEmpty())ChatNotifications.children(manager,account).filter {it.notification.extras.getLong(ChatNotifications.SEQUENCE)<=through}.forEach {manager.cancel(it.tag,it.id)}
             // Swiping one child removes only that message; it is already in the delivery cursor.
             ChatNotifications.refreshSummary(context,account,JSONObject(settings(context)).optBoolean("messagePreview",true))
         }
@@ -59,12 +61,21 @@ class MessagingService : Service() {
             }
             service.handler.post { if (service.ringId == id) service.silence() }
         } }
-        fun settings(context: Context, value: String? = null): String {
+        fun settings(context: Context, value: String? = null): String = synchronized(notificationLock) {
             val prefs=context.getSharedPreferences(PREFS, MODE_PRIVATE)
             val key="alerts:"+prefs.getString("account", "")
-            if(value!=null) { prefs.edit().putString(key,value).apply(); if(!JSONObject(value).optBoolean("messagePreview",true)) {
+            if(value!=null) { prefs.edit().putString(key,value).apply(); notices.clear()
+                val updated=JSONObject(value)
+                val manager=context.getSystemService(NotificationManager::class.java)
+                if(!updated.optBoolean("messageEnabled",true) || !updated.optBoolean("messagePreview",true)) {
                 val manager=context.getSystemService(NotificationManager::class.java);manager.activeNotifications.filter {ChatNotifications.isMessage(it.tag)||it.tag==ChatNotifications.SUMMARY_TAG}.forEach {manager.cancel(it.tag,it.id)}
-            }; instance?.let { service -> service.handler.post {
+            }
+                if(!updated.optBoolean("friendEnabled",true) || !updated.optBoolean("messagePreview",true))
+                    manager.activeNotifications.filter {it.tag=="rs-friend" || it.tag?.startsWith("rs-friend:")==true}.forEach {manager.cancel(it.tag,it.id)}
+                updated.optJSONArray("mutedPeers")?.let {list -> for(i in 0 until list.length())
+                    ChatNotifications.clearPeer(manager,prefs.getString("account","")?:"",list.getString(i))}
+                ChatNotifications.refreshSummary(context,prefs.getString("account","")?:"",updated.optBoolean("messagePreview",true))
+                instance?.let { service -> service.handler.post {
                 val config=JSONObject(value);val muted=config.optJSONArray("mutedPeers")?.let { list -> (0 until list.length()).any {list.getString(it)==service.ringPeer} } ?: false
                 if(!config.optBoolean("callSound",true)||muted) service.silence()
             } } }
@@ -72,16 +83,17 @@ class MessagingService : Service() {
         }
         const val PREFS = "rs_messaging"
         private const val STANDBY = 49000
-        fun start(context: Context, baseUrl: String, token: String, account: String) {
+        fun start(context: Context, baseUrl: String, token: String, account: String): Unit = synchronized(notificationLock) {
             val prefs = context.getSharedPreferences(PREFS, MODE_PRIVATE)
             if (prefs.getString("account", "") != account) {
+                prefs.edit().remove("peer").apply()
                 clearNotifications(context); notices.clear(); instance?.handler?.post { instance?.silence() }
             }
             prefs.edit().putString("baseUrl", baseUrl).putString("token", token)
                 .putString("account", account).apply()
             context.startForegroundService(Intent(context, MessagingService::class.java))
         }
-        fun stop(context: Context) {
+        fun stop(context: Context): Unit = synchronized(notificationLock) {
             context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove("token").remove("account").remove("peer").apply()
             notices.clear()
             clearNotifications(context)
@@ -89,7 +101,7 @@ class MessagingService : Service() {
         }
         private fun clearNotifications(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java)
-            manager.activeNotifications.filter { ChatNotifications.isMessage(it.tag) || it.tag == "rs-call" || it.tag == "rs-friend" || it.tag == "rs-message-summary" }
+            manager.activeNotifications.filter { ChatNotifications.isMessage(it.tag) || it.tag == "rs-call" || (it.tag == "rs-friend" || it.tag?.startsWith("rs-friend:")==true) || it.tag == "rs-message-summary" }
                 .forEach { manager.cancel(it.tag, it.id) }
         }
     }
@@ -255,6 +267,7 @@ class MessagingService : Service() {
         val friendIds = (0 until friends.length()).map { friends.getJSONObject(it).getString("id") }.toSet()
         ChatNotifications.children(manager,account).filter {!friendIds.contains(it.notification.extras.getString(ChatNotifications.PEER))}.forEach {manager.cancel(it.tag,it.id)}
         for (index in 0 until friends.length()) {
+            if(!current(token))return
             val friend = friends.getJSONObject(index)
             val peer = friend.getString("id")
             val key = "seen:$account:$peer"
@@ -266,48 +279,75 @@ class MessagingService : Service() {
             val visible = MainActivity.messagingForeground && prefs.getString("peer", "") == peer
             val viewedKey="viewed:$account:$peer"
             if(!prefs.contains(viewedKey))prefs.edit().putLong(viewedKey,friend.optString("notificationReadSeq","0").toLongOrNull() ?: 0).apply()
-            if (MessageNoticePolicy.shouldClear(visible,friend.optBoolean("blocked"),muted.contains(peer))) {
+            // Reconcile posted content against the server's current bounded preview window.
+            // This also removes withdrawn and cleared messages without marking them read.
+            if(raw!=null) {
+                val valid=(0 until raw.length()).map {raw.getJSONObject(it).optString("seq").toLongOrNull()}.toSet()
+                ChatNotifications.children(manager,account).filter {it.notification.extras.getString(ChatNotifications.PEER)==peer && !valid.contains(it.notification.extras.getLong(ChatNotifications.SEQUENCE))}
+                    .forEach {manager.cancel(it.tag,it.id)}
+            }
+            if (!settings.optBoolean("messageEnabled",true) || MessageNoticePolicy.shouldClear(visible,friend.optBoolean("blocked"),muted.contains(peer))) {
                 ChatNotifications.clearPeer(manager,account,peer)
                 prefs.edit().putLong(viewedKey,maxOf(seq,prefs.getLong(viewedKey,0))).apply()
             }
             var delivered=true
-            if (!friend.optBoolean("blocked") && !muted.contains(peer) && MessagingPolicy.shouldNotify(prefs.getLong(key, 0), seq, unread, visible,prefs.contains(key))) {
+            if (settings.optBoolean("messageEnabled",true) && !friend.optBoolean("blocked") && !muted.contains(peer) && MessagingPolicy.shouldNotify(prefs.getLong(key, 0), seq, unread, visible,prefs.contains(key))) {
                 val name = friend.optString("remark").ifEmpty { friend.getString("name") }
                 val recent=if(raw==null) listOf(MessagePreview(seq,MessageNoticePolicy.boundedText(friend.optString("lastIncomingText")),0L)) else
                     (0 until raw.length()).map {i->raw.getJSONObject(i).let {MessagePreview(it.getString("seq").toLong(),MessageNoticePolicy.boundedText(it.optString("text")),it.optLong("createdAt"))}}
                 val messages=MessageNoticePolicy.previews(recent,maxOf(prefs.getLong(viewedKey,0),prefs.getLong(key,0)))
                 if(messages.isNotEmpty()) {
                     val preview=settings.optBoolean("messagePreview",true)
-                    if (MainActivity.messagingForeground)foregroundMessage(account,peer,friend,name,messages.last().text,preview,messages.last().at)
-                    val avatar=if(preview)avatarBitmap(token,peer,friend.optString("avatarId","cat"),friend.optString("avatarRevision")) else null
-                    messages.forEachIndexed {messageIndex,message->
+                    val avatar=if(preview && !MainActivity.messagingForeground)avatarBitmap(token,peer,friend.optString("avatarId","cat"),friend.optString("avatarRevision")) else null
+                    synchronized(notificationLock) {
                         if(!current(token))return
-                        if(!delivered)return@forEachIndexed
-                        // Avatar I/O may finish after the user has opened/read this chat.
-                        if((MainActivity.messagingForeground && prefs.getString("peer","")==peer) ||
-                            message.seq<=prefs.getLong(viewedKey,0))return@forEachIndexed
-                        if(JSONObject(settings(this)).optBoolean("messagePreview",true)!=preview) {delivered=false;return@forEachIndexed}
-                        val notification=ChatNotifications.child(this,account,peer,name,message,preview,settings.optBoolean("messageSound",true),messageIndex==messages.lastIndex,avatar)
-                        delivered=postNotice(ChatNotifications.tag(account,peer,message.seq),0,notification)
-                        if(delivered){prefs.edit().putLong(key,message.seq).apply();ChatNotifications.trim(manager,account)}
+                        // Settings and visible chat can change during network/avatar I/O.
+                        if(JSONObject(settings(this)).toString()!=settings.toString()) { delivered=false }
+                        else if(MainActivity.messagingForeground && prefs.getString("peer","")==peer) {
+                            viewed(this,account,peer,seq)
+                        } else if(MainActivity.messagingForeground) {
+                            foregroundMessage(account,peer,friend,name,messages.last().text,preview,messages.last().at)
+                        } else {
+                            messages.forEachIndexed {messageIndex,message->
+                                if(!delivered || message.seq<=prefs.getLong(viewedKey,0))return@forEachIndexed
+                                val alert=messageIndex==messages.lastIndex && MessagingPolicy.shouldAlert(prefs.getLong("lastAlert:$account",0),message.at,System.currentTimeMillis())
+                                val notification=ChatNotifications.child(this,account,peer,name,message,preview,settings.optBoolean("messageSound",true),alert,avatar)
+                                delivered=postNotice(ChatNotifications.tag(account,peer,message.seq),0,notification)
+                                if(delivered) {
+                                    prefs.edit().putLong(key,message.seq).apply()
+                                    if(alert && settings.optBoolean("messageSound",true))prefs.edit().putLong("lastAlert:$account",System.currentTimeMillis()).apply()
+                                    ChatNotifications.trim(manager,account)
+                                }
+                            }
+                        }
                     }
                 }
             }
+            if (!current(token))return
             if (delivered && (!prefs.contains(key) || prefs.getLong(key,0)<seq)) prefs.edit().putLong(key, seq).apply()
         }
-        refreshMessageSummary(account,settings.optBoolean("messagePreview",true))
+        synchronized(notificationLock) {
+            if(!current(token))return
+            refreshMessageSummary(account,JSONObject(settings(this)).optBoolean("messagePreview",true))
+        }
         val requests = data.getJSONArray("requests")
-        val requestIds = (0 until requests.length()).map { requests.getJSONObject(it).getString("id").hashCode() }.toSet()
-        manager.activeNotifications.filter { it.tag == "rs-friend" && !requestIds.contains(it.id) }.forEach { manager.cancel(it.tag, it.id) }
+        val requestTags=(0 until requests.length()).map {"rs-friend:$account:${requests.getJSONObject(it).getString("id")}"}.toSet()
+        manager.activeNotifications.filter {it.tag=="rs-friend" || (it.tag?.startsWith("rs-friend:")==true && (!settings.optBoolean("friendEnabled",true) || !requestTags.contains(it.tag)))}.forEach {manager.cancel(it.tag,it.id)}
         for (index in 0 until requests.length()) {
             val request = requests.getJSONObject(index)
-            val key = "request:$account:${request.getString("id")}:${request.optString("createdAt") }"
-            if (!prefs.getBoolean(key, false)) {
-                val delivered=postNotice("rs-friend", request.getString("id").hashCode(), Notification.Builder(this, if(settings.optBoolean("messageSound",true)) "rs_messages_v2" else "rs_messages_quiet")
-                    .setSmallIcon(R.drawable.ic_stat_remotescreen).setContentTitle("新的好友申请")
-                    .setContentText(request.getString("name") + " 希望添加你为好友")
-                    .setContentIntent(openIntent("friends", "", "")).setAutoCancel(true).build())
-                if(delivered)prefs.edit().putBoolean(key, true).apply()
+            val key = "request:$account:${request.getString("id")}:${request.optString("createdAt")}"
+            synchronized(notificationLock) {
+                if(!current(token))return
+                val config=JSONObject(settings(this))
+                if(!config.optBoolean("friendEnabled",true))prefs.edit().putBoolean(key,true).apply()
+                if (!prefs.getBoolean(key, false)) {
+                    val alert=config.optBoolean("messageSound",true) && MessagingPolicy.shouldAlert(prefs.getLong("lastAlert:$account",0),request.optLong("createdAt"),System.currentTimeMillis())
+                    val notification=ChatNotifications.friend(this,account,request.getString("id"),request.getString("name"),config.optBoolean("messagePreview",true),alert,openIntent("friends", "", ""))
+                    if(postNotice("rs-friend:$account:${request.getString("id")}",0,notification)) {
+                        prefs.edit().putBoolean(key,true).apply()
+                        if(alert)prefs.edit().putLong("lastAlert:$account",System.currentTimeMillis()).apply()
+                    }
+                }
             }
         }
         if (!current(token)) return
@@ -319,12 +359,14 @@ class MessagingService : Service() {
             val id = call.getString("id"); active.add(id)
             if(!MessagingPolicy.showIncomingCall(call.optString("status"),true,stopped.contains(id),call.optLong("createdAt")+45000,System.currentTimeMillis()))continue
             if (ringing.contains(id) && manager.activeNotifications.any { it.tag=="rs-call" && it.id==id.hashCode() }) continue
-            val audible=settings.optBoolean("callSound",true) && !muted.contains(call.getString("peerId"))
             val video = call.optString("kind") == "video"
             val accept = openIntent("answer", call.getString("peerId"), id)
             val reject = openIntent("reject", call.getString("peerId"), id)
             val avatar=avatarBitmap(token,call.getString("peerId"),call.optString("peerAvatarId"),call.optString("peerAvatarRevision"))
             if(!current(token))return
+            val callSettings=JSONObject(settings(this))
+            val callMuted=callSettings.optJSONArray("mutedPeers")?.let {list->(0 until list.length()).any {list.getString(it)==call.getString("peerId")}} ?: false
+            val audible=callSettings.optBoolean("callSound",true) && !callMuted
             val builder = Notification.Builder(this, if(audible) "rs_calls_v3" else "rs_calls_quiet_v3").setSmallIcon(R.drawable.ic_stat_remotescreen)
                 .setLargeIcon(avatar).setContentTitle(call.getString("peerName")).setContentText(if (video) "视频来电" else "语音来电")
                 .setCategory(Notification.CATEGORY_CALL).setVisibility(Notification.VISIBILITY_PRIVATE)
@@ -340,12 +382,12 @@ class MessagingService : Service() {
             if(audible)notification.flags=notification.flags or Notification.FLAG_INSISTENT
             // Avatar loading may finish after the user answers. Serialize the
             // final check and delivery with cancellation to avoid a stale alert.
-            synchronized(callNotificationLock) {
-                if(current(token) && MessagingPolicy.showIncomingCall(call.optString("status"),true,stopped.contains(id),call.optLong("createdAt")+45000,System.currentTimeMillis()) &&
+            synchronized(notificationLock) { synchronized(callNotificationLock) {
+                if(JSONObject(settings(this)).toString()==callSettings.toString() && current(token) && MessagingPolicy.showIncomingCall(call.optString("status"),true,stopped.contains(id),call.optLong("createdAt")+45000,System.currentTimeMillis()) &&
                     postNotice("rs-call", id.hashCode(), notification)) {
                     ringing.add(id);ringId=id;ringPeer=call.getString("peerId")
                 }
-            }
+            } }
         }
         handler.post { if(ringId.isNotEmpty() && !active.contains(ringId) && !ringId.startsWith("test-")) silence() }
         stopped.retainAll(active)
@@ -355,10 +397,12 @@ class MessagingService : Service() {
     private fun openIntent(action: String, peer: String, call: String,seq:Long=0): PendingIntent {
         val intent = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            data=android.net.Uri.Builder().scheme("remotescreen-notice").authority(action)
+                .appendPath(prefs.getString("account", "")).appendPath(peer).appendPath(call).build()
             putExtra("messagingAccount", prefs.getString("account", ""))
             putExtra("messagingSeq",seq);putExtra("messagingAction", action); putExtra("messagingPeer", peer); putExtra("messagingCall", call)
         }
-        return PendingIntent.getActivity(this, (action + peer + call).hashCode(), intent,
+        return PendingIntent.getActivity(this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
     override fun onTaskRemoved(rootIntent:Intent?) {
