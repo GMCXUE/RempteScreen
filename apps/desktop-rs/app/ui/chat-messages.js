@@ -81,7 +81,7 @@
    }
    bubble.append(node('small',new Date(Number(message.createdAt)).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})));
    if(message.localStatus){
-    if(message.localStatus==='failed'){const retry=node('button','发送失败 · 重试','chat-send-retry');retry.type='button';retry.title=message.localError||'发送失败';retry.onclick=()=>onRetry?.(message.clientId);bubble.append(retry);}
+    if(message.localStatus==='failed'){if(message.localError){const reason=node('span',message.localError,'chat-send-error');reason.setAttribute('role','status');bubble.append(reason);}const retry=node('button','发送失败 · 重试','chat-send-retry');retry.type='button';retry.title=message.localError||'发送失败';retry.onclick=()=>onRetry?.(message.clientId);bubble.append(retry);}
     else bubble.append(node('small','发送中','chat-send-state'));
     row.append(avatar,bubble);return row;
    }

@@ -581,7 +581,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     with WidgetsBindingObserver {
   final _draft = TextEditingController();
   final _draftFocus = FocusNode();
-  final List<ChatDraftMedia> _draftImages = [];
   String? _composeError;
   final _scroll = ScrollController();
   int _requestVersion = 0;
@@ -701,9 +700,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (notice.depth != 0) return false;
     if (notice is ScrollStartNotification && notice.dragDetails != null) {
       _keepAtBottom = false;
+      unawaited(NativeMessaging.setVisiblePeer(null).catchError((_) {}));
     }
     if (notice is ScrollEndNotification) {
       _keepAtBottom = notice.metrics.extentAfter < 80;
+      unawaited(_load());
     }
     return false;
   }
@@ -711,7 +712,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Future<void> _load({bool older = false}) async {
     if (!mounted) return;
     unawaited(NativeMessaging.setVisiblePeer(
-            _visible && ModalRoute.of(context)?.isCurrent == true
+            _visible && _keepAtBottom && _highlightMessage == null && _messages.isNotEmpty && ModalRoute.of(context)?.isCurrent == true
                 ? widget.friend['id']
                 : null)
         .catchError((_) {}));
@@ -816,6 +817,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       if (!older &&
           last != null &&
           _visible &&
+          _keepAtBottom &&
+          _highlightMessage == null &&
           ModalRoute.of(context)?.isCurrent == true &&
           last['seq'] != _readSeq) {
         try {
@@ -841,17 +844,8 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
 
   Future<void> _send() async {
     final text = _draft.text.trim();
-    if (_picking || (text.isEmpty && _draftImages.isEmpty)) return;
+    if (_picking || text.isEmpty) return;
     final batch = [
-      for (final image in _draftImages)
-        OutgoingChatMessage(
-            id: image.id,
-            kind: image.kind,
-            image: image.kind == 'image' ? image.source : null,
-            bytes: image.bytes,
-            videoPath: image.path,
-            videoName: image.name,
-            videoSize: image.sizeBytes),
       if (text.isNotEmpty)
         OutgoingChatMessage(
             id: 'm_${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}',
@@ -862,7 +856,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
       _outbox.enqueue(batch);
       setState(() {
         _highlightMessage = null;
-        _draftImages.clear();
         _draft.clear();
         _composeError = null;
         _moreOpen = false;
@@ -1044,8 +1037,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (_picking) return;
     _draftFocus.unfocus();
     setState(() => _moreOpen = false);
-    await _prepareMedia(
-        () => pickChatMedia(limit: 9 - _draftImages.length, source: source));
+    await _prepareMedia(() => pickChatMedia(limit: 9, source: source));
   }
 
   void _toggleMore() {
@@ -1057,10 +1049,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Future<void> _prepareMedia(
       Future<List<ChatPickedMedia>> Function() read) async {
     if (_picking) return;
-    if (_draftImages.length >= 9) {
-      _copyFeedback.show(context, '最多添加 9 项图片或视频', error: true);
-      return;
-    }
     final peerId = widget.friend['id'], accountId = widget.account.id;
     setState(() => _picking = true);
     try {
@@ -1071,23 +1059,24 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
           selected.isEmpty) {
         return;
       }
-      if (selected.length + _draftImages.length > 9) {
-        throw Exception('最多添加 9 项图片或视频');
-      }
-      setState(() {
-        for (final media in selected) {
-          _draftImages.add(ChatDraftMedia(
+      if (selected.length > 9) throw Exception('最多添加 9 项图片或视频');
+      _outbox.enqueue([
+        for (final media in selected)
+          OutgoingChatMessage(
               id: 'media_${DateTime.now().microsecondsSinceEpoch}_${Random.secure().nextInt(1 << 32)}',
               kind: media.kind,
-              source: media.source,
+              image: media.kind == 'image' ? media.source : null,
               bytes: media.bytes,
-              path: media.path,
-              name: media.name,
-              sizeBytes: media.sizeBytes));
-        }
+              videoPath: media.path,
+              videoName: media.name,
+              videoSize: media.sizeBytes),
+      ]);
+      setState(() {
+        _highlightMessage = null;
         _composeError = null;
+        _moreOpen = false;
       });
-      _draftFocus.requestFocus();
+      _scrollToBottom(force: true);
     } catch (error) {
       if (mounted) {
         final text = error is PlatformException
@@ -1424,61 +1413,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          if (_draftImages.isNotEmpty)
-                                            SizedBox(
-                                                height: 86,
-                                                child: ListView.separated(
-                                                    key: const ValueKey(
-                                                        'chat-draft-images'),
-                                                    scrollDirection:
-                                                        Axis.horizontal,
-                                                    padding: const EdgeInsets
-                                                        .fromLTRB(
-                                                        10, 10, 10, 0),
-                                                    itemCount:
-                                                        _draftImages.length,
-                                                    separatorBuilder: (_, __) =>
-                                                        const SizedBox(
-                                                            width: 8),
-                                                    itemBuilder:
-                                                        (context, index) {
-                                                      final image =
-                                                          _draftImages[index];
-                                                      return SizedBox(
-                                                          width: 76,
-                                                          height: 76,
-                                                          child: Stack(
-                                                              children: [
-                                                                Positioned.fill(
-                                                                    child: ClipRRect(
-                                                                        borderRadius:
-                                                                            BorderRadius.circular(
-                                                                                8),
-                                                                        child: ColoredBox(
-                                                                            color: const Color(
-                                                                                0xFFEEF2F7),
-                                                                            child: image.kind == 'video'
-                                                                                ? const Center(child: Icon(Icons.play_circle_outline_rounded, size: 34))
-                                                                                : Image.memory(image.bytes!, fit: BoxFit.contain, cacheWidth: 152, semanticLabel: '待发送图片 ${index + 1}')))),
-                                                                Positioned(
-                                                                    top: 0,
-                                                                    right: 0,
-                                                                    child: IconButton(
-                                                                        tooltip: '移除${image.kind == 'video' ? '视频' : '图片'} ${index + 1}',
-                                                                        onPressed: _picking
-                                                                            ? null
-                                                                            : () {
-                                                                                setState(() {
-                                                                                  _draftImages.remove(image);
-                                                                                  _composeError = null;
-                                                                                });
-                                                                                _draftFocus.requestFocus();
-                                                                              },
-                                                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                                                                        padding: const EdgeInsets.all(5),
-                                                                        icon: const DecoratedBox(decoration: BoxDecoration(color: Color(0xD9253047), shape: BoxShape.circle), child: Icon(Icons.close_rounded, color: Colors.white, size: 20))))
-                                                              ]));
-                                                    })),
                                           TextField(
                                               controller: _draft,
                                               focusNode: _draftFocus,
@@ -1528,15 +1462,11 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       input!,
-                                      if (draft.text.isNotEmpty ||
-                                          _draftImages.isNotEmpty) ...[
+                                      if (draft.text.isNotEmpty) ...[
                                         const SizedBox(width: 8),
                                         FilledButton(
                                             onPressed: _picking ||
-                                                    (draft.text
-                                                            .trim()
-                                                            .isEmpty &&
-                                                        _draftImages.isEmpty)
+                                                    draft.text.trim().isEmpty
                                                 ? null
                                                 : _send,
                                             child: const Text('发送')),
@@ -1707,6 +1637,8 @@ Future<void> showMessageAlertSettings(BuildContext context) async {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                             for (final item in [
+                              ('messageEnabled', '聊天消息通知'),
+                              ('friendEnabled', '好友申请通知'),
                               ('messageSound', '消息提示音'),
                               ('messagePreview', '通知显示消息内容'),
                               ('callSound', '来电铃声与振动')

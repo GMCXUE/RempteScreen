@@ -71,6 +71,7 @@ void main() {
   late File video;
   late List<String> choices;
   late List<Map> pickerArgs;
+  VoidCallback? beforeConfirm;
   setUp(() async {
     chatOutbox.reset();
     SharedPreferences.setMockInitialValues(
@@ -83,10 +84,12 @@ void main() {
     await video.writeAsBytes(bytes);
     choices = [];
     pickerArgs = [];
+    beforeConfirm = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(picker, (call) async {
       if (call.method == 'pickMedia') {
         pickerArgs.add(Map.from(call.arguments));
+        beforeConfirm?.call();
         return choices;
       }
       return null;
@@ -203,17 +206,16 @@ void main() {
       await pumpChat(tester);
       await tester.tap(find.byKey(const ValueKey('chat-more-button')));
       await pumpChat(tester);
+      beforeConfirm = () => tester
+          .widget<TextField>(find.byType(TextField))
+          .controller!
+          .text = '保留文字草稿';
       await tester.runAsync(() => http.runWithClient(() async {
             await tester.tap(find.text('图片与视频'));
             await Future<void>.delayed(const Duration(milliseconds: 200));
           }, clientFactory));
       await pumpChat(tester);
-      expect(find.byTooltip('移除图片 1'), findsOneWidget);
-      expect(find.byTooltip('移除图片 2'), findsOneWidget);
-      expect(find.byTooltip('移除视频 3'), findsOneWidget);
-      expect(uploads, 0);
-      await tester.enterText(find.byType(TextField), '混合配文');
-      await tester.tap(find.text('发送'));
+      expect(find.byKey(const ValueKey('chat-draft-images')), findsNothing);
       for (var i = 0;
           i < 60 &&
               (uploads == 0 ||
@@ -228,7 +230,8 @@ void main() {
       await pumpChat(tester);
       expect(find.byTooltip('移除视频 3'), findsNothing);
       expect(tester.widget<TextField>(find.byType(TextField)).controller!.text,
-          isEmpty);
+          '保留文字草稿');
+      expect(fixture.requests.where((r) => r['op'] == 'send'), isEmpty);
       expect(fixture.imageAttempts, 2);
       expect(uploads, 1,
           reason:

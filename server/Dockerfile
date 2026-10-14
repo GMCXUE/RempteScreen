@@ -11,7 +11,7 @@ COPY src ./src
 COPY scripts ./scripts
 
 # sharp 安装对应平台的预编译 libvips，保留 optional dependencies。
-RUN apk add --no-cache ffmpeg && npm install --omit=dev
+RUN apk add --no-cache ffmpeg && npm install --omit=dev && node scripts/check-video-runtime.mjs
 
 ENV NODE_ENV=production
 ENV PORT=8787

@@ -195,7 +195,8 @@ const server = http.createServer(async (request, response) => {
     if (result && result.__sse) return;
 
     if (pathname !== '/v1/health') {
-      const detail = result.body?.deviceId ? `deviceId=${result.body.deviceId}` : '';
+      const detail = pathname.startsWith('/v1/social/videos/') && result.body?.error
+        ? result.body.error.message : result.body?.deviceId ? `deviceId=${result.body.deviceId}` : '';
       log(request.method, pathname, result.status, detail);
     }
     send(response, result.status, result.body);

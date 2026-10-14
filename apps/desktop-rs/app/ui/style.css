@@ -565,6 +565,7 @@ button:focus-visible, .nav-item:focus-visible { outline: 3px solid #b9d5ff; outl
 .chat-draft-image button {position:absolute;right:3px;top:3px;width:21px;height:21px;padding:0;border:0;border-radius:50%;background:#253047d9;color:white;font-size:16px;line-height:21px;}
 .chat-compose-error {margin:0;padding:0 12px 8px;color:#d92d20;font-size:12px;white-space:normal;}
 .chat-send-retry {display:block;margin:4px 0 0 auto;padding:4px 6px;background:transparent;border:0;color:#d92d20;font-size:12px;cursor:pointer;}
+.chat-send-error {display:block;color:#d92d20;font-size:11px;line-height:1.3;white-space:pre-wrap;overflow-wrap:anywhere;max-width:240px;}
 .chat-send-state {color:#98a2b3;}
 #social-actions { position: relative; }
 .social-menu summary { list-style: none; padding: 4px 8px; color: #8390a5; cursor: pointer; }

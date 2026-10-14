@@ -1,7 +1,7 @@
 name: remotescreen
 description: RemoteScreen —— 投送本机屏幕，或观看其他设备的屏幕
 publish_to: none
-version: 0.2.23+2026101404
+version: 0.2.24+2026101405
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

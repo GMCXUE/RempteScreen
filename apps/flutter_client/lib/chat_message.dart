@@ -241,12 +241,19 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                               child:
                                   Stack(alignment: Alignment.center, children: [
                                 bytes == null
-                                    ? SizedBox(
+                                    ? Container(
                                         width: 180,
                                         height: 140,
+                                        color: video
+                                            ? const Color(0xFF29374B)
+                                            : null,
                                         child: Center(
-                                            child:
-                                                Text(video ? '视频' : '图片无法显示')))
+                                            child: Text(video ? '视频' : '图片无法显示',
+                                                style: video
+                                                    ? const TextStyle(
+                                                        color:
+                                                            Color(0xFFB7C7DB))
+                                                    : null)))
                                     : SizedBox(
                                         width: width * scale,
                                         height: height * scale,
@@ -305,17 +312,32 @@ class _ChatMessageBubbleState extends State<ChatMessageBubble> {
                 const SizedBox(height: 6),
                 if (message['localStatus'] != null)
                   message['localStatus'] == 'failed'
-                      ? Tooltip(
-                          message: message['localError'] ?? '发送失败',
-                          child: TextButton(
-                              onPressed: onRetry,
-                              style: TextButton.styleFrom(
-                                  foregroundColor: const Color(0xFFD92D20),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2),
-                                  minimumSize: const Size(0, 28)),
-                              child: const Text('发送失败 · 重试',
-                                  style: TextStyle(fontSize: 12))))
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                              if ((message['localError'] as String? ?? '')
+                                  .isNotEmpty)
+                                Text(message['localError'],
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        height: 1.3,
+                                        color: Color(0xFFD92D20))),
+                              Tooltip(
+                                  message: message['localError'] ?? '发送失败',
+                                  child: TextButton(
+                                      onPressed: onRetry,
+                                      style: TextButton.styleFrom(
+                                          foregroundColor:
+                                              const Color(0xFFD92D20),
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 6, vertical: 2),
+                                          minimumSize: const Size(0, 28)),
+                                      child: const Text('发送失败 · 重试',
+                                          style: TextStyle(fontSize: 12))))
+                            ])
                       : const Text('发送中',
                           style: TextStyle(
                               fontSize: 12, color: Color(0xFF98A2B3))),

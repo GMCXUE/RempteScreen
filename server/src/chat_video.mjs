@@ -15,8 +15,17 @@ export const chatVideoMaxBytes=50*1024*1024;
 let processors=0;
 const fail=(status,message)=>{throw Object.assign(new Error(message),{statusCode:status});};
 const errors=error=>({status:error.statusCode??500,body:{error:{code:'chat_video',message:error.statusCode?error.message:'视频处理失败，请重试'}}});
+async function mediaCommand(command,args,options){
+ try{return await run(command,args,options);}catch(error){
+  if(['ENOENT','EACCES'].includes(error.code)){
+   console.warn('[chat_video] media executable unavailable');
+   fail(503,'视频服务暂不可用，请稍后重试');
+  }
+  throw error;
+ }
+}
 async function userFor(request){const s=await resolveSession(/^Bearer\s+(.+)$/i.exec(request.headers.authorization??'')?.[1]);if(!s)fail(401,'请先登录');return s.user;}
-async function probe(path){try{return JSON.parse((await run(process.env.CHAT_FFPROBE??'ffprobe',['-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',path],{timeout:20000,maxBuffer:1024*1024})).stdout);}catch{fail(400,'无法读取视频，请选择其他 MP4 或 MOV 视频');}}
+async function probe(path){try{return JSON.parse((await mediaCommand(process.env.CHAT_FFPROBE??'ffprobe',['-v','error','-protocol_whitelist','file,pipe','-show_format','-show_streams','-of','json',path],{timeout:20000,maxBuffer:1024*1024})).stdout);}catch(error){if(error.statusCode===503)throw error;fail(400,'无法读取视频，请选择其他 MP4 或 MOV 视频');}}
 export async function normalizeChatVideo(input,dir){
  const info=await probe(input),stream=info.streams?.find(s=>s.codec_type==='video'),duration=Number(info.format?.duration);
  if(!stream||!String(info.format?.format_name).split(',').includes('mov'))fail(400,'请选择 MP4 或 MOV 视频');
@@ -25,11 +34,11 @@ export async function normalizeChatVideo(input,dir){
  if(!Number.isSafeInteger(stream.width)||!Number.isSafeInteger(stream.height)||stream.width<=0||stream.height<=0||stream.width*stream.height>33000000)fail(400,'视频分辨率过大，请选择其他视频');
  const output=join(dir,'video.mp4');
  try{
-  await run(process.env.CHAT_FFMPEG??'ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',input,'-map','0:v:0','-map','0:a:0?','-map_metadata','-1','-vf',"scale=w='min(1280,iw)':h='min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",'-r','30','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-c:a','aac','-b:a','96k','-movflags','+faststart','-threads','2',output],{timeout:180000,maxBuffer:1024*1024});
- }catch{fail(400,'无法处理视频，请选择其他 MP4 或 MOV 视频');}
+  await mediaCommand(process.env.CHAT_FFMPEG??'ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',input,'-map','0:v:0','-map','0:a:0?','-map_metadata','-1','-vf',"scale=w='min(1280,iw)':h='min(1280,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",'-r','30','-c:v','libx264','-preset','veryfast','-crf','23','-pix_fmt','yuv420p','-c:a','aac','-b:a','96k','-movflags','+faststart','-threads','2',output],{timeout:180000,maxBuffer:1024*1024});
+ }catch(error){if(error.statusCode===503)throw error;fail(400,'无法处理视频，请选择其他 MP4 或 MOV 视频');}
  if((await stat(output)).size>chatVideoMaxBytes)fail(400,'视频过大，请选择 50 MB 以内的视频');
  const normalized=await probe(output),v=normalized.streams.find(s=>s.codec_type==='video');
- const thumb=(await run(process.env.CHAT_FFMPEG??'ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',output,'-frames:v','1','-vf','scale=320:320:force_original_aspect_ratio=decrease','-f','image2pipe','-c:v','mjpeg','pipe:1'],{timeout:20000,maxBuffer:512*1024,encoding:'buffer'})).stdout;
+ const thumb=(await mediaCommand(process.env.CHAT_FFMPEG??'ffmpeg',['-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',output,'-frames:v','1','-vf','scale=320:320:force_original_aspect_ratio=decrease','-f','image2pipe','-c:v','mjpeg','pipe:1'],{timeout:20000,maxBuffer:512*1024,encoding:'buffer'})).stdout;
  const data=await readFile(output);
  return {data,metadata:{width:v.width,height:v.height,duration:Math.round(Number(normalized.format.duration)*1000),bytes:data.length,mime:'video/mp4',sha256:createHash('sha256').update(data).digest('hex'),thumbnail:'data:image/jpeg;base64,'+thumb.toString('base64')}};
 }
