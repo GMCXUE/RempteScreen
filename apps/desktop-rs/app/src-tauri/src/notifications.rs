@@ -28,7 +28,7 @@ extern "C" {
     fn rs_notifications_post(json: *const std::ffi::c_char);
     fn rs_notifications_status();
     fn rs_notifications_remove(id: *const std::ffi::c_char);
-    fn rs_chat_notifications_remove_peer(peer: *const std::ffi::c_char);
+    fn rs_chat_notifications_remove_peer(account: *const std::ffi::c_char, peer: *const std::ffi::c_char);
     fn rs_call_panel_update(json: *const std::ffi::c_char);
     fn rs_call_panel_dismiss(id: *const std::ffi::c_char);
     fn rs_call_panel_prepare_answer(id: *const std::ffi::c_char);
@@ -97,10 +97,10 @@ fn notification_number(id: &str) -> i32 {
     use std::hash::{Hash,Hasher};
     let mut h=std::collections::hash_map::DefaultHasher::new();id.hash(&mut h);(h.finish() & 0x7fffffff) as i32
 }
-fn remove_message(app: &tauri::AppHandle, peer: &str) {
+fn remove_message(app: &tauri::AppHandle, account: &str, peer: &str) {
     let id=format!("message-{peer}");
     #[cfg(target_os="macos")]
-    if let Ok(value)=std::ffi::CString::new(peer) { unsafe {rs_chat_notifications_remove_peer(value.as_ptr());} }
+    if let (Ok(owner),Ok(value))=(std::ffi::CString::new(account),std::ffi::CString::new(peer)) { unsafe {rs_chat_notifications_remove_peer(owner.as_ptr(),value.as_ptr());} }
     #[cfg(not(target_os="macos"))]
     let _=app.notification().remove_active(vec![notification_number(&id)]);
 }
@@ -249,7 +249,7 @@ fn update_settings(
             if let Ok(path)=app.path().app_data_dir() {
                 if let Ok(bytes)=std::fs::read(path.join("notification-seen.json")) {
                     if let Ok(seen)=serde_json::from_slice::<HashMap<String,u64>>(&bytes) {
-                        for key in seen.keys(){if let Some((_,peer))=key.split_once(':'){remove_message(&app,peer);}}
+                        for key in seen.keys(){if let Some((owner,peer))=key.split_once(':'){remove_message(&app,owner,peer);}}
                     }
                 }
             }
@@ -509,7 +509,7 @@ pub fn start(app: tauri::AppHandle) {
                     .lock()
                     .unwrap()
                     .clear();
-                for key in seen.keys(){if let Some((_,peer))=key.split_once(':'){remove_message(&app,peer);}}
+                for key in seen.keys(){if let Some((owner,peer))=key.split_once(':'){remove_message(&app,owner,peer);}}
                 delivered_messages.clear();
                 account.clear();
                 avatar_cache.clear();
@@ -540,7 +540,7 @@ pub fn start(app: tauri::AppHandle) {
                     .lock()
                     .unwrap()
                     .clear();
-                for key in seen.keys(){if let Some((previous,peer))=key.split_once(':'){if previous!=user{remove_message(&app,peer);}}}
+                for key in seen.keys(){if let Some((previous,peer))=key.split_once(':'){if previous!=user{remove_message(&app,previous,peer);}}}
                 delivered_messages.clear();
                 account = user.to_owned();
                 requests.clear();
@@ -571,7 +571,7 @@ pub fn start(app: tauri::AppHandle) {
             if let Some(friends) = data["friends"].as_array() {
                 let eligible:HashSet<&str>=friends.iter().filter(|f|f["blocked"]!=true).filter_map(|f|f["id"].as_str()).collect();
                 let removed:Vec<_>=delivered_messages.iter().filter(|p|!eligible.contains(p.as_str())).cloned().collect();
-                for peer in removed{remove_message(&app,&peer);delivered_messages.remove(&peer);}
+                for peer in removed{remove_message(&app,user,&peer);delivered_messages.remove(&peer);}
                 for f in friends {
                     let peer = f["id"].as_str().unwrap_or_default();
                     let seq = if let Some(rows)=f["incomingMessages"].as_array() {
@@ -590,7 +590,7 @@ pub fn start(app: tauri::AppHandle) {
                         dirty=true;f["notificationReadSeq"].as_str().and_then(|v|v.parse().ok()).unwrap_or(0)
                     });
                     if visible.as_deref()==Some(peer) || f["blocked"]==true || settings.muted_peers.contains(peer) {
-                        remove_message(&app,peer);delivered_messages.remove(peer);
+                        remove_message(&app,user,peer);delivered_messages.remove(peer);
                         if floor<seq{viewed.insert(key.clone(),seq);dirty=true;}
                     }
                     if !f["blocked"].as_bool().unwrap_or(false)

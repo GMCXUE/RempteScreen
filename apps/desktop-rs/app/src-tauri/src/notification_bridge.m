@@ -85,19 +85,20 @@ void rs_notifications_remove(const char *identifier) {
     [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[value]];
 }
 
-void rs_chat_notifications_remove_peer(const char *peer) {
+void rs_chat_notifications_remove_peer(const char *account,const char *peer) {
+    NSString *owner=[NSString stringWithUTF8String:account];
     NSString *value=[NSString stringWithUTF8String:peer];UNUserNotificationCenter *center=[UNUserNotificationCenter currentNotificationCenter];
     [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification *> *notes) {
         NSMutableArray *ids=[NSMutableArray new];for(UNNotification *note in notes) {
             NSDictionary *info=note.request.content.userInfo;
-            if([info[@"kind"] isEqual:@"message"] && [info[@"peerId"] isEqual:value])[ids addObject:note.request.identifier];
+            if([info[@"kind"] isEqual:@"message"] && [info[@"accountId"] isEqual:owner] && [info[@"peerId"] isEqual:value])[ids addObject:note.request.identifier];
         }
         [center removeDeliveredNotificationsWithIdentifiers:ids];
     }];
     [center getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest *> *requests) {
         NSMutableArray *ids=[NSMutableArray new];for(UNNotificationRequest *request in requests) {
             NSDictionary *info=request.content.userInfo;
-            if([info[@"kind"] isEqual:@"message"] && [info[@"peerId"] isEqual:value])[ids addObject:request.identifier];
+            if([info[@"kind"] isEqual:@"message"] && [info[@"accountId"] isEqual:owner] && [info[@"peerId"] isEqual:value])[ids addObject:request.identifier];
         }
         [center removePendingNotificationRequestsWithIdentifiers:ids];
     }];
