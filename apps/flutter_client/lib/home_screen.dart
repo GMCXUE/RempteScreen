@@ -22,6 +22,7 @@ import 'viewer_screen.dart';
 import 'social_screen.dart';
 import 'friend_calls.dart';
 import 'native_service.dart';
+import 'message_banner.dart';
 
 /// 主界面：本机的投送信息、进行中的会话、连接其他设备、我的设备列表。
 ///
@@ -134,42 +135,71 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   bool _openingNotification = false;
+  bool _openingMessage = false;
   Future<void> _openMessageNotice(Map<String, dynamic> value) async {
-    if (!mounted || value['accountId'] != widget.account.id) return;
+    if (!mounted || _openingMessage || value['accountId'] != widget.account.id) {
+      return;
+    }
     setState(() {
       _selectedTab = 1;
       _devicesPage = false;
     });
     if (NativeMessaging.visiblePeer == value['peerId']) return;
+    _openingMessage = true;
     try {
       final data = await api.social('state');
       final friends = (data['friends'] as List).where((friend) =>
           friend['id'] == value['peerId'] && friend['blocked'] != true);
-      if (friends.isNotEmpty && mounted) {
+      if (friends.isNotEmpty &&
+          mounted &&
+          value['accountId'] == widget.account.id) {
         unawaited(appNavigatorKey.currentState?.push(MaterialPageRoute(
                 builder: (_) => PrivateChatScreen(
                     account: _account,
                     friend: Map<String, dynamic>.from(friends.first)))) ??
             Future.value());
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('暂时无法打开聊天，请在消息页面重试')));
+      }
+    } finally {
+      _openingMessage = false;
+    }
   }
 
   Future<void> _handleNotification() async {
     if (_openingNotification || !mounted) return;
+    if (messageBanners.value?.peerId == NativeMessaging.visiblePeer) {
+      messageBanners.clear();
+    }
     _openingNotification = true;
     try {
       if (DateTime.now().difference(_lastNotificationCheck).inSeconds >= 15) {
         _lastNotificationCheck = DateTime.now();
         unawaited(_ensureNotifications());
       }
-      final notice = await NativeMessaging.takeNotice();
-      if (mounted && notice?['accountId'] == widget.account.id) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(notice!['text'] as String),
-            action: SnackBarAction(
-                label: '查看', onPressed: () => _openMessageNotice(notice)),
-            duration: const Duration(seconds: 3)));
+      Map<String, dynamic>? notice;
+      // Drain the bounded native queue and show its latest eligible message.
+      for (var i = 0; i < 20; i++) {
+        final next = await NativeMessaging.takeNotice();
+        if (next == null) break;
+        if (next['accountId'] == widget.account.id &&
+            next['peerId'] != NativeMessaging.visiblePeer) {
+          notice = next;
+        }
+      }
+      if (mounted && notice != null) {
+        final settings = await NativeMessaging.settings();
+        if (!mounted) return;
+        final value = notice;
+        if (value['peerId'] != NativeMessaging.visiblePeer) {
+          messageBanners.show(MessageNotice.fromMap({
+            ...value,
+            if (settings['messagePreview'] == false) 'preview': false
+          }, () => unawaited(_openMessageNotice(value))));
+        }
       }
       final value = await NativeMessaging.takeAction();
       if (value == null ||
@@ -242,6 +272,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    messageBanners.bind(widget.account.id);
     clearAvatarProfiles();
     rememberAvatar(widget.account.id, widget.account.avatarId,
         revision: widget.account.avatarRevision);
@@ -259,6 +290,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    messageBanners.unbind(widget.account.id);
     NativeMessaging.listenForActions(null);
     WidgetsBinding.instance.removeObserver(this);
     _notificationActions?.cancel();

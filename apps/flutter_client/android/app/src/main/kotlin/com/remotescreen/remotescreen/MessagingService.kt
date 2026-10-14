@@ -166,8 +166,14 @@ class MessagingService : Service() {
             ringId=id;ringPeer="self-test";handler.postDelayed({if(ringId==id)silence()},6000)
         }
     }
-    private fun foregroundMessage(account:String,peer:String,name:String,text:String) {
-        notices.offer(mapOf("accountId" to account,"peerId" to peer,"text" to "$name：$text"))
+    private fun foregroundMessage(account:String,peer:String,friend:JSONObject,name:String,text:String,preview:Boolean) {
+        val title=if(preview)name else "RemoteScreen"
+        val body=if(preview)text else "收到新消息"
+        notices.offer(mapOf("accountId" to account,"peerId" to peer,"text" to "$title：$body",
+            "name" to title,"message" to body,"preview" to preview.toString(),
+            "avatarId" to (if(preview)friend.optString("avatarId","cat") else ""),
+            "avatarRevision" to (if(preview)friend.optString("avatarRevision") else ""),
+            "receivedAt" to System.currentTimeMillis().toString()))
         while(notices.size>20)notices.poll()
     }
     override fun onCreate() {
@@ -271,7 +277,7 @@ class MessagingService : Service() {
                 val messages=MessageNoticePolicy.previews(recent,maxOf(prefs.getLong(viewedKey,0),prefs.getLong(key,0)))
                 if(messages.isNotEmpty()) {
                     val preview=settings.optBoolean("messagePreview",true)
-                    if (MainActivity.messagingForeground)foregroundMessage(account,peer,if(preview)name else "RemoteScreen",if(preview)messages.last().text else "收到新消息")
+                    if (MainActivity.messagingForeground)foregroundMessage(account,peer,friend,name,messages.last().text,preview)
                     messages.forEachIndexed {messageIndex,message->
                         if(!current(token))return
                         if(!delivered)return@forEachIndexed

@@ -17,6 +17,7 @@ import 'app_motion.dart';
 import 'chat_motion.dart';
 import 'friend_calls.dart';
 import 'native_service.dart';
+import 'message_banner.dart';
 
 // Compare the account/contact snapshot, including nested profile fields and
 // list order. Transport-only metadata (for example serverNow) is not rendered.
@@ -1809,6 +1810,7 @@ Future<void> showMessageAlertSettings(BuildContext context) async {
                         onPressed: () async {
                           try {
                             await NativeMessaging.settings(value);
+                            messageBanners.clear();
                             if (dialogContext.mounted) {
                               Navigator.pop(dialogContext);
                             }

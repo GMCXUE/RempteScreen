@@ -8,6 +8,7 @@ import 'session_manager.dart';
 import 'app_theme.dart';
 import 'app_motion.dart';
 import 'friend_calls.dart';
+import 'message_banner.dart';
 
 /// 应用级会话管理器：投送与观看连接都由它持有，与页面生命周期无关。
 final SessionManager sessionManager = SessionManager(api: api);
@@ -113,7 +114,7 @@ class RemoteScreenApp extends StatelessWidget {
       navigatorKey: appNavigatorKey,
       builder: (context, child) => AppUpdateHost(
           navigatorKey: appNavigatorKey,
-          child: FriendCallOverlay(child: child!)),
+          child: FriendCallOverlay(child: MessageBannerHost(child: child!))),
       home: const BootGate(),
     );
   }
