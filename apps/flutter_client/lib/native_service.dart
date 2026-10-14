@@ -34,7 +34,12 @@ class NativeMessaging {
       [Map<String, dynamic>? value]) async {
     if (!Platform.isAndroid) {
       return value ??
-          {'messageSound': true, 'callSound': true, 'mutedPeers': <String>[]};
+          {
+            'messageSound': true,
+            'messagePreview': true,
+            'callSound': true,
+            'mutedPeers': <String>[]
+          };
     }
     final result = await _channel.invokeMethod<String>('messagingSettings',
         {'value': value == null ? null : jsonEncode(value)});

@@ -105,12 +105,15 @@ const operations = {
    (SELECT seq::text FROM chat_messages m WHERE m.sender_id=u.id AND m.recipient_id=$1 AND m.seq>COALESCE(p.cleared_seq,0) ORDER BY seq DESC LIMIT 1) AS incoming_seq,
    (SELECT text FROM chat_messages m WHERE m.sender_id=u.id AND m.recipient_id=$1 AND m.seq>COALESCE(p.cleared_seq,0) ORDER BY seq DESC LIMIT 1) AS incoming_text,
    (SELECT kind FROM chat_messages m WHERE m.sender_id=u.id AND m.recipient_id=$1 AND m.seq>COALESCE(p.cleared_seq,0) ORDER BY seq DESC LIMIT 1) AS incoming_kind,
+   COALESCE(p.read_seq,0)::text AS notification_read_seq,
+   COALESCE((SELECT jsonb_agg(jsonb_build_object('seq',n.seq::text,'text',left(n.text,300),'kind',n.kind,'createdAt',n.created_at) ORDER BY n.seq)
+     FROM (SELECT m.seq,m.text,m.kind,m.created_at FROM chat_messages m WHERE m.sender_id=u.id AND m.recipient_id=$1 AND m.seq>COALESCE(p.cleared_seq,0) AND m.kind NOT IN ('call','recalled') ORDER BY m.seq DESC LIMIT 5) n),'[]'::jsonb) AS incoming_messages,
    (SELECT text FROM chat_messages m WHERE ((m.sender_id=u.id AND m.recipient_id=$1) OR (m.sender_id=$1 AND m.recipient_id=u.id)) AND m.seq>COALESCE(p.cleared_seq,0) ORDER BY seq DESC LIMIT 1) AS last_text
    FROM friend_links l JOIN users u ON u.id=CASE WHEN l.low_id=$1 THEN l.high_id ELSE l.low_id END
    LEFT JOIN friend_profiles p ON p.owner_id=$1 AND p.peer_id=u.id
    WHERE (l.low_id=$1 OR l.high_id=$1) AND l.state IN ('pending','accepted') ORDER BY COALESCE(p.pinned,FALSE) DESC,l.updated_at DESC`,[user.id,Date.now()-config.heartbeat.timeoutSec*1000]);
   const blocked=await query('SELECT u.id,u.account_id AS "accountId",u.name,u.avatar_id AS "avatarId",u.avatar_revision AS "avatarRevision" FROM friend_profiles p JOIN users u ON u.id=p.peer_id WHERE p.owner_id=$1 AND p.blocked=TRUE',[user.id]);
-  return {me:{id:user.id,accountId:user.account_id,name:user.name,...avatarFields(user),...profileFields(user),email:user.email},friends:rows.filter(r=>r.state==='accepted').map(r=>({id:r.id,accountId:r.accountId,name:r.name,...avatarFields(r),...profileFields(r),remark:r.remark,blocked:r.blocked,pinned:r.pinned,online:r.online,unread:r.unread,lastText:r.last_text??'',lastIncomingSeq:r.incoming_seq??'0',lastIncomingText:r.incoming_text??'',lastIncomingKind:r.incoming_kind??'text'})),
+  return {me:{id:user.id,accountId:user.account_id,name:user.name,...avatarFields(user),...profileFields(user),email:user.email},friends:rows.filter(r=>r.state==='accepted').map(r=>({id:r.id,accountId:r.accountId,name:r.name,...avatarFields(r),...profileFields(r),remark:r.remark,blocked:r.blocked,pinned:r.pinned,online:r.online,unread:r.unread,lastText:r.last_text??'',lastIncomingSeq:r.incoming_seq??'0',lastIncomingText:r.incoming_text??'',lastIncomingKind:r.incoming_kind??'text',notificationReadSeq:r.notification_read_seq??'0',incomingMessages:r.blocked?[]:r.incoming_messages})),
    requests:rows.filter(r=>r.state==='pending' && r.requester_id!==user.id && !r.blocked).map(r=>({id:r.id,accountId:r.accountId,name:r.name,...avatarFields(r),note:r.note,createdAt:String(r.updated_at)})),
    outgoing:rows.filter(r=>r.state==='pending' && r.requester_id===user.id).map(r=>({id:r.id,accountId:r.accountId,name:r.name,...avatarFields(r)})),blocked};
  },

@@ -45,6 +45,7 @@ void rs_notifications_post(const char *json) {
         UNMutableNotificationContent *content=[UNMutableNotificationContent new];
         content.title=data[@"title"]?:@"RemoteScreen";content.body=data[@"body"]?:@"";content.userInfo=data[@"extra"]?:@{};
         content.categoryIdentifier=data[@"category"]?:@"";
+        content.threadIdentifier=data[@"thread"]?:@"";
         if([data[@"sound"] boolValue])content.sound=[UNNotificationSound defaultSound];
         NSString *identifier=data[@"id"]?:NSUUID.UUID.UUIDString;
         UNNotificationRequest *request=[UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];

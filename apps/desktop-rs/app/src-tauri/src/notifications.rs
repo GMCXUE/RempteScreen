@@ -2,7 +2,7 @@
 //! Current scope requires the app to remain running. Future push delivery must
 //! reuse account validation and messaging-action routing (see notification-delivery.md).
 use crate::api;
-use crate::notification_policy::{can_ring, should_alert, show_call_panel};
+use crate::notification_policy::{can_ring, should_alert, show_call_panel, message_previews};
 use std::{
     collections::{HashMap, HashSet},
     process::{Child, Command},
@@ -91,6 +91,18 @@ extern "C" fn native_event(value: *const std::ffi::c_char) {
         _ => record(app, "nativeError", data["error"].clone()),
     }
 }
+#[cfg(not(target_os="macos"))]
+fn notification_number(id: &str) -> i32 {
+    use std::hash::{Hash,Hasher};
+    let mut h=std::collections::hash_map::DefaultHasher::new();id.hash(&mut h);(h.finish() & 0x7fffffff) as i32
+}
+fn remove_message(app: &tauri::AppHandle, peer: &str) {
+    let id=format!("message-{peer}");
+    #[cfg(target_os="macos")]
+    if let Ok(value)=std::ffi::CString::new(id) { unsafe {rs_notifications_remove(value.as_ptr());} }
+    #[cfg(not(target_os="macos"))]
+    let _=app.notification().remove_active(vec![notification_number(&id)]);
+}
 fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Value, sound: bool) {
     record(
         app,
@@ -104,7 +116,7 @@ fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Valu
     };
     #[cfg(target_os = "macos")]
     {
-        let payload = serde_json::json!({"id":id,"title":title,"body":body,"extra":extra,"sound":sound,"category":if extra["kind"]=="call"{"friend-call"}else{""}});
+        let payload = serde_json::json!({"id":id,"title":title,"body":body,"extra":extra,"sound":sound,"thread":if extra["kind"]=="message"{id.clone()}else{String::new()},"category":if extra["kind"]=="call"{"friend-call"}else{""}});
         if let Ok(text) = std::ffi::CString::new(payload.to_string()) {
             unsafe {
                 rs_notifications_post(text.as_ptr());
@@ -113,7 +125,7 @@ fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Valu
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let mut b = app.notification().builder().title(title).body(body);
+        let mut b = app.notification().builder().id(notification_number(&id)).title(title).body(body);
         if sound {
             b = b.sound("default");
         }
@@ -171,6 +183,7 @@ pub async fn test_notification(
 #[serde(default, rename_all = "camelCase")]
 pub struct AlertSettings {
     message_sound: bool,
+    message_preview: bool,
     call_sound: bool,
     muted_peers: HashSet<String>,
 }
@@ -178,6 +191,7 @@ impl Default for AlertSettings {
     fn default() -> Self {
         Self {
             message_sound: true,
+            message_preview: true,
             call_sound: true,
             muted_peers: HashSet::new(),
         }
@@ -228,6 +242,15 @@ fn update_settings(
         let path = settings_path(&app, user).ok_or("无法保存提醒设置")?;
         std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(path, serde_json::to_vec(&value).unwrap()).map_err(|e| e.to_string())?;
+        if !value.message_preview {
+            if let Ok(path)=app.path().app_data_dir() {
+                if let Ok(bytes)=std::fs::read(path.join("notification-seen.json")) {
+                    if let Ok(seen)=serde_json::from_slice::<HashMap<String,u64>>(&bytes) {
+                        for key in seen.keys(){if let Some((_,peer))=key.split_once(':'){remove_message(&app,peer);}}
+                    }
+                }
+            }
+        }
         let state = app.state::<NotificationContext>();
         let mut ring = state.ring.lock().unwrap();
         if !value.call_sound
@@ -463,6 +486,10 @@ pub fn start(app: tauri::AppHandle) {
             .and_then(|p| std::fs::read(p).ok())
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
+        let viewed_cache=cache.as_ref().map(|p|p.with_file_name("notification-viewed.json"));
+        let mut viewed:HashMap<String,u64>=viewed_cache.as_ref().and_then(|p|std::fs::read(p).ok())
+            .and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut delivered_messages=HashSet::<String>::new();
         let mut account = String::new();
         let mut avatar_cache: HashMap<String,String> = HashMap::new();
         let mut requests = HashSet::new();
@@ -479,6 +506,8 @@ pub fn start(app: tauri::AppHandle) {
                     .lock()
                     .unwrap()
                     .clear();
+                for key in seen.keys(){if let Some((_,peer))=key.split_once(':'){remove_message(&app,peer);}}
+                delivered_messages.clear();
                 account.clear();
                 avatar_cache.clear();
                 requests.clear();
@@ -508,6 +537,8 @@ pub fn start(app: tauri::AppHandle) {
                     .lock()
                     .unwrap()
                     .clear();
+                for key in seen.keys(){if let Some((previous,peer))=key.split_once(':'){if previous!=user{remove_message(&app,peer);}}}
+                delivered_messages.clear();
                 account = user.to_owned();
                 requests.clear();
                 ringing.clear();
@@ -535,12 +566,16 @@ pub fn start(app: tauri::AppHandle) {
             let mut unread = 0i64;
             let mut dirty = false;
             if let Some(friends) = data["friends"].as_array() {
+                let eligible:HashSet<&str>=friends.iter().filter(|f|f["blocked"]!=true).filter_map(|f|f["id"].as_str()).collect();
+                let removed:Vec<_>=delivered_messages.iter().filter(|p|!eligible.contains(p.as_str())).cloned().collect();
+                for peer in removed{remove_message(&app,&peer);delivered_messages.remove(&peer);}
                 for f in friends {
                     let peer = f["id"].as_str().unwrap_or_default();
-                    let seq = f["lastIncomingSeq"]
-                        .as_str()
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
+                    let seq = if let Some(rows)=f["incomingMessages"].as_array() {
+                        rows.last().and_then(|r|r["seq"].as_str()).and_then(|s|s.parse::<u64>().ok()).unwrap_or(0)
+                    } else if f["lastIncomingKind"]!="call" && f["lastIncomingKind"]!="recalled" {
+                        f["lastIncomingSeq"].as_str().and_then(|s|s.parse::<u64>().ok()).unwrap_or(0)
+                    } else {0};
                     let count = if f["blocked"].as_bool().unwrap_or(false) {
                         0
                     } else {
@@ -548,9 +583,14 @@ pub fn start(app: tauri::AppHandle) {
                     };
                     unread += count;
                     let key = format!("{user}:{peer}");
+                    let floor=*viewed.entry(key.clone()).or_insert_with(|| {
+                        dirty=true;f["notificationReadSeq"].as_str().and_then(|v|v.parse().ok()).unwrap_or(0)
+                    });
+                    if visible.as_deref()==Some(peer) || f["blocked"]==true || settings.muted_peers.contains(peer) {
+                        remove_message(&app,peer);delivered_messages.remove(peer);
+                        if floor<seq{viewed.insert(key.clone(),seq);dirty=true;}
+                    }
                     if !f["blocked"].as_bool().unwrap_or(false)
-                        && f["lastIncomingKind"] != "call"
-                        && f["lastIncomingKind"] != "recalled"
                         && !settings.muted_peers.contains(peer)
                         && should_alert(
                             *seen.get(&key).unwrap_or(&0),
@@ -565,18 +605,20 @@ pub fn start(app: tauri::AppHandle) {
                             .filter(|s| !s.is_empty())
                             .or(f["name"].as_str())
                             .unwrap_or("好友");
-                        if focused {
-                            let _=app.emit("messaging-notice",serde_json::json!({"accountId":user,"peerId":peer,"text":format!("{name}：{}",f["lastIncomingText"].as_str().unwrap_or("新消息"))}));
+                        let fallback=serde_json::json!([{"seq":seq.to_string(),"text":f["lastIncomingText"].as_str().unwrap_or("新消息"),"createdAt":now()}]);
+                        let previews=message_previews(f.get("incomingMessages").unwrap_or(&fallback),floor);
+                        if !previews.is_empty() {
+                            let preview=read_settings(&app,user).message_preview;
+                            let body=if preview {previews.iter().map(|r|r.text.as_str()).collect::<Vec<_>>().join("\n")} else {format!("收到 {} 条新消息",previews.len())};
+                            let title=if preview{name}else{"RemoteScreen"};
+                            if focused {
+                                let _=app.emit("messaging-notice",serde_json::json!({"accountId":user,"peerId":peer,"text":format!("{title}：{}",if preview {previews.last().unwrap().text.as_str()}else{"收到新消息"})}));
+                            }
+                            post(&app,title,&body,serde_json::json!({"accountId":user,"peerId":peer,"kind":"message"}),settings.message_sound);
+                            delivered_messages.insert(peer.into());
                         }
-                        post(
-                            &app,
-                            name,
-                            f["lastIncomingText"].as_str().unwrap_or("新消息"),
-                            serde_json::json!({"accountId":user,"peerId":peer,"kind":"message"}),
-                            settings.message_sound,
-                        );
                     }
-                    if seen.get(&key) != Some(&seq) {
+                    if !seen.contains_key(&key) || seen.get(&key).is_some_and(|old|*old<seq) {
                         dirty = true;
                         seen.insert(key, seq);
                     }
@@ -728,6 +770,10 @@ pub fn start(app: tauri::AppHandle) {
                 let _ = w.set_badge_count(if unread > 0 { Some(unread) } else { None });
             }
             if dirty {
+                if let Some(path)=&viewed_cache {
+                    if let Some(parent)=path.parent(){let _=std::fs::create_dir_all(parent);}
+                    if let Ok(bytes)=serde_json::to_vec(&viewed){let tmp=path.with_extension("tmp");if std::fs::write(&tmp,bytes).is_ok(){let _=std::fs::rename(tmp,path);}}
+                }
                 if let Some(path) = &cache {
                     if let Some(parent) = path.parent() {
                         let _ = std::fs::create_dir_all(parent);

@@ -1707,6 +1707,7 @@ Future<void> showMessageAlertSettings(BuildContext context) async {
                               children: [
                             for (final item in [
                               ('messageSound', '消息提示音'),
+                              ('messagePreview', '通知显示消息内容'),
                               ('callSound', '来电铃声与振动')
                             ])
                               SwitchListTile(

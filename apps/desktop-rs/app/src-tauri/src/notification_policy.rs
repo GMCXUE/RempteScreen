@@ -19,9 +19,29 @@ pub(crate) fn should_alert(
 ) -> bool {
     latest > previous && (unread > 0 || initialized) && !visible
 }
+#[derive(Debug, PartialEq)]
+pub(crate) struct MessagePreview { pub seq: u64, pub text: String, pub at: u64 }
+pub(crate) fn message_previews(value: &serde_json::Value, viewed: u64) -> Vec<MessagePreview> {
+    let mut rows: Vec<_> = value.as_array().into_iter().flatten().filter_map(|r| {
+        let seq=r["seq"].as_str()?.parse::<u64>().ok()?;
+        if seq<=viewed { return None; }
+        Some(MessagePreview {seq,text:r["text"].as_str()?.chars().take(300).collect(),at:r["createdAt"].as_u64()?})
+    }).collect();
+    rows.sort_by_key(|r|r.seq);rows.dedup_by_key(|r|r.seq);
+    if rows.len()>5 {rows.drain(..rows.len()-5);}
+    rows
+}
 #[cfg(test)]
 mod tests {
     use super::{can_ring, should_alert, show_call_panel};
+    #[test]
+    fn notification_preview_keeps_newest_five_after_local_viewed_sequence() {
+        let rows=serde_json::json!((1..=8).map(|n|serde_json::json!({"seq":n.to_string(),"text":"😀".repeat(400),"createdAt":1700000000000u64+n})).collect::<Vec<_>>());
+        let result=super::message_previews(&rows,5);assert_eq!(result.iter().map(|r|r.seq).collect::<Vec<_>>(),vec![6,7,8]);
+        assert_eq!(result[0].text.chars().count(),300);
+        assert_eq!(super::message_previews(&rows,0).len(),5);
+        assert!(super::message_previews(&rows,8).is_empty());
+    }
     #[test]
     fn call_panel_only_shows_unanswered_incoming_calls() {
         assert!(show_call_panel("ringing", true, false));

@@ -37,3 +37,24 @@ class MessagingPolicyTest {
         assertEquals(45000L, MessagingPolicy.remainingRing(100000, 90000))
     }
 }
+
+class MessageNoticePolicyTest {
+    @Test fun longPreviewDoesNotSplitEmoji() {
+        val text="😀".repeat(400)
+        val shortened=MessageNoticePolicy.boundedText(text)
+        assertEquals(300,shortened.codePointCount(0,shortened.length))
+        assertEquals("😀".repeat(300),shortened)
+    }
+    @Test fun serverReadOnComputerDoesNotClearPhoneNotification() {
+        assertFalse(MessageNoticePolicy.shouldClear(false,false,false))
+        assertTrue(MessageNoticePolicy.shouldClear(true,false,false))
+        assertTrue(MessageNoticePolicy.shouldClear(false,true,false))
+        assertTrue(MessageNoticePolicy.shouldClear(false,false,true))
+    }
+    @Test fun burstKeepsNewestFiveInOrderAndExcludesLocallyViewed() {
+        val rows=(1L..8L).reversed().map {MessagePreview(it,"message $it",it*1000)}
+        assertEquals(listOf(6L,7L,8L),MessageNoticePolicy.previews(rows,5).map {it.seq})
+        assertEquals(listOf(4L,5L,6L,7L,8L),MessageNoticePolicy.previews(rows+rows,0).map {it.seq})
+        assertTrue(MessageNoticePolicy.previews(rows,8).isEmpty())
+    }
+}

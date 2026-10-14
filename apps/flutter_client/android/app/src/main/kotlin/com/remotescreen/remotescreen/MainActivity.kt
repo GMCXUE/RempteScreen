@@ -168,6 +168,9 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "setMessagingVisiblePeer" -> {
+                        val peer=call.argument<String>("peerId") ?: ""
+                        if(messagingForeground && peer.isNotEmpty())MessagingService.viewed(this,getSharedPreferences(MessagingService.PREFS,MODE_PRIVATE).getString("account","") ?: "",peer,0)
+
                         getSharedPreferences(MessagingService.PREFS, MODE_PRIVATE).edit()
                             .putString("peer", call.argument<String>("peerId") ?: "").apply()
                         result.success(null)
@@ -178,6 +181,7 @@ class MainActivity : FlutterActivity() {
                         else {
                             val peer = intent.getStringExtra("messagingPeer") ?: ""
                             val id = intent.getStringExtra("messagingCall") ?: ""
+                            if(action=="message")MessagingService.viewed(this,intent.getStringExtra("messagingAccount") ?: "",peer,intent.getLongExtra("messagingSeq",0))
                             intent.removeExtra("messagingAction")
                             if (id.isNotEmpty() && (action=="answer" || action=="reject")) {
                                 MessagingService.stopRing(id)

@@ -224,7 +224,7 @@
       const accountId=state?.me.id;
       const value=await window.__TAURI__.core.invoke('notification_settings',{accountId:state?.me.id,value:null});
       const dialog=node('dialog','','alert-settings-dialog');dialog.append(node('h3','消息与来电提醒'));
-      for(const [key,label] of [['messageSound','消息提示音'],['callSound','来电铃声']]){
+      for(const [key,label] of [['messageSound','消息提示音'],['messagePreview','通知显示消息内容'],['callSound','来电铃声']]){
         const row=node('label',label);const input=node('input');input.type='checkbox';input.checked=value[key];input.onchange=()=>value[key]=input.checked;row.append(input);dialog.append(row);
       }
       dialog.append(node('p','免打扰可在好友菜单中设置。设置仅应用于本设备。','muted small'));

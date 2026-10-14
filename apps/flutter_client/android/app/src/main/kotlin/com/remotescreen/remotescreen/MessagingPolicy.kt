@@ -11,3 +11,12 @@ internal object MessagingPolicy {
         enabled && !muted && !stopped && expires>now
     fun remainingRing(createdAt: Long, now: Long): Long = (createdAt + 45000 - now).coerceIn(1000, 45000)
 }
+
+internal data class MessagePreview(val seq: Long, val text: String, val at: Long)
+internal object MessageNoticePolicy {
+    fun boundedText(text: String): String = text.substring(0,text.offsetByCodePoints(0,minOf(300,text.codePointCount(0,text.length))))
+    fun previews(messages: List<MessagePreview>, viewed: Long): List<MessagePreview> =
+        messages.filter { it.seq > viewed }.distinctBy { it.seq }.sortedBy { it.seq }.takeLast(5)
+    // Server unread belongs to all devices. Only this device viewing/clearing a chat clears its alert.
+    fun shouldClear(visible: Boolean, blocked: Boolean, muted: Boolean): Boolean = visible || blocked || muted
+}

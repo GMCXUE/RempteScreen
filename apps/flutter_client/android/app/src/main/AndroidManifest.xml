@@ -43,6 +43,7 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/chat_clipboard_paths" />
         </provider>
+        <receiver android:name=".MessageDismissReceiver" android:exported="false"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

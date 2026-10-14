@@ -27,6 +27,7 @@ try {
  assert.equal(await purgeLocalChat(future),1); // new records expire even if a device is offline
  await api(a,'read',{peerId:b.id,seq:fresh.seq});
  assert.equal((await api(a,'clear-history',{peerId:b.id})).clearedThrough,fresh.seq);
+ assert.deepEqual((await api(a,'state')).friends.find(f=>f.id===b.id).incomingMessages,[]);
  // Commit-order test: a slow insertion must not be skipped behind a faster one.
  const p1=await db.getPool().connect(),p2=await db.getPool().connect();
  try {await p1.query('BEGIN');const r1=(await p1.query("INSERT INTO chat_messages(id,sender_id,recipient_id,client_id,text,created_at) VALUES('slow',$1,$2,'slow_local','slow',$3) RETURNING seq",[a.id,b.id,Date.now()])).rows[0];
@@ -36,7 +37,9 @@ try {
  let current=await api(a,'local-feed');assert.deepEqual(current.messages.map(m=>m.id),['slow','fast']);
  const recalled=(await api(a,'recall',{peerId:b.id,messageId:'slow'})).message;
  const edits=await api(b,'local-feed',{after:current.after,edit:current.edit});assert(edits.updates.some(m=>m.id===recalled.id&&m.kind==='recalled'));
+ assert.deepEqual((await api(a,'state')).friends.find(f=>f.id===b.id).incomingMessages.map(m=>m.text),['fast']);
  const clear=await api(a,'clear-history',{peerId:b.id});current=await api(a,'local-feed');assert.equal(current.messages.length,0);assert.equal(current.clears[0].seq,clear.clearedThrough);
+ assert.deepEqual((await api(a,'state')).friends.find(f=>f.id===b.id).incomingMessages,[]);
  assert.equal((await api(b,'local-feed')).messages.length,2);
  await db.closeDatabase();await db.openDatabase();assert.equal((await api(a,'local-feed')).clears[0].seq,clear.clearedThrough);
  console.log(`本地投递/隔离/持久化/清理及游标检查通过：${checks} 个接口断言`);
