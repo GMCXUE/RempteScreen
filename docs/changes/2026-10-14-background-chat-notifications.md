@@ -15,3 +15,12 @@
 发行：macOS 0.2.14、Android 0.2.20，构建号 2026101401，使用完整安装包。
 
 参考：[Android 通知样式与锁屏显示](https://developer.android.com/develop/ui/views/notifications)、[MessagingStyle](https://developer.android.com/reference/android/app/Notification.MessagingStyle)。
+
+## 发布验证
+
+源码 `6ed4cd7` 已推送到 `codex/server-bandwidth-20261013`。生产仅替换 `social.mjs` 并重建控制服务镜像，媒体和数据库容器未重启。备份代码和镜像保留于 `/opt/remotescreen/backups/background-notifications-2026101401`，无需数据迁移。实际账号状态 GET 接口通过摘要字段、长度、入站序列和账号范围检查；未输出或另存消息内容。
+
+- android 0.2.20，构建 2026101401，记录 `rel_67e609eece65381f4a`，60881522 字节，SHA-256 `93ae684bbeea8ae67a0b1cd8d772f607b29ef7b5ab42f6cc707d824a259f83a7`；公开下载完整文件与版本签名校验通过，已是最新版时无重复升级。
+- macos 0.2.14，构建 2026101401，记录 `rel_e7a5d213c776bf6d16`，18544292 字节，SHA-256 `cf2e47f7d1ca9159a69c0f59b5b3b1b1a9ca378c5a67b65734e77c8aee1ab361`；公开下载完整文件与版本签名校验通过，已是最新版时无重复升级。
+
+安装包检查：Android 沿用原签名证书，通知清除接收器未对外导出，SQLite 插件、更新引擎与单一 arm64 架构验证通过；macOS 整包签名及安全状态检查通过，沿用本地 ad-hoc 签名，未做 Developer ID 公证。发布清单仅新增以上两条整包版本，原版本和热更新配置未改变。没有 Android 真机测试结果。
