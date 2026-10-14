@@ -283,6 +283,9 @@ class MessagingService : Service() {
                     messages.forEachIndexed {messageIndex,message->
                         if(!current(token))return
                         if(!delivered)return@forEachIndexed
+                        // Avatar I/O may finish after the user has opened/read this chat.
+                        if((MainActivity.messagingForeground && prefs.getString("peer","")==peer) ||
+                            message.seq<=prefs.getLong(viewedKey,0))return@forEachIndexed
                         if(JSONObject(settings(this)).optBoolean("messagePreview",true)!=preview) {delivered=false;return@forEachIndexed}
                         val notification=ChatNotifications.child(this,account,peer,name,message,preview,settings.optBoolean("messageSound",true),messageIndex==messages.lastIndex,avatar)
                         delivered=postNotice(ChatNotifications.tag(account,peer,message.seq),0,notification)
