@@ -9,6 +9,15 @@
 <body>
   <!-- 文件接收提示（收到对方发来的文件时浮现） -->
   <div id="ft-toast" class="ft-toast hidden" role="status" aria-live="polite"></div>
+  <aside id="message-notice" class="message-notice hidden" aria-label="新消息提醒">
+    <div id="message-notice-avatar" class="message-notice-avatar" aria-hidden="true"></div>
+    <div class="message-notice-content" role="status" aria-live="polite" aria-atomic="true">
+      <div class="message-notice-heading"><strong id="message-notice-name"></strong><time id="message-notice-time"></time></div>
+      <p id="message-notice-body"></p>
+    </div>
+    <button id="message-notice-close" class="message-notice-close" type="button" aria-label="关闭消息提醒" title="关闭消息提醒">×</button>
+    <button id="message-notice-open" class="message-notice-open" type="button">查看消息 <span aria-hidden="true">→</span></button>
+  </aside>
 
   <aside id="friend-call-bar" class="friend-call-bar hidden" aria-label="好友通话">
     <div class="friend-call-top"><div id="friend-call-avatar" class="friend-call-avatar"></div><div class="friend-call-heading"><strong id="friend-call-name"></strong><span id="friend-call-status" role="status"></span></div><button id="friend-call-fold" type="button" aria-label="收起通话" title="收起通话">⌄</button></div>
@@ -360,6 +369,7 @@
   <script src="motion.js"></script><script src="ui-icons.js"></script>
   <script src="sidebar.js"></script>
   <script src="feedback.js"></script>
+  <script src="message-notice.js"></script>
   <script src="avatar-crop.js"></script>
   <script src="avatars.js"></script>
   <script src="profile.js"></script>

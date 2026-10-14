@@ -661,7 +661,15 @@ pub fn start(app: tauri::AppHandle) {
                             let viewing=foreground && app.state::<NotificationContext>().peer.lock().unwrap().as_deref()==Some(peer);
                             if viewing { remove_message(&app,user,peer); }
                             else if foreground {
-                                delivered=app.emit("messaging-notice",serde_json::json!({"accountId":user,"peerId":peer,"text":format!("{title}：{}",if preview {previews.last().unwrap().text.as_str()}else{"收到新消息"})})).is_ok();
+                                let message=previews.last().unwrap();
+                                let body=if preview {message.text.as_str()}else{"收到新消息"};
+                                delivered=app.emit("messaging-notice",serde_json::json!({
+                                    "accountId":user,"peerId":peer,"text":format!("{title}：{body}"),
+                                    "name":title,"message":body,"preview":preview,
+                                    "avatarId":if preview {f["avatarId"].as_str().unwrap_or("cat")}else{""},
+                                    "avatarRevision":if preview {f["avatarRevision"].as_str().unwrap_or_default()}else{""},
+                                    "sentAt":message.at,"receivedAt":now()
+                                })).is_ok();
                             } else {
                                 for (index,message) in previews.iter().enumerate() {
                                     let live=read_settings(&app,user);

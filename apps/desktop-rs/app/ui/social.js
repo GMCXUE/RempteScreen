@@ -170,6 +170,7 @@
   }
   async function select(friend) {
     if(mutating)return;
+    window.messageNotices?.dismiss(friend.id);
     if(peer?.id===friend.id)return;
     if((el('social-draft').value.trim()||chatUi.draftImages.length) && !(await askDialog({title:'切换会话？',message:'当前未发送的草稿将被清空。'})))return;
     resetChat();peer=friend;bindOutbox();syncNotificationContext();renderChatTitle(friend);el('social-compose').classList.remove('hidden');renderComposer();renderContacts();renderActions();await load();
@@ -231,14 +232,31 @@
       dialog.append(node('p','免打扰可在好友菜单中设置。设置仅应用于本设备。','muted small'));
       const advanced=node('details','','notification-advanced');advanced.append(node('summary','系统通知设置'));
       const diagnostics=node('p','正在检查通知状态…','muted small');advanced.append(diagnostics);dialog.append(advanced);
-      const refreshDiagnostics=async()=>{const data=await window.__TAURI__.core.invoke('notification_diagnostics');const p=data.permission||{};diagnostics.textContent=`系统通知：${p.authorization===2?'已允许':p.authorization===1?'已关闭，请在系统通知设置中允许':'等待系统授权'}${p.alerts!==undefined&&p.alerts!==2?'；系统横幅已关闭':''}${p.sounds!==undefined&&p.sounds!==2?'；系统声音已关闭':''}${data.pollError?'；同步失败：'+data.pollError:''}${data.delivery?.error?'；发送失败：'+data.delivery.error:''}`;};refreshDiagnostics().catch(error);
+      const refreshDiagnostics=async()=>{const data=await window.__TAURI__.core.invoke('notification_diagnostics');const p=data.permission||{};diagnostics.textContent=`系统通知：${p.authorization===2?'已允许':p.authorization===1?'已关闭，请在系统通知设置中允许':'等待系统授权'}${p.alerts!==undefined&&p.alerts!==2?'；系统横幅已关闭':''}${p.sounds!==undefined&&p.sounds!==2?'；系统声音已关闭':''}；最近同步：${data.lastPoll?new Date(data.lastPoll).toLocaleTimeString('zh-CN',{hour12:false}):'尚未完成'}${data.pollError?'；同步失败：'+data.pollError:''}${data.delivery?.error?'；发送失败：'+data.delivery.error:''}`;};refreshDiagnostics().catch(error);
       advanced.append(button('系统通知设置',async()=>{await window.__TAURI__.core.invoke('open_notification_settings');}),button('测试消息通知',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'message'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}),button('测试来电铃声',async()=>{await window.__TAURI__.core.invoke('test_notification',{accountId,kind:'call'});setTimeout(()=>refreshDiagnostics().catch(error),1000);}));
       const actions=node('div','','actions');actions.append(button('取消',()=>dialog.close()),button('保存',async()=>{
-        await window.__TAURI__.core.invoke('notification_settings',{accountId,value});el('ft-toast').classList.add('hidden');dialog.close();
+        await window.__TAURI__.core.invoke('notification_settings',{accountId,value});++noticeRevision;window.messageNotices?.dismiss();el('ft-toast').classList.add('hidden');dialog.close();
       },'primary'));dialog.append(actions);dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
     }catch(e){error(e);}
   };
-  window.__TAURI__.event?.listen('messaging-notice',event=>{if(state?.me.id===event.payload.accountId){toast(event.payload.text);el('ft-toast').onclick=()=>{if(state?.me.id!==event.payload.accountId)return;const friend=state.friends.find(f=>f.id===event.payload.peerId&&!f.blocked);if(friend){document.querySelector('[data-page="messages"]').click();select(friend).catch(error);}};}});
+  let noticeRevision=0;
+  window.__TAURI__.event?.listen('messaging-notice',async event=>{
+    const value=event.payload,revision=++noticeRevision;
+    if(state?.me.id!==value.accountId)return;
+    try {
+      const settings=await window.__TAURI__.core.invoke('notification_settings',{accountId:value.accountId,value:null});
+      const friend=state?.friends.find(f=>f.id===value.peerId&&!f.blocked);
+      if(revision!==noticeRevision || state?.me.id!==value.accountId || !friend || document.hidden || !document.hasFocus() || settings.messageEnabled===false || settings.mutedPeers?.includes(value.peerId))return;
+      if(!el('page-messages').classList.contains('hidden')&&peer?.id===value.peerId)return;
+      window.messageNotices?.show({...value,preview:value.preview!==false&&settings.messagePreview!==false},async()=>{
+        if(state?.me.id!==value.accountId)return;
+        const target=state.friends.find(f=>f.id===value.peerId&&!f.blocked);
+        if(target){document.querySelector('[data-page="messages"]').click();await select(target).catch(error);}
+      });
+    }catch(e){error(e);}
+  });
+  window.addEventListener('social-account-changed',()=>{++noticeRevision;});
+  window.addEventListener('blur',()=>{++noticeRevision;});
   el('social-copy-account').onclick=async()=>{
     if(!state?.me.accountId)return;
     try{await navigator.clipboard.writeText(state.me.accountId);el('social-copy-account').textContent='已复制';setTimeout(()=>el('social-copy-account').textContent='复制账号 ID',1500);}catch(e){error(e);}
