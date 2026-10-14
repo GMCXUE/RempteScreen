@@ -12,13 +12,8 @@ import android.graphics.Paint
 import android.graphics.Shader
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.service.notification.StatusBarNotification
-import android.widget.RemoteViews
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
 /** Independent children let SystemUI render several rows in a collapsed app group. */
 internal object ChatNotifications {
@@ -28,15 +23,6 @@ internal object ChatNotifications {
     const val PEER = "rs.peer"
     const val SEQUENCE = "rs.sequence"
     const val MESSAGE_TEXT = "rs.text"
-    fun timeLabel(at:Long,now:Long=System.currentTimeMillis(),zone:TimeZone=TimeZone.getDefault()):String {
-        if(at<=0)return "时间未知"
-        val sent=Calendar.getInstance(zone).apply {timeInMillis=at}
-        val today=Calendar.getInstance(zone).apply {timeInMillis=now}
-        val sameYear=sent.get(Calendar.YEAR)==today.get(Calendar.YEAR)
-        val sameDay=sameYear && sent.get(Calendar.DAY_OF_YEAR)==today.get(Calendar.DAY_OF_YEAR)
-        return SimpleDateFormat(if(sameDay)"HH:mm" else if(sameYear)"MM/dd HH:mm" else "yyyy/MM/dd HH:mm",Locale.getDefault())
-            .apply {timeZone=zone}.format(Date(at))
-    }
     private fun roundAvatar(source:Bitmap):Bitmap {
         val image=Bitmap.createScaledBitmap(source,64,64,true)
         return Bitmap.createBitmap(64,64,Bitmap.Config.ARGB_8888).also {
@@ -44,14 +30,6 @@ internal object ChatNotifications {
             Canvas(it).drawCircle(32f,32f,32f,paint)
         }
     }
-    private fun content(context:Context,layout:Int,title:String,text:String,time:String,avatar:Bitmap?):RemoteViews =
-        RemoteViews(context.packageName,layout).apply {
-            setTextViewText(R.id.chat_notice_name,title)
-            setTextViewText(R.id.chat_notice_body,text)
-            setTextViewText(R.id.chat_notice_time,time)
-            if(avatar!=null)setImageViewBitmap(R.id.chat_notice_avatar,avatar)
-            else setImageViewResource(R.id.chat_notice_avatar,R.mipmap.ic_launcher)
-        }
     fun isMessage(tag:String?):Boolean = tag=="rs-message" || tag?.startsWith("rs-message:")==true
     fun tag(account:String,peer:String,seq:Long):String = "rs-message:$account:$peer:$seq"
     fun group(account:String):String = "rs-chats:$account"
@@ -84,18 +62,13 @@ internal object ChatNotifications {
     fun child(context:Context,account:String,peer:String,name:String,message:MessagePreview,preview:Boolean,sound:Boolean,alert:Boolean,avatar:Bitmap?=null):Notification {
         val channel=if(sound)"rs_messages_v2" else "rs_messages_quiet"
         val title=if(preview)name else "RemoteScreen"
-        val text=if(preview)message.text else "收到新消息"
-        val time=timeLabel(message.at)
+        val text=if(preview)"私信了你：${message.text}" else "收到新消息"
         val picture=if(preview && avatar!=null)roundAvatar(avatar) else null
         val extras=Bundle().apply {putString(ACCOUNT,account);putString(PEER,peer);putLong(SEQUENCE,message.seq);putString(MESSAGE_TEXT,text)}
         val builder=Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_remotescreen)
-            // SystemUI can replace custom children with text snippets in a collapsed group.
-            // Put the exact send time first so long content cannot truncate it away.
-            .setContentTitle(title).setContentText("$time  $text")
-            .setStyle(Notification.DecoratedCustomViewStyle())
-            .setCustomContentView(content(context,R.layout.chat_notice_compact,title,text,time,picture))
-            .setCustomBigContentView(content(context,R.layout.chat_notice_expanded,title,text,time,picture))
-            .setCustomHeadsUpContentView(content(context,R.layout.chat_notice_compact,title,text,time,picture))
+            .setContentTitle(title).setContentText(text)
+            // Native children allow HyperOS to merge multiple messages into its
+            // standard collapsed rows. Custom RemoteViews were split and folded.
             .setWhen(if(message.at>0)message.at else 0).setShowWhen(message.at>0).setNumber(1).setOnlyAlertOnce(true)
             .setGroup(group(account)).setSortKey((Long.MAX_VALUE-message.seq).toString().padStart(19,'0'))
             .setGroupAlertBehavior(if(alert)Notification.GROUP_ALERT_CHILDREN else Notification.GROUP_ALERT_SUMMARY)
@@ -104,9 +77,13 @@ internal object ChatNotifications {
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setVisibility(if(preview)Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_remotescreen)
-                .setContentTitle("RemoteScreen").setContentText("$time  收到新消息")
+                .setContentTitle("RemoteScreen").setContentText("收到新消息")
                 .setWhen(if(message.at>0)message.at else 0).setShowWhen(message.at>0)
                 .setVisibility(Notification.VISIBILITY_PUBLIC).build())
+        // HyperOS expands ordinary native message cards with the sender in its
+        // header. BigTextStyle moves that name into the body on the tested device.
+        // Other Android surfaces need BigTextStyle for expandable long content.
+        if(!Build.MANUFACTURER.equals("Xiaomi",ignoreCase=true))builder.setStyle(Notification.BigTextStyle().bigText(text))
         if(picture!=null)builder.setLargeIcon(picture)
         return builder.build()
     }
@@ -129,19 +106,19 @@ internal object ChatNotifications {
         val style=Notification.InboxStyle().setBigContentTitle(title)
         messages.take(5).forEach {
             val e=it.notification.extras
-            val time=timeLabel(it.notification.`when`)
             val body=e.getString(MESSAGE_TEXT) ?: e.getCharSequence(Notification.EXTRA_TEXT) ?: "新消息"
-            style.addLine(if(preview)"$time  ${e.getCharSequence(Notification.EXTRA_TITLE) ?: "好友"}：$body" else "$time  收到新消息")
+            style.addLine(if(preview)"${e.getCharSequence(Notification.EXTRA_TITLE) ?: "好友"}：$body" else "收到新消息")
         }
         val n=Notification.Builder(context,"rs_messages_quiet").setSmallIcon(R.drawable.ic_stat_remotescreen)
             .setContentTitle("RemoteScreen").setContentText(title).setStyle(style).setNumber(messages.size)
             .setWhen(messages.first().notification.`when`).setShowWhen(messages.first().notification.`when`>0)
             .setGroup(group(account)).setGroupSummary(true).setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+            .setCategory(Notification.CATEGORY_MESSAGE)
             .setOnlyAlertOnce(true).setContentIntent(activity(context,account)).setAutoCancel(true)
             .setDeleteIntent(MessageDismissReceiver.intent(context,account,"",messages.first().notification.extras.getLong(SEQUENCE)))
             .setVisibility(if(preview)Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(Notification.Builder(context,"rs_messages_quiet").setSmallIcon(R.drawable.ic_stat_remotescreen)
-                .setContentTitle("RemoteScreen").setContentText(title).setVisibility(Notification.VISIBILITY_PUBLIC).build()).build()
+                .setContentTitle("RemoteScreen").setContentText(title).setWhen(messages.first().notification.`when`).setShowWhen(messages.first().notification.`when`>0).setVisibility(Notification.VISIBILITY_PUBLIC).build()).build()
         try {manager.notify(SUMMARY_TAG,SUMMARY_ID,n)}catch(_:SecurityException){ /* Notification permission stays under system control. */ }
     }
 }

@@ -154,11 +154,7 @@ void main() {
       expect(tester.getBottomRight(card).dy, lessThan(180));
       expect(find.text('私信了你：111'), findsOneWidget);
       expect(find.text('12:34'), findsOneWidget);
-      final time =
-          tester.getRect(find.byKey(const ValueKey('message-banner-time')));
-      final avatar = tester.getRect(find.byType(Image).first);
-      expect(time.right, greaterThan(avatar.right + 100));
-      expect(time.bottom, greaterThan(avatar.center.dy));
+      expect(find.byKey(const ValueKey('message-banner-time')), findsOneWidget);
       expect(find.byType(SnackBar), findsNothing);
       expect(find.text('另一个聊天页面'), findsOneWidget);
       await tester.tap(find.text('回复'));
@@ -192,7 +188,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('窄屏大字号保留跨年发送时间，时间始终贴近右下角', (tester) async {
+  testWidgets('窄屏大字号提醒保留名称旁的时间和回复按钮', (tester) async {
     final c = MessageBannerController()..bind('me');
     addTearDown(c.dispose);
     tester.view.physicalSize = const Size(320, 700);
@@ -205,17 +201,17 @@ void main() {
     c.show(notice('正文',
         sentAt: DateTime(2025, 10, 13, 12, 34).millisecondsSinceEpoch));
     await tester.pumpAndSettle();
-    expect(find.text('2025/10/13\n12:34'), findsOneWidget);
-    final card =
-        tester.getRect(find.byKey(const ValueKey('message-banner-card')));
+    expect(find.textContaining('2025/10/13'), findsOneWidget);
     final stamp =
         tester.getRect(find.byKey(const ValueKey('message-banner-time')));
-    expect(stamp.right, closeTo(card.right - 16, 1));
-    expect(stamp.bottom, lessThan(card.bottom));
+    final title = tester.getRect(find.text('测试小夏'));
+    expect(stamp.center.dy, closeTo(title.center.dy, 2));
+    expect(stamp.left, greaterThanOrEqualTo(title.right));
+    expect(find.text('回复'), findsOneWidget);
     expect(tester.takeException(), isNull);
     c.show(notice('无时间消息', sentAt: 0));
     await tester.pumpAndSettle();
-    expect(find.text('时间未知'), findsOneWidget);
+    expect(find.text('时间未知'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

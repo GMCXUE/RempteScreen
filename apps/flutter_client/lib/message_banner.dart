@@ -294,13 +294,33 @@ class MessageBannerCard extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                            Text(notice.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppTheme.text)),
+                            Row(children: [
+                              Expanded(
+                                  child: Text(notice.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppTheme.text))),
+                              if ((notice.sentAt ?? 0) > 0) ...[
+                                const SizedBox(width: 8),
+                                Flexible(
+                                    child: Semantics(
+                                        label:
+                                            '发送于 ${messageSentTime(notice.sentAt)}',
+                                        excludeSemantics: true,
+                                        child: Text(
+                                            messageSentTime(notice.sentAt),
+                                            key: const ValueKey(
+                                                'message-banner-time'),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                fontSize: 11,
+                                                color: AppTheme.subtle)))),
+                              ]
+                            ]),
                             const SizedBox(height: 4),
                             Text(notice.summary,
                                 maxLines: 2,
@@ -311,45 +331,17 @@ class MessageBannerCard extends StatelessWidget {
                                     color: AppTheme.muted)),
                           ])),
                       const SizedBox(width: 12),
-                      SizedBox(
-                          width: 96,
-                          child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                TextButton(
-                                    onPressed: onReply,
-                                    style: TextButton.styleFrom(
-                                        minimumSize: const Size(64, 44),
-                                        backgroundColor:
-                                            const Color(0xFFECF3FF),
-                                        foregroundColor: AppTheme.accent,
-                                        shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(13))),
-                                    child: const Text('回复',
-                                        style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w700))),
-                                const SizedBox(height: 5),
-                                Semantics(
-                                    label:
-                                        '发送于 ${messageSentTime(notice.sentAt)}',
-                                    excludeSemantics: true,
-                                    child: FittedBox(
-                                        fit: BoxFit.scaleDown,
-                                        alignment: Alignment.centerRight,
-                                        child: Text(
-                                            messageSentTime(notice.sentAt)
-                                                .replaceFirst(' ', '\n'),
-                                            key: const ValueKey(
-                                                'message-banner-time'),
-                                            textAlign: TextAlign.right,
-                                            style: const TextStyle(
-                                                fontSize: 11,
-                                                height: 1.2,
-                                                color: AppTheme.subtle)))),
-                              ])),
+                      TextButton(
+                          onPressed: onReply,
+                          style: TextButton.styleFrom(
+                              minimumSize: const Size(64, 44),
+                              backgroundColor: const Color(0xFFECF3FF),
+                              foregroundColor: AppTheme.accent,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(13))),
+                          child: const Text('回复',
+                              style: TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w700))),
                     ]),
                     const SizedBox(height: 10),
                     Container(
