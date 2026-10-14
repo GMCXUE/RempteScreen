@@ -40,8 +40,16 @@ class MessagingService : Service() {
             if(p.getString("account","")!=account || peer.isEmpty())return
             val key="viewed:$account:$peer"
             p.edit().putLong(key,maxOf(p.getLong(key,0),seq,p.getLong("seen:$account:$peer",0))).apply()
-            context.getSystemService(NotificationManager::class.java).cancel("rs-message",peer.hashCode())
-            instance?.handler?.post {instance?.refreshMessageSummary(account,JSONObject(settings(context)).optBoolean("messagePreview",true))}
+            ChatNotifications.clearPeer(context.getSystemService(NotificationManager::class.java),account,peer)
+            ChatNotifications.refreshSummary(context,account,JSONObject(settings(context)).optBoolean("messagePreview",true))
+        }
+        fun dismissed(context:Context,account:String,peer:String) {
+            val p=context.getSharedPreferences(PREFS,MODE_PRIVATE)
+            if(p.getString("account","")!=account)return
+            val manager=context.getSystemService(NotificationManager::class.java)
+            if(peer.isEmpty())ChatNotifications.children(manager,account).forEach {manager.cancel(it.tag,it.id)}
+            // Swiping one child removes only that message; it is already in the delivery cursor.
+            ChatNotifications.refreshSummary(context,account,JSONObject(settings(context)).optBoolean("messagePreview",true))
         }
         fun takeNotice(): Map<String,String>? = notices.poll()
         fun stopRing(id: String) { instance?.let { service ->
@@ -55,7 +63,7 @@ class MessagingService : Service() {
             val prefs=context.getSharedPreferences(PREFS, MODE_PRIVATE)
             val key="alerts:"+prefs.getString("account", "")
             if(value!=null) { prefs.edit().putString(key,value).apply(); if(!JSONObject(value).optBoolean("messagePreview",true)) {
-                val manager=context.getSystemService(NotificationManager::class.java);manager.activeNotifications.filter {it.tag=="rs-message"||it.tag=="rs-message-summary"}.forEach {manager.cancel(it.tag,it.id)}
+                val manager=context.getSystemService(NotificationManager::class.java);manager.activeNotifications.filter {ChatNotifications.isMessage(it.tag)||it.tag==ChatNotifications.SUMMARY_TAG}.forEach {manager.cancel(it.tag,it.id)}
             }; instance?.let { service -> service.handler.post {
                 val config=JSONObject(value);val muted=config.optJSONArray("mutedPeers")?.let { list -> (0 until list.length()).any {list.getString(it)==service.ringPeer} } ?: false
                 if(!config.optBoolean("callSound",true)||muted) service.silence()
@@ -81,7 +89,7 @@ class MessagingService : Service() {
         }
         private fun clearNotifications(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java)
-            manager.activeNotifications.filter { it.tag == "rs-message" || it.tag == "rs-call" || it.tag == "rs-friend" || it.tag == "rs-message-summary" }
+            manager.activeNotifications.filter { ChatNotifications.isMessage(it.tag) || it.tag == "rs-call" || it.tag == "rs-friend" || it.tag == "rs-message-summary" }
                 .forEach { manager.cancel(it.tag, it.id) }
         }
     }
@@ -164,6 +172,8 @@ class MessagingService : Service() {
     }
     override fun onCreate() {
         super.onCreate(); instance=this
+        // Upgrade: remove the old single-conversation cards, retain new child records.
+        manager.activeNotifications.filter {it.tag=="rs-message"}.forEach {manager.cancel(it.tag,it.id)}
         manager.createNotificationChannel(NotificationChannel("rs_messages_v2", "聊天消息", NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION),android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION).build())
             enableVibration(true);vibrationPattern=longArrayOf(0,180,100,180)
@@ -235,8 +245,8 @@ class MessagingService : Service() {
         val settings = JSONObject(settings(this))
         val muted=settings.optJSONArray("mutedPeers")?.let { list -> (0 until list.length()).map {list.getString(it)}.toSet() } ?: emptySet()
         val friends = data.getJSONArray("friends")
-        val friendIds = (0 until friends.length()).map { friends.getJSONObject(it).getString("id").hashCode() }.toSet()
-        manager.activeNotifications.filter { it.tag == "rs-message" && !friendIds.contains(it.id) }.forEach { manager.cancel(it.tag, it.id) }
+        val friendIds = (0 until friends.length()).map { friends.getJSONObject(it).getString("id") }.toSet()
+        ChatNotifications.children(manager,account).filter {!friendIds.contains(it.notification.extras.getString(ChatNotifications.PEER))}.forEach {manager.cancel(it.tag,it.id)}
         for (index in 0 until friends.length()) {
             val friend = friends.getJSONObject(index)
             val peer = friend.getString("id")
@@ -250,7 +260,7 @@ class MessagingService : Service() {
             val viewedKey="viewed:$account:$peer"
             if(!prefs.contains(viewedKey))prefs.edit().putLong(viewedKey,friend.optString("notificationReadSeq","0").toLongOrNull() ?: 0).apply()
             if (MessageNoticePolicy.shouldClear(visible,friend.optBoolean("blocked"),muted.contains(peer))) {
-                manager.cancel("rs-message", peer.hashCode())
+                ChatNotifications.clearPeer(manager,account,peer)
                 prefs.edit().putLong(viewedKey,maxOf(seq,prefs.getLong(viewedKey,0))).apply()
             }
             var delivered=true
@@ -258,14 +268,18 @@ class MessagingService : Service() {
                 val name = friend.optString("remark").ifEmpty { friend.getString("name") }
                 val recent=if(raw==null) listOf(MessagePreview(seq,MessageNoticePolicy.boundedText(friend.optString("lastIncomingText")),System.currentTimeMillis())) else
                     (0 until raw.length()).map {i->raw.getJSONObject(i).let {MessagePreview(it.getString("seq").toLong(),MessageNoticePolicy.boundedText(it.optString("text")),it.optLong("createdAt"))}}
-                val messages=MessageNoticePolicy.previews(recent,prefs.getLong(viewedKey,0))
+                val messages=MessageNoticePolicy.previews(recent,maxOf(prefs.getLong(viewedKey,0),prefs.getLong(key,0)))
                 if(messages.isNotEmpty()) {
                     val preview=settings.optBoolean("messagePreview",true)
                     if (MainActivity.messagingForeground)foregroundMessage(account,peer,if(preview)name else "RemoteScreen",if(preview)messages.last().text else "收到新消息")
-                    val notification=messageNotification(account,peer,name,friend,token,messages,preview,settings.optBoolean("messageSound",true))
-                    if (!current(token)) return
-                    if(JSONObject(settings(this)).optBoolean("messagePreview",true)!=preview)delivered=false
-                    else delivered=postNotice("rs-message", peer.hashCode(), notification)
+                    messages.forEachIndexed {messageIndex,message->
+                        if(!current(token))return
+                        if(!delivered)return@forEachIndexed
+                        if(JSONObject(settings(this)).optBoolean("messagePreview",true)!=preview) {delivered=false;return@forEachIndexed}
+                        val notification=ChatNotifications.child(this,account,peer,name,message,preview,settings.optBoolean("messageSound",true),messageIndex==messages.lastIndex)
+                        delivered=postNotice(ChatNotifications.tag(account,peer,message.seq),0,notification)
+                        if(delivered){prefs.edit().putLong(key,message.seq).apply();ChatNotifications.trim(manager,account)}
+                    }
                 }
             }
             if (delivered && (!prefs.contains(key) || prefs.getLong(key,0)<seq)) prefs.edit().putLong(key, seq).apply()
@@ -326,50 +340,7 @@ class MessagingService : Service() {
         stopped.retainAll(active)
         ringing.filter { !active.contains(it) }.toList().forEach { manager.cancel("rs-call", it.hashCode()); ringing.remove(it) }
     }
-    private fun messageNotification(account:String,peer:String,name:String,friend:JSONObject,token:String,messages:List<MessagePreview>,preview:Boolean,sound:Boolean):Notification {
-        val channel=if(sound)"rs_messages_v2" else "rs_messages_quiet"
-        val hidden="收到 ${messages.size} 条新消息"
-        val builder=Notification.Builder(this,channel).setSmallIcon(R.drawable.ic_stat_remotescreen)
-            .setContentTitle(if(preview)name else "RemoteScreen").setContentText(if(preview)messages.last().text else hidden)
-            .setWhen(messages.last().at).setShowWhen(true).setNumber(messages.size)
-            .setGroup("rs-chats:$account").setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
-            .setContentIntent(openIntent("message",peer,"",messages.last().seq)).setAutoCancel(true)
-            .setDeleteIntent(MessageDismissReceiver.intent(this,account,peer,messages.last().seq))
-            .setCategory(Notification.CATEGORY_MESSAGE)
-            .setVisibility(if(preview)Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
-            .setPublicVersion(Notification.Builder(this,channel).setSmallIcon(R.drawable.ic_stat_remotescreen)
-                .setContentTitle("RemoteScreen").setContentText(hidden).setVisibility(Notification.VISIBILITY_PUBLIC).build())
-        if(preview) {
-            val avatar=avatarBitmap(token,peer,friend.optString("avatarId"),friend.optString("avatarRevision"))
-            val style=if(Build.VERSION.SDK_INT>=28)Notification.MessagingStyle(Person.Builder().setName("我").build()).setGroupConversation(false)
-                else Notification.MessagingStyle("我")
-            if(Build.VERSION.SDK_INT>=28) {
-                val sender=Person.Builder().setName(name).setKey(peer).setIcon(android.graphics.drawable.Icon.createWithBitmap(avatar)).build()
-                messages.forEach {style.addMessage(it.text,it.at,sender)}
-            } else messages.forEach {style.addMessage(it.text,it.at,name)}
-            builder.setLargeIcon(avatar).setStyle(style)
-        } else builder.setStyle(Notification.BigTextStyle().bigText(hidden))
-        return builder.build()
-    }
-    internal fun refreshMessageSummary(account:String,preview:Boolean) {
-        val messages=manager.activeNotifications.filter {it.tag=="rs-message"}.sortedByDescending {it.postTime}
-        if(messages.size<2){manager.cancel("rs-message-summary",49001);return}
-        val count=messages.sumOf {it.notification.number.coerceAtLeast(1)}
-        val title="收到 $count 条新消息"
-        val style=Notification.InboxStyle().setBigContentTitle(title)
-        messages.take(5).forEach {entry->
-            val e=entry.notification.extras
-            style.addLine(if(preview)"${e.getCharSequence(Notification.EXTRA_TITLE) ?: "好友"}：${e.getCharSequence(Notification.EXTRA_TEXT) ?: "新消息"}" else "收到新消息")
-        }
-        val n=Notification.Builder(this,"rs_messages_quiet").setSmallIcon(R.drawable.ic_stat_remotescreen)
-            .setContentTitle("RemoteScreen").setContentText(title).setStyle(style).setNumber(count)
-            .setGroup("rs-chats:$account").setGroupSummary(true).setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
-            .setOnlyAlertOnce(true).setContentIntent(openIntent("open","","")).setAutoCancel(true)
-            .setVisibility(if(preview)Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE)
-            .setPublicVersion(Notification.Builder(this,"rs_messages_quiet").setSmallIcon(R.drawable.ic_stat_remotescreen)
-                .setContentTitle("RemoteScreen").setContentText(title).setVisibility(Notification.VISIBILITY_PUBLIC).build()).build()
-        postNotice("rs-message-summary",49001,n)
-    }
+    internal fun refreshMessageSummary(account:String,preview:Boolean) = ChatNotifications.refreshSummary(this,account,preview)
     private fun openIntent(action: String, peer: String, call: String,seq:Long=0): PendingIntent {
         val intent = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)

@@ -7,11 +7,11 @@ import android.content.Intent
 
 class MessageDismissReceiver : BroadcastReceiver() {
     override fun onReceive(context:Context,intent:Intent) {
-        MessagingService.viewed(context,intent.getStringExtra("account") ?: "",intent.getStringExtra("peer") ?: "",intent.getLongExtra("seq",0))
+        MessagingService.dismissed(context,intent.getStringExtra("account") ?: "",intent.getStringExtra("peer") ?: "")
     }
     companion object {
         fun intent(context:Context,account:String,peer:String,seq:Long):PendingIntent = PendingIntent.getBroadcast(context,(account+peer).hashCode(),
-            Intent(context,MessageDismissReceiver::class.java).putExtra("account",account).putExtra("peer",peer).putExtra("seq",seq),
+            Intent(context,MessageDismissReceiver::class.java).setData(android.net.Uri.Builder().scheme("remotescreen-notice").authority("dismiss").appendPath(account).appendPath(peer).appendPath(seq.toString()).build()).putExtra("account",account).putExtra("peer",peer).putExtra("seq",seq),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     }
 }

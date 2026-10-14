@@ -28,6 +28,14 @@ void rs_notifications_init(void (*callback)(const char *)) {
     dispatch_async(dispatch_get_main_queue(),^{
         UNUserNotificationCenter *center=[UNUserNotificationCenter currentNotificationCenter];
         rs_delegate=[RSNotificationDelegate new];center.delegate=rs_delegate;
+        // Upgrade older conversation cards so they do not duplicate the new message children.
+        [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification *> *notes) {
+            NSMutableArray *ids=[NSMutableArray new];for(UNNotification *note in notes) {
+                NSDictionary *info=note.request.content.userInfo;
+                if([info[@"kind"] isEqual:@"message"] && !info[@"seq"])[ids addObject:note.request.identifier];
+            }
+            [center removeDeliveredNotificationsWithIdentifiers:ids];
+        }];
         UNNotificationAction *answer=[UNNotificationAction actionWithIdentifier:@"answer" title:@"接通" options:UNNotificationActionOptionForeground];
         UNNotificationAction *reject=[UNNotificationAction actionWithIdentifier:@"reject" title:@"挂断" options:UNNotificationActionOptionForeground];
         [center setNotificationCategories:[NSSet setWithObject:[UNNotificationCategory categoryWithIdentifier:@"friend-call" actions:@[answer,reject] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone]]];
@@ -37,6 +45,22 @@ void rs_notifications_init(void (*callback)(const char *)) {
     });
 }
 void rs_notifications_status(void) {status();}
+static void trimChatNotifications(UNUserNotificationCenter *center) {
+    [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification *> *notes) {
+        NSArray *ordered=[notes sortedArrayUsingComparator:^NSComparisonResult(UNNotification *a,UNNotification *b) {
+            long long x=[a.request.content.userInfo[@"seq"] longLongValue], y=[b.request.content.userInfo[@"seq"] longLongValue];
+            return x>y?NSOrderedAscending:x<y?NSOrderedDescending:NSOrderedSame;
+        }];
+        NSMutableDictionary *peers=[NSMutableDictionary new], *accounts=[NSMutableDictionary new];NSMutableArray *remove=[NSMutableArray new];
+        for(UNNotification *note in ordered) {
+            NSDictionary *info=note.request.content.userInfo;if(![info[@"kind"] isEqual:@"message"] || !info[@"seq"])continue;
+            NSString *account=info[@"accountId"]?:@"", *peer=[NSString stringWithFormat:@"%@:%@",account,info[@"peerId"]?:@""];
+            NSInteger n=[peers[peer] integerValue]+1;peers[peer]=@(n);NSInteger total=[accounts[account] integerValue];
+            if(n>5 || total>=20)[remove addObject:note.request.identifier];else accounts[account]=@(total+1);
+        }
+        if(remove.count)[center removeDeliveredNotificationsWithIdentifiers:remove];
+    }];
+}
 void rs_notifications_post(const char *json) {
     NSString *value=[NSString stringWithUTF8String:json];
     dispatch_async(dispatch_get_main_queue(),^{
@@ -51,6 +75,7 @@ void rs_notifications_post(const char *json) {
         UNNotificationRequest *request=[UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:^(NSError *error){
             report(@{@"type":@"delivery",@"id":identifier,@"error":error.localizedDescription?:@""});
+            if(!error && [content.userInfo[@"kind"] isEqual:@"message"])trimChatNotifications([UNUserNotificationCenter currentNotificationCenter]);
         }];
     });
 }
@@ -58,6 +83,24 @@ void rs_notifications_remove(const char *identifier) {
     NSString *value=[NSString stringWithUTF8String:identifier];
     [[UNUserNotificationCenter currentNotificationCenter] removeDeliveredNotificationsWithIdentifiers:@[value]];
     [[UNUserNotificationCenter currentNotificationCenter] removePendingNotificationRequestsWithIdentifiers:@[value]];
+}
+
+void rs_chat_notifications_remove_peer(const char *peer) {
+    NSString *value=[NSString stringWithUTF8String:peer];UNUserNotificationCenter *center=[UNUserNotificationCenter currentNotificationCenter];
+    [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification *> *notes) {
+        NSMutableArray *ids=[NSMutableArray new];for(UNNotification *note in notes) {
+            NSDictionary *info=note.request.content.userInfo;
+            if([info[@"kind"] isEqual:@"message"] && [info[@"peerId"] isEqual:value])[ids addObject:note.request.identifier];
+        }
+        [center removeDeliveredNotificationsWithIdentifiers:ids];
+    }];
+    [center getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest *> *requests) {
+        NSMutableArray *ids=[NSMutableArray new];for(UNNotificationRequest *request in requests) {
+            NSDictionary *info=request.content.userInfo;
+            if([info[@"kind"] isEqual:@"message"] && [info[@"peerId"] isEqual:value])[ids addObject:request.identifier];
+        }
+        [center removePendingNotificationRequestsWithIdentifiers:ids];
+    }];
 }
 
 // A system banner's lifetime and button colors belong to macOS. Keep the call

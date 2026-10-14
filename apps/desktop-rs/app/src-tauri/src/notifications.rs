@@ -28,6 +28,7 @@ extern "C" {
     fn rs_notifications_post(json: *const std::ffi::c_char);
     fn rs_notifications_status();
     fn rs_notifications_remove(id: *const std::ffi::c_char);
+    fn rs_chat_notifications_remove_peer(peer: *const std::ffi::c_char);
     fn rs_call_panel_update(json: *const std::ffi::c_char);
     fn rs_call_panel_dismiss(id: *const std::ffi::c_char);
     fn rs_call_panel_prepare_answer(id: *const std::ffi::c_char);
@@ -99,7 +100,7 @@ fn notification_number(id: &str) -> i32 {
 fn remove_message(app: &tauri::AppHandle, peer: &str) {
     let id=format!("message-{peer}");
     #[cfg(target_os="macos")]
-    if let Ok(value)=std::ffi::CString::new(id) { unsafe {rs_notifications_remove(value.as_ptr());} }
+    if let Ok(value)=std::ffi::CString::new(peer) { unsafe {rs_chat_notifications_remove_peer(value.as_ptr());} }
     #[cfg(not(target_os="macos"))]
     let _=app.notification().remove_active(vec![notification_number(&id)]);
 }
@@ -111,12 +112,14 @@ fn post(app: &tauri::AppHandle, title: &str, body: &str, extra: serde_json::Valu
     );
     let id = if extra["kind"] == "call" {
         format!("call-{}", extra["callId"].as_str().unwrap_or_default())
+    } else if let Some(seq)=extra["seq"].as_str() {
+        format!("message-{}-{}-{seq}",extra["accountId"].as_str().unwrap_or_default(),extra["peerId"].as_str().unwrap_or_default())
     } else {
         format!("message-{}", extra["peerId"].as_str().unwrap_or("friends"))
     };
     #[cfg(target_os = "macos")]
     {
-        let payload = serde_json::json!({"id":id,"title":title,"body":body,"extra":extra,"sound":sound,"thread":if extra["kind"]=="message"{id.clone()}else{String::new()},"category":if extra["kind"]=="call"{"friend-call"}else{""}});
+        let payload = serde_json::json!({"id":id,"title":title,"body":body,"extra":extra,"sound":sound,"thread":if extra["kind"]=="message"{format!("rs-chats-{}",extra["accountId"].as_str().unwrap_or_default())}else{String::new()},"category":if extra["kind"]=="call"{"friend-call"}else{""}});
         if let Ok(text) = std::ffi::CString::new(payload.to_string()) {
             unsafe {
                 rs_notifications_post(text.as_ptr());
@@ -606,15 +609,17 @@ pub fn start(app: tauri::AppHandle) {
                             .or(f["name"].as_str())
                             .unwrap_or("好友");
                         let fallback=serde_json::json!([{"seq":seq.to_string(),"text":f["lastIncomingText"].as_str().unwrap_or("新消息"),"createdAt":now()}]);
-                        let previews=message_previews(f.get("incomingMessages").unwrap_or(&fallback),floor);
+                        let previews=message_previews(f.get("incomingMessages").unwrap_or(&fallback),floor.max(*seen.get(&key).unwrap_or(&0)));
                         if !previews.is_empty() {
                             let preview=read_settings(&app,user).message_preview;
-                            let body=if preview {previews.iter().map(|r|r.text.as_str()).collect::<Vec<_>>().join("\n")} else {format!("收到 {} 条新消息",previews.len())};
                             let title=if preview{name}else{"RemoteScreen"};
                             if focused {
                                 let _=app.emit("messaging-notice",serde_json::json!({"accountId":user,"peerId":peer,"text":format!("{title}：{}",if preview {previews.last().unwrap().text.as_str()}else{"收到新消息"})}));
                             }
-                            post(&app,title,&body,serde_json::json!({"accountId":user,"peerId":peer,"kind":"message"}),settings.message_sound);
+                            for (index,message) in previews.iter().enumerate() {
+                                let body=if preview{message.text.as_str()}else{"收到新消息"};
+                                post(&app,title,body,serde_json::json!({"accountId":user,"peerId":peer,"kind":"message","seq":message.seq.to_string()}),settings.message_sound && index==previews.len()-1);
+                            }
                             delivered_messages.insert(peer.into());
                         }
                     }

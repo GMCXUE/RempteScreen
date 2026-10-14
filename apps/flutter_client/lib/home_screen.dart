@@ -200,6 +200,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         }
       } else if (action == 'message') {
         await _openMessageNotice(value);
+      } else if (action == 'messages') {
+        setState(() {
+          _selectedTab = 1;
+          _devicesPage = false;
+        });
       } else if (action == 'friends') {
         setState(() {
           _selectedTab = 1;
