@@ -15,15 +15,31 @@ class MessageNotice {
         message = value['message'] as String? ?? '收到新消息',
         avatarId = value['avatarId'] as String?,
         avatarRevision = value['avatarRevision'] as String? ?? '',
-        receivedAt = int.tryParse('${value['receivedAt']}');
+        receivedAt = int.tryParse('${value['receivedAt']}'),
+        sentAt = int.tryParse('${value['sentAt']}');
 
   final String accountId, peerId, name, message, avatarRevision;
   final String? avatarId;
   final bool preview;
-  final int? receivedAt;
+  final int? receivedAt, sentAt;
   final VoidCallback onReply;
   String get title => preview ? name : 'RemoteScreen';
   String get summary => preview ? '私信了你：$message' : '收到新消息';
+}
+
+String messageSentTime(int? at, {DateTime? now}) {
+  if (at == null || at <= 0 || at > 8640000000000000) return '时间未知';
+  final sent = DateTime.fromMillisecondsSinceEpoch(at);
+  final today = now ?? DateTime.now();
+  String two(int value) => '$value'.padLeft(2, '0');
+  final time = '${two(sent.hour)}:${two(sent.minute)}';
+  if (sent.year == today.year &&
+      sent.month == today.month &&
+      sent.day == today.day) {
+    return time;
+  }
+  final date = '${two(sent.month)}/${two(sent.day)}';
+  return sent.year == today.year ? '$date $time' : '${sent.year}/$date $time';
 }
 
 /// One foreground card, scoped to the logged-in account. No message backlog.
@@ -268,17 +284,45 @@ class MessageBannerCard extends StatelessWidget {
                                     color: AppTheme.muted)),
                           ])),
                       const SizedBox(width: 12),
-                      TextButton(
-                          onPressed: onReply,
-                          style: TextButton.styleFrom(
-                              minimumSize: const Size(64, 44),
-                              backgroundColor: const Color(0xFFECF3FF),
-                              foregroundColor: AppTheme.accent,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(13))),
-                          child: const Text('回复',
-                              style: TextStyle(
-                                  fontSize: 15, fontWeight: FontWeight.w700))),
+                      SizedBox(
+                          width: 96,
+                          child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                TextButton(
+                                    onPressed: onReply,
+                                    style: TextButton.styleFrom(
+                                        minimumSize: const Size(64, 44),
+                                        backgroundColor:
+                                            const Color(0xFFECF3FF),
+                                        foregroundColor: AppTheme.accent,
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(13))),
+                                    child: const Text('回复',
+                                        style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w700))),
+                                const SizedBox(height: 5),
+                                Semantics(
+                                    label:
+                                        '发送于 ${messageSentTime(notice.sentAt)}',
+                                    excludeSemantics: true,
+                                    child: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        alignment: Alignment.centerRight,
+                                        child: Text(
+                                            messageSentTime(notice.sentAt)
+                                                .replaceFirst(' ', '\n'),
+                                            key: const ValueKey(
+                                                'message-banner-time'),
+                                            textAlign: TextAlign.right,
+                                            style: const TextStyle(
+                                                fontSize: 11,
+                                                height: 1.2,
+                                                color: AppTheme.subtle)))),
+                              ])),
                     ]),
                     const SizedBox(height: 10),
                     Container(

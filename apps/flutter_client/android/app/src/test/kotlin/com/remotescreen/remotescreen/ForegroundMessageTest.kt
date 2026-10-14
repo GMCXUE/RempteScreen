@@ -15,19 +15,21 @@ class ForegroundMessageTest {
         while(MessagingService.takeNotice()!=null) { /* drain previous test notices */ }
         val service=MessagingService()
         val emit=MessagingService::class.java.getDeclaredMethod("foregroundMessage",String::class.java,
-            String::class.java,JSONObject::class.java,String::class.java,String::class.java,Boolean::class.javaPrimitiveType)
+            String::class.java,JSONObject::class.java,String::class.java,String::class.java,Boolean::class.javaPrimitiveType,Long::class.javaPrimitiveType)
         emit.isAccessible=true
         val friend=JSONObject().put("avatarId","custom").put("avatarRevision","revision")
-        emit.invoke(service,"me","peer",friend,"敏感昵称","敏感内容",true)
+        emit.invoke(service,"me","peer",friend,"敏感昵称","敏感内容",true,1700000000000L)
         val public=MessagingService.takeNotice()!!
         assertEquals("me",public["accountId"]);assertEquals("peer",public["peerId"])
         assertEquals("敏感昵称",public["name"]);assertEquals("敏感内容",public["message"])
         assertEquals("custom",public["avatarId"]);assertEquals("revision",public["avatarRevision"])
         assertEquals("true",public["preview"]);assertTrue(public["receivedAt"]!!.toLong()>0)
-        emit.invoke(service,"me","peer",friend,"敏感昵称","敏感内容",false)
+        assertEquals("1700000000000",public["sentAt"])
+        emit.invoke(service,"me","peer",friend,"敏感昵称","敏感内容",false,1700000000000L)
         val private=MessagingService.takeNotice()!!
         assertEquals("RemoteScreen",private["name"]);assertEquals("收到新消息",private["message"])
         assertEquals("false",private["preview"]);assertEquals("",private["avatarId"]);assertEquals("",private["avatarRevision"])
+        assertEquals("1700000000000",private["sentAt"])
         assertFalse(private.toString().contains("敏感"));assertNull(MessagingService.takeNotice())
     }
 }

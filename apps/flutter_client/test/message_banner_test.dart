@@ -17,7 +17,8 @@ MessageNotice notice(String text,
         bool preview = true,
         VoidCallback? reply,
         String name = '测试小夏',
-        int? receivedAt}) =>
+        int? receivedAt,
+        int? sentAt}) =>
     MessageNotice.fromMap({
       'accountId': account,
       'peerId': 'peer',
@@ -25,6 +26,8 @@ MessageNotice notice(String text,
       'message': text,
       'avatarId': 'dog',
       'preview': preview,
+      'sentAt':
+          '${sentAt ?? DateTime.now().copyWith(hour: 12, minute: 34).millisecondsSinceEpoch}',
       if (receivedAt != null) 'receivedAt': '$receivedAt',
     }, reply ?? () {});
 
@@ -50,6 +53,25 @@ Widget host(MessageBannerController controller,
             home: home ?? const Scaffold(body: Center(child: Text('当前页面')))));
 
 void main() {
+  test('发送时间使用本地绝对时间，跨日跨年保留日期，不冒充接收时间', () {
+    final now = DateTime(2026, 10, 14, 15);
+    expect(
+        messageSentTime(DateTime(2026, 10, 14, 12, 34).millisecondsSinceEpoch,
+            now: now),
+        '12:34');
+    expect(
+        messageSentTime(DateTime(2026, 10, 13, 12, 34).millisecondsSinceEpoch,
+            now: now),
+        '10/13 12:34');
+    expect(
+        messageSentTime(DateTime(2025, 10, 13, 12, 34).millisecondsSinceEpoch,
+            now: now),
+        '2025/10/13 12:34');
+    for (final at in [null, 0, -1, 8640000000000001]) {
+      expect(messageSentTime(at, now: now), '时间未知');
+    }
+  });
+
   test('忽略其他账号、后台、过期通知；旧卡片不能误触当前回复', () {
     final c = MessageBannerController()..bind('me');
     addTearDown(c.dispose);
@@ -102,6 +124,12 @@ void main() {
       expect(tester.getTopLeft(card).dy, greaterThanOrEqualTo(28));
       expect(tester.getBottomRight(card).dy, lessThan(180));
       expect(find.text('私信了你：111'), findsOneWidget);
+      expect(find.text('12:34'), findsOneWidget);
+      final time =
+          tester.getRect(find.byKey(const ValueKey('message-banner-time')));
+      final avatar = tester.getRect(find.byType(Image).first);
+      expect(time.right, greaterThan(avatar.right + 100));
+      expect(time.bottom, greaterThan(avatar.center.dy));
       expect(find.byType(SnackBar), findsNothing);
       expect(find.text('另一个聊天页面'), findsOneWidget);
       await tester.tap(find.text('回复'));
@@ -132,6 +160,33 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
     expect(c.value, isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('窄屏大字号保留跨年发送时间，时间始终贴近右下角', (tester) async {
+    final c = MessageBannerController()..bind('me');
+    addTearDown(c.dispose);
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    await tester.pumpWidget(host(c, scale: 1.8));
+    c.show(notice('正文',
+        sentAt: DateTime(2025, 10, 13, 12, 34).millisecondsSinceEpoch));
+    await tester.pumpAndSettle();
+    expect(find.text('2025/10/13\n12:34'), findsOneWidget);
+    final card =
+        tester.getRect(find.byKey(const ValueKey('message-banner-card')));
+    final stamp =
+        tester.getRect(find.byKey(const ValueKey('message-banner-time')));
+    expect(stamp.right, closeTo(card.right - 16, 1));
+    expect(stamp.bottom, lessThan(card.bottom));
+    expect(tester.takeException(), isNull);
+    c.show(notice('无时间消息', sentAt: 0));
+    await tester.pumpAndSettle();
+    expect(find.text('时间未知'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

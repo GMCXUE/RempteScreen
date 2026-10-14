@@ -166,13 +166,14 @@ class MessagingService : Service() {
             ringId=id;ringPeer="self-test";handler.postDelayed({if(ringId==id)silence()},6000)
         }
     }
-    private fun foregroundMessage(account:String,peer:String,friend:JSONObject,name:String,text:String,preview:Boolean) {
+    private fun foregroundMessage(account:String,peer:String,friend:JSONObject,name:String,text:String,preview:Boolean,sentAt:Long) {
         val title=if(preview)name else "RemoteScreen"
         val body=if(preview)text else "收到新消息"
         notices.offer(mapOf("accountId" to account,"peerId" to peer,"text" to "$title：$body",
             "name" to title,"message" to body,"preview" to preview.toString(),
             "avatarId" to (if(preview)friend.optString("avatarId","cat") else ""),
             "avatarRevision" to (if(preview)friend.optString("avatarRevision") else ""),
+            "sentAt" to sentAt.toString(),
             "receivedAt" to System.currentTimeMillis().toString()))
         while(notices.size>20)notices.poll()
     }
@@ -272,17 +273,18 @@ class MessagingService : Service() {
             var delivered=true
             if (!friend.optBoolean("blocked") && !muted.contains(peer) && MessagingPolicy.shouldNotify(prefs.getLong(key, 0), seq, unread, visible,prefs.contains(key))) {
                 val name = friend.optString("remark").ifEmpty { friend.getString("name") }
-                val recent=if(raw==null) listOf(MessagePreview(seq,MessageNoticePolicy.boundedText(friend.optString("lastIncomingText")),System.currentTimeMillis())) else
+                val recent=if(raw==null) listOf(MessagePreview(seq,MessageNoticePolicy.boundedText(friend.optString("lastIncomingText")),0L)) else
                     (0 until raw.length()).map {i->raw.getJSONObject(i).let {MessagePreview(it.getString("seq").toLong(),MessageNoticePolicy.boundedText(it.optString("text")),it.optLong("createdAt"))}}
                 val messages=MessageNoticePolicy.previews(recent,maxOf(prefs.getLong(viewedKey,0),prefs.getLong(key,0)))
                 if(messages.isNotEmpty()) {
                     val preview=settings.optBoolean("messagePreview",true)
-                    if (MainActivity.messagingForeground)foregroundMessage(account,peer,friend,name,messages.last().text,preview)
+                    if (MainActivity.messagingForeground)foregroundMessage(account,peer,friend,name,messages.last().text,preview,messages.last().at)
+                    val avatar=if(preview)avatarBitmap(token,peer,friend.optString("avatarId","cat"),friend.optString("avatarRevision")) else null
                     messages.forEachIndexed {messageIndex,message->
                         if(!current(token))return
                         if(!delivered)return@forEachIndexed
                         if(JSONObject(settings(this)).optBoolean("messagePreview",true)!=preview) {delivered=false;return@forEachIndexed}
-                        val notification=ChatNotifications.child(this,account,peer,name,message,preview,settings.optBoolean("messageSound",true),messageIndex==messages.lastIndex)
+                        val notification=ChatNotifications.child(this,account,peer,name,message,preview,settings.optBoolean("messageSound",true),messageIndex==messages.lastIndex,avatar)
                         delivered=postNotice(ChatNotifications.tag(account,peer,message.seq),0,notification)
                         if(delivered){prefs.edit().putLong(key,message.seq).apply();ChatNotifications.trim(manager,account)}
                     }
