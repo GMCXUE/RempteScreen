@@ -3,6 +3,8 @@ package com.remotescreen.remotescreen
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -17,6 +19,9 @@ class MessagingService : Service() {
         private val notificationLock = Any()
         @Volatile private var instance: MessagingService? = null
         private val notices = java.util.concurrent.ConcurrentLinkedQueue<Map<String,String>>()
+        internal fun foregroundVisible(context:Context):Boolean = MainActivity.messagingForeground &&
+            context.getSystemService(android.os.PowerManager::class.java).isInteractive &&
+            !context.getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
         fun diagnostics(context:Context):Map<String,Any> {
             val p=context.getSharedPreferences(PREFS,MODE_PRIVATE)
             val manager=context.getSystemService(NotificationManager::class.java)
@@ -67,7 +72,7 @@ class MessagingService : Service() {
         // Enqueuing a Dart banner is not delivery: the Activity may pause before a frame.
         fun noticeShown(context:Context,account:String,peer:String,seq:Long):Unit = synchronized(notificationLock) {
             val p=context.getSharedPreferences(PREFS,MODE_PRIVATE)
-            if(!MainActivity.messagingForeground || p.getString("account","")!=account || peer.isEmpty() || seq<=0)return
+            if(!foregroundVisible(context) || p.getString("account","")!=account || peer.isEmpty() || seq<=0)return
             val pending="pending:$account:$peer"
             if(p.getLong(pending,0)<seq)return
             val seen="seen:$account:$peer"
@@ -103,7 +108,6 @@ class MessagingService : Service() {
             return prefs.getString(key, "{\"messageSound\":true,\"callSound\":true,\"mutedPeers\":[]}")!!
         }
         const val PREFS = "rs_messaging"
-        private const val STANDBY = 49000
         fun start(context: Context, baseUrl: String, token: String, account: String): Unit = synchronized(notificationLock) {
             val prefs = context.getSharedPreferences(PREFS, MODE_PRIVATE)
             if (prefs.getString("account", "") != account) {
@@ -130,6 +134,11 @@ class MessagingService : Service() {
     private var worker: Thread? = null
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
     private val manager by lazy { getSystemService(NotificationManager::class.java) }
+    private val syncLease by lazy { ScreenOffSyncLease(this) }
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context:Context,intent:Intent) { updateSyncLease() }
+    }
+    private fun updateSyncLease() = syncLease.update(running && !prefs.getString("token", "").isNullOrEmpty())
     private val ringing = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private val stopped = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -213,6 +222,9 @@ class MessagingService : Service() {
     }
     override fun onCreate() {
         super.onCreate(); instance=this
+        val screenEvents=IntentFilter().apply {addAction(Intent.ACTION_SCREEN_OFF);addAction(Intent.ACTION_SCREEN_ON)}
+        if(Build.VERSION.SDK_INT>=33)registerReceiver(screenReceiver,screenEvents,Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(screenReceiver,screenEvents)
         // Upgrade: remove the old single-conversation cards, retain new child records.
         manager.activeNotifications.filter {it.tag=="rs-message"}.forEach {manager.cancel(it.tag,it.id)}
         manager.createNotificationChannel(NotificationChannel("rs_messages_v2", "聊天消息", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -227,31 +239,34 @@ class MessagingService : Service() {
             enableVibration(true);vibrationPattern=longArrayOf(0,400,800)
         })
         manager.createNotificationChannel(NotificationChannel("rs_calls_quiet_v3", "来电（静音）", importance).apply {setSound(null,null);enableVibration(false)})
-        manager.createNotificationChannel(NotificationChannel("rs_messaging_status", "消息后台服务", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
         if (!prefs.contains("client")) prefs.edit().putString("client", "notify-" + UUID.randomUUID()).apply()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (prefs.getString("token", "").isNullOrEmpty()) { stopSelf(); return START_NOT_STICKY }
-        val ongoing = Notification.Builder(this, "rs_messaging_status").setSmallIcon(R.drawable.ic_stat_remotescreen)
-            .setContentTitle("RemoteScreen").setContentText("接收聊天消息和通话邀请")
-            .setContentIntent(openIntent("open", "", "")).setOngoing(true).build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(STANDBY, ongoing, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
-        else startForeground(STANDBY, ongoing)
+        val ongoing = BackgroundServiceNotification.create(this)
+        if (Build.VERSION.SDK_INT >= 34) startForeground(BackgroundServiceNotification.ID, ongoing, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+        else startForeground(BackgroundServiceNotification.ID, ongoing)
         if (!running || worker?.isAlive!=true) {
             running = true
             worker = Thread {
-                while (running) {
-                    try { poll();prefs.edit().putLong("lastPoll",System.currentTimeMillis()).putString("pollError","").apply() }
-                    catch (_: InterruptedException) { break }
-                    catch (error: Exception) {prefs.edit().putString("pollError", "消息同步失败（${error.javaClass.simpleName}），请检查网络并重新打开应用").apply();android.util.Log.w("RS-Messaging",error.javaClass.simpleName)}
-                    try { Thread.sleep(4000) } catch (_: InterruptedException) { break }
-                }
+                try {
+                    while (running) {
+                        updateSyncLease()
+                        prefs.edit().putLong("lastPollStarted",System.currentTimeMillis()).apply()
+                        try { poll();prefs.edit().putLong("lastPoll",System.currentTimeMillis()).putString("pollError","").apply() }
+                        catch (_: InterruptedException) { break }
+                        catch (error: Exception) {prefs.edit().putString("pollError", "消息同步失败（${error.javaClass.simpleName}），请检查网络并重新打开应用").apply();android.util.Log.w("RS-Messaging",error.javaClass.simpleName)}
+                        try { Thread.sleep(4000) } catch (_: InterruptedException) { break }
+                    }
+                } finally { if(worker===Thread.currentThread())syncLease.release() }
             }.apply { name = "RS-Messaging"; start() }
         }
+        updateSyncLease()
         intent?.getStringExtra("testAlert")?.let { testAlert(it) }
         return START_STICKY
     }
     private fun api(path: String, token: String, body: JSONObject? = null): JSONObject {
+        updateSyncLease()
         val base = prefs.getString("baseUrl", "")!!
         val connection = URL(base.trimEnd('/') + "/v1/social/" + path).openConnection() as HttpURLConnection
         try {
@@ -300,7 +315,7 @@ class MessagingService : Service() {
                 else if(eligible)friend.optString("lastIncomingSeq","0").toLongOrNull() ?: 0L else 0L
             val unread = if (friend.optBoolean("blocked")) 0 else friend.optInt("unread")
             if(prefs.getLong(pendingKey,0)>seq)prefs.edit().remove(pendingKey).apply()
-            val visible = MainActivity.messagingForeground && prefs.getString("peer", "") == peer
+            val visible = foregroundVisible(this) && prefs.getString("peer", "") == peer
             val viewedKey="viewed:$account:$peer"
             if(!prefs.contains(viewedKey))prefs.edit().putLong(viewedKey,friend.optString("notificationReadSeq","0").toLongOrNull() ?: 0).apply()
             // Reconcile posted content against the server's current bounded preview window.
@@ -322,14 +337,14 @@ class MessagingService : Service() {
                 val messages=MessageNoticePolicy.previews(recent,maxOf(prefs.getLong(viewedKey,0),prefs.getLong(key,0)))
                 if(messages.isNotEmpty()) {
                     val preview=settings.optBoolean("messagePreview",true)
-                    val avatar=if(preview && !MainActivity.messagingForeground)avatarBitmap(token,peer,friend.optString("avatarId","cat"),friend.optString("avatarRevision")) else null
+                    val avatar=if(preview && !foregroundVisible(this))avatarBitmap(token,peer,friend.optString("avatarId","cat"),friend.optString("avatarRevision")) else null
                     synchronized(notificationLock) {
                         if(!current(token))return
                         // Settings and visible chat can change during network/avatar I/O.
                         if(JSONObject(settings(this)).toString()!=settings.toString()) { delivered=false }
-                        else if(MainActivity.messagingForeground && prefs.getString("peer","")==peer) {
+                        else if(foregroundVisible(this) && prefs.getString("peer","")==peer) {
                             viewed(this,account,peer,seq)
-                        } else if(MainActivity.messagingForeground) {
+                        } else if(foregroundVisible(this)) {
                             foregroundMessage(account,peer,friend,name,messages.last().text,preview,messages.last().at,messages.last().seq)
                             delivered=false
                         } else {
@@ -401,7 +416,7 @@ class MessagingService : Service() {
             if (Build.VERSION.SDK_INT >= 31) builder.setStyle(Notification.CallStyle.forIncomingCall(
                 Person.Builder().setName(call.getString("peerName")).setIcon(android.graphics.drawable.Icon.createWithBitmap(avatar)).setImportant(true).build(), reject, accept).setIsVideo(video))
             else { builder.addAction(Notification.Action.Builder(null, "挂断", reject).build()); builder.addAction(Notification.Action.Builder(null, "接通", accept).build()) }
-            if(audible && !MainActivity.messagingForeground && (Build.VERSION.SDK_INT<34 || manager.canUseFullScreenIntent())) {
+            if(audible && !foregroundVisible(this) && (Build.VERSION.SDK_INT<34 || manager.canUseFullScreenIntent())) {
                 builder.setFullScreenIntent(openIntent("call",call.getString("peerId"),id),true)
             }
             val notification = builder.build()
@@ -439,8 +454,17 @@ class MessagingService : Service() {
     }
     override fun onDestroy() {
         running = false; worker?.interrupt(); instance=null; handler.removeCallbacksAndMessages(null); silence(); notices.clear()
+        unregisterReceiver(screenReceiver)
+        syncLease.release()
         ringing.forEach { manager.cancel("rs-call", it.hashCode()) }; ringing.clear()
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
+    override fun dump(fd:java.io.FileDescriptor,writer:java.io.PrintWriter,args:Array<out String>) {
+        // adb/system diagnostics only; never expose tokens, user IDs or message content.
+        writer.println("running=$running workerAlive=${worker?.isAlive} workerState=${worker?.state}")
+        writer.println("activityResumed=${MainActivity.messagingForeground} foregroundVisible=${foregroundVisible(this)} screenInteractive=${getSystemService(android.os.PowerManager::class.java).isInteractive} deviceLocked=${getSystemService(KeyguardManager::class.java).isKeyguardLocked} screenOffSyncHeld=${syncLease.held}")
+        writer.println("lastPollStarted=${prefs.getLong("lastPollStarted",0)} lastPoll=${prefs.getLong("lastPoll",0)} lastNotification=${prefs.getLong("lastNotificationAt",0)}")
+        writer.println("pollError=${prefs.getString("pollError","")} deliveryError=${prefs.getString("deliveryError","")}")
+    }
 }

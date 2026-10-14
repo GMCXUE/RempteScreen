@@ -3,6 +3,8 @@ package com.remotescreen.remotescreen
 import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
+import android.app.KeyguardManager
+import android.os.PowerManager
 import java.net.ServerSocket
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,6 +34,8 @@ class MessagingDeliveryTest {
         service=Robolectric.buildService(MessagingService::class.java).create().get()
         MessagingService::class.java.getDeclaredField("running").apply {isAccessible=true}.set(service,true)
         MainActivity.messagingForeground=false
+        shadowOf(service.getSystemService(PowerManager::class.java)).setIsInteractive(true)
+        shadowOf(service.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(false)
         server=ServerSocket(0,8,java.net.InetAddress.getByName("127.0.0.1"))
         serverThread=Thread {
             while(!server.isClosed) {
@@ -175,5 +179,25 @@ class MessagingDeliveryTest {
         assertEquals(1,notices.size)
         MessagingService.viewed(service,"old-account","peer",1)
         assertEquals(1,notices.size)
+    }
+    @Test fun screenOffWithResumedChatPostsSystemNoticeInsteadOfConsumingAsViewed() {
+        MainActivity.messagingForeground=true
+        prefs.edit().putString("peer","peer").apply()
+        shadowOf(service.getSystemService(PowerManager::class.java)).setIsInteractive(false)
+        messages(1);poll()
+        assertEquals(1,notices.size)
+        assertNotNull(notices.single().notification.getLargeIcon())
+        assertEquals(0L,prefs.getLong("viewed:account:peer",0))
+        assertNull(MessagingService.takeNotice())
+    }
+    @Test fun litLockScreenCannotClearUnreadMessagesOrAcknowledgeBanner() {
+        MainActivity.messagingForeground=true
+        messages(1);poll();val notice=MessagingService.takeNotice()!!
+        prefs.edit().putString("peer","peer").apply()
+        shadowOf(service.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        MessagingService.noticeShown(service,"account","peer",notice.getValue("seq").toLong())
+        assertFalse(prefs.contains("seen:account:peer"))
+        poll();assertEquals(1,notices.size)
+        assertEquals(0L,prefs.getLong("viewed:account:peer",0))
     }
 }

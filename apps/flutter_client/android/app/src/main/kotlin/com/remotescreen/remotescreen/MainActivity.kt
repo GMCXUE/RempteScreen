@@ -142,6 +142,9 @@ class MainActivity : FlutterActivity() {
                     "openMessagingSettings" -> {
                         val kind=call.argument<String>("kind")?:"notifications"
                         val target=when(kind) {
+                            "backgroundStatus" -> Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName)
+                                .putExtra(android.provider.Settings.EXTRA_CHANNEL_ID,BackgroundServiceNotification.CHANNEL)
                             "calls" -> if(Build.VERSION.SDK_INT>=34) Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,Uri.parse("package:$packageName")) else Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName)
                             "battery" -> Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                             "autostart" -> Intent().setComponent(android.content.ComponentName("com.miui.securitycenter","com.miui.permcenter.autostart.AutoStartManagementActivity"))
@@ -173,7 +176,7 @@ class MainActivity : FlutterActivity() {
                     }
                     "setMessagingVisiblePeer" -> {
                         val peer=call.argument<String>("peerId") ?: ""
-                        if(messagingForeground && peer.isNotEmpty())MessagingService.viewed(this,getSharedPreferences(MessagingService.PREFS,MODE_PRIVATE).getString("account","") ?: "",peer,0)
+                        if(MessagingService.foregroundVisible(this) && peer.isNotEmpty())MessagingService.viewed(this,getSharedPreferences(MessagingService.PREFS,MODE_PRIVATE).getString("account","") ?: "",peer,0)
 
                         getSharedPreferences(MessagingService.PREFS, MODE_PRIVATE).edit()
                             .putString("peer", call.argument<String>("peerId") ?: "").apply()

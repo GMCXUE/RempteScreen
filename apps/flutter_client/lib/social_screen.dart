@@ -1679,6 +1679,8 @@ Future<void> showMessageAlertSettings(BuildContext context) async {
                                       child: const Text('刷新通知状态')),
                                   for (final option in [
                                     ('notifications', '系统通知设置'),
+                                    if (NativeMessaging.supported)
+                                      ('backgroundStatus', '后台状态通知设置'),
                                     ('calls', '来电弹出设置'),
                                     ('autostart', '后台自启动设置'),
                                     ('battery', '后台电池设置')
@@ -1700,6 +1702,16 @@ Future<void> showMessageAlertSettings(BuildContext context) async {
                                             notice(error);
                                           }
                                         }),
+                                  if (NativeMessaging.supported)
+                                    const Padding(
+                                        padding:
+                                            EdgeInsets.symmetric(vertical: 6),
+                                        child: Text(
+                                            '不想看到待命提示，可在“后台状态通知设置”中关闭这个分类；聊天、来电和设备连接提醒仍使用各自的通知分类。',
+                                            style: TextStyle(
+                                                fontSize: 12,
+                                                height: 1.6,
+                                                color: AppTheme.muted))),
                                   const Padding(
                                       padding:
                                           EdgeInsets.symmetric(vertical: 10),

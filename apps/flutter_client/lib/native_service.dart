@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 /// 统一账号通知入口。当前使用原生后台同步；未来厂商推送复用此
 /// 生命周期、账号校验和点击路由，不改变聊天/通话界面的调用方式。
 class NativeMessaging {
+  static bool get supported => Platform.isAndroid;
   static const _channel = MethodChannel('remotescreen/native');
   static Future<void> Function()? _actionReady;
   static bool _listening = false;
