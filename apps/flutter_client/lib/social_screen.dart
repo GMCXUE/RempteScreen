@@ -700,7 +700,6 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
     if (notice.depth != 0) return false;
     if (notice is ScrollStartNotification && notice.dragDetails != null) {
       _keepAtBottom = false;
-      unawaited(NativeMessaging.setVisiblePeer(null).catchError((_) {}));
     }
     if (notice is ScrollEndNotification) {
       _keepAtBottom = notice.metrics.extentAfter < 80;
@@ -712,7 +711,7 @@ class _PrivateChatScreenState extends State<PrivateChatScreen>
   Future<void> _load({bool older = false}) async {
     if (!mounted) return;
     unawaited(NativeMessaging.setVisiblePeer(
-            _visible && _keepAtBottom && _highlightMessage == null && _messages.isNotEmpty && ModalRoute.of(context)?.isCurrent == true
+            _visible && ModalRoute.of(context)?.isCurrent == true
                 ? widget.friend['id']
                 : null)
         .catchError((_) {}));
